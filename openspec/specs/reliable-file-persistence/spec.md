@@ -1,7 +1,7 @@
 # reliable-file-persistence Specification
 
 ## Purpose
-TBD - created by archiving change complete-p0-editor-workflows. Update Purpose after archive.
+Protect document contents through atomic saves, external-change checks, durable recovery, and coordination with Git worktree mutations.
 
 ## Requirements
 

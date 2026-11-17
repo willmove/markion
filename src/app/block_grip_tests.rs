@@ -64,7 +64,7 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
         assert_eq!(projection.text, "Next heading");
     });
     let panel = cx.debug_bounds("visual-block-menu-panel").unwrap();
-    for index in 0..14 {
+    for index in (0..14).filter(|index| *index != 6) {
         let id = test_debug_selector(format!("visual-block-transform-{index}"));
         let bounds = cx
             .debug_bounds(id)
@@ -73,8 +73,11 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
             panel.contains(&bounds.center()),
             "{id} must be inside the popup"
         );
-        assert!(bounds.size.width < px(50.));
+        if index != 13 {
+            assert_eq!(bounds.size, size(px(36.), px(30.)));
+        }
     }
+    assert!(cx.debug_bounds("visual-block-transform-6").is_none());
     let heading = cx.debug_bounds("visual-block-transform-2").unwrap();
     cx.simulate_click(heading.center(), Modifiers::none());
     cx.run_until_parked();
@@ -208,7 +211,7 @@ fn block_grip_copy_cut_add_below_and_undo_preserve_next_heading(cx: &mut TestApp
     });
     app.update(cx, |app, cx| {
         app.open_visual_block_grip_menu(target.clone(), point(px(20.), px(20.)), cx);
-        app.activate_visual_block_menu_item(BlockMenuItem::CopyBlock, cx);
+        app.activate_visual_block_menu_item(BlockMenuItem::CopyBlock, None, cx);
         assert_eq!(app.active_tab().document.text(), SOURCE);
         assert!(app.active_tab().undo_stack.is_empty());
         let copy = cx.read_from_clipboard().unwrap();
@@ -216,7 +219,7 @@ fn block_grip_copy_cut_add_below_and_undo_preserve_next_heading(cx: &mut TestApp
         assert!(!copy.text().unwrap().contains("下一标题"));
         assert!(copy.html().unwrap().contains("<strong>bold</strong>"));
         app.open_visual_block_grip_menu(target.clone(), point(px(20.), px(20.)), cx);
-        app.activate_visual_block_menu_item(BlockMenuItem::CutBlock, cx);
+        app.activate_visual_block_menu_item(BlockMenuItem::CutBlock, None, cx);
         assert_eq!(app.active_tab().document.text(), "### 下一标题\r\n");
         assert_eq!(app.active_tab().undo_stack.len(), 1);
     });
@@ -226,7 +229,7 @@ fn block_grip_copy_cut_add_below_and_undo_preserve_next_heading(cx: &mut TestApp
         let doc = &app.active_tab().document;
         let target = BlockTarget::from_block(doc.version(), &doc.visual_blocks_shared()[0]);
         app.open_visual_block_grip_menu(target, point(px(20.), px(20.)), cx);
-        app.activate_visual_block_menu_item(BlockMenuItem::AddBelow, cx);
+        app.activate_visual_block_menu_item(BlockMenuItem::AddBelow, None, cx);
         assert_eq!(
             app.active_tab().document.text(),
             SOURCE.replacen("\r\n\r\n###", "\r\n\r\n\r\n###", 1)
@@ -286,7 +289,7 @@ fn block_grip_compact_keyboard_overflow_and_dismissal(cx: &mut TestAppContext) {
         cx.dispatch_action(Left);
         cx.dispatch_action(Up);
         cx.run_until_parked();
-        let last = cx.debug_bounds("visual-block-add-below").unwrap();
+        let last = cx.debug_bounds("visual-block-delete").unwrap();
         let panel = cx.debug_bounds("visual-block-menu-panel").unwrap();
         assert!(
             panel.contains(&last.center()),
@@ -294,10 +297,7 @@ fn block_grip_compact_keyboard_overflow_and_dismissal(cx: &mut TestAppContext) {
         );
         app.update(cx, |app, _| {
             let menu = app.block_menu.as_ref().unwrap();
-            assert_eq!(
-                menu.root_items()[menu.root_selected],
-                BlockMenuItem::AddBelow
-            );
+            assert_eq!(menu.root_items()[menu.root_selected], BlockMenuItem::Delete);
             let after = app.active_tab().visual_list.logical_scroll_top();
             assert_eq!(after.item_ix, top.item_ix);
             assert_eq!(after.offset_in_item, top.offset_in_item);
@@ -331,7 +331,7 @@ fn block_grip_stale_command_preserves_source_and_clipboard(cx: &mut TestAppConte
             .set_text("external\n\n### next");
         let version = app.active_tab().document.version();
         cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_string()));
-        app.activate_visual_block_menu_item(BlockMenuItem::CutBlock, cx);
+        app.activate_visual_block_menu_item(BlockMenuItem::CutBlock, None, cx);
         assert!(app.block_menu.is_none());
         assert_eq!(app.active_tab().document.text(), "external\n\n### next");
         assert_eq!(app.active_tab().document.version(), version);
@@ -538,7 +538,7 @@ fn reorder_keyboard_and_menu_preserve_terminal_paragraphs(cx: &mut TestAppContex
                 .unwrap();
             let target = BlockTarget::from_block(doc.version(), last);
             app.open_visual_block_grip_menu(target, point(px(20.), px(20.)), cx);
-            app.activate_visual_block_menu_item(BlockMenuItem::MoveUp, cx);
+            app.activate_visual_block_menu_item(BlockMenuItem::MoveUp, None, cx);
             assert_eq!(app.active_tab().document.text(), expected);
             assert_eq!(app.active_tab().undo_stack.len(), 1);
         });

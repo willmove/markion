@@ -63,3 +63,13 @@ Visual Edit SHALL present a recognized diagram fence as a rendered static diagra
 #### Scenario: Expand and collapse do not edit the document
 - **WHEN** the user expands or collapses a diagram source pane without editing the payload
 - **THEN** document text, dirty flag, undo history, and document version remain unchanged
+
+#### Scenario: Mermaid fence renders as a diagram with an editable source payload in Visual Edit
+- **WHEN** Visual Edit contains a valid fenced block beginning with ` ```mermaid `
+- **THEN** the block is presented as a rendered static diagram image above an editable source payload editor
+- **AND** the payload editor shows the authored diagram source and edits to it mutate the canonical Markdown source through the normal document mutation paths
+
+#### Scenario: Pending diagram shows a localized loading placeholder in Visual Edit
+- **WHEN** a diagram render has been scheduled in Visual Edit but has not completed
+- **THEN** the presentation slot displays the localized loading placeholder used by Split Preview without blocking the GPUI frame
+- **AND** the editable source payload remains available below the placeholder

@@ -1,7 +1,7 @@
 # diagram-rendering Specification
 
 ## Purpose
-TBD - created by archiving change add-mermaid-diagrams. Update Purpose after archive.
+Render supported fenced diagrams as passive, bounded previews while preserving editable Markdown source and asynchronous cache behavior.
 ## Requirements
 ### Requirement: Extensible diagram backend registry
 The system SHALL provide a GUI-free diagram backend contract and registry in the `markion-diagram` workspace crate. Each backend SHALL expose a stable identifier, one or more fenced-language aliases, and static rendering through owned request/result/error types. Registry dispatch SHALL normalize the first fenced info-string token using ASCII case-insensitive matching, reject duplicate identifiers or aliases, and allow a new compile-time backend to be added by implementing the backend trait and registering an instance without changing Markdown parsing or GPUI types.
@@ -58,7 +58,7 @@ Markion SHALL register an in-process Mermaid backend and SHALL present a fenced 
 - **THEN** it follows the existing ordinary code-block highlighting/fallback behavior
 
 ### Requirement: Diagram rendering is asynchronous, theme-aware, and memoized
-Preview diagram rendering and rasterization SHALL execute outside the GPUI frame path and SHALL use a bounded application-level cache keyed by backend identifier, authored source, and light/dark diagram theme. Entries SHALL distinguish pending, ready, and error states; a ready entry SHALL carry the rasterized image together with the presentation size used to display it. Concurrent requests for the same key SHALL share one render; completed results MAY be reused across tabs and document versions. Diagram rendering, rasterization, and theme switching SHALL NOT mutate document text, increment the document version, invalidate Markdown-derived caches, or reparse the document.
+Preview diagram rendering and rasterization SHALL execute outside the GPUI frame path and SHALL use a bounded application-level cache keyed by backend identifier, authored source, and light/dark diagram theme. Entries SHALL distinguish pending, ready, and error states; a ready entry SHALL carry the rasterized image together with the presentation size used to display it. The cache SHALL bound both the number of entries and the total completed raster bytes; when completing a ready entry would exceed the byte budget, least-recently-completed ready entries SHALL be evicted until the new entry fits, or the result SHALL be rejected as too large if a single raster exceeds the budget. Concurrent requests for the same key SHALL share one render; completed results MAY be reused across tabs and document versions. Pending entries MUST NOT be evicted solely to admit new work. Diagram rendering, rasterization, and theme switching SHALL NOT mutate document text, increment the document version, invalidate Markdown-derived caches, or reparse the document.
 
 #### Scenario: Repeated frame reuses completed diagram
 - **WHEN** multiple frames present the same backend, source, and theme without a document edit
@@ -80,6 +80,11 @@ Preview diagram rendering and rasterization SHALL execute outside the GPUI frame
 #### Scenario: Stale completion cannot overwrite document state
 - **WHEN** a background diagram render completes after the authored fence has changed or its tab has closed
 - **THEN** the result can populate only its immutable cache key and cannot replace newer preview blocks or mutate any document cache
+
+#### Scenario: Completed raster byte budget is enforced
+- **WHEN** completing a diagram raster would push total completed raster bytes over the configured budget
+- **THEN** older ready entries are evicted until the new raster fits, or the completion is rejected if the single raster exceeds the budget
+- **AND** pending entries remain resident
 
 ### Requirement: Diagram failures preserve authored source
 The diagram layer SHALL return typed, non-localized errors for unsupported backends, excessive input, invalid source, unsafe output, and backend failures. Preview SHALL map those categories through Markion localization and display an actionable error together with the authored diagram source. While a result is pending, preview SHALL display a localized loading placeholder. Failure or pending presentation SHALL preserve the block's source range and SHALL NOT modify the document.
@@ -147,4 +152,3 @@ Visual Edit SHALL present a recognized diagram fence as a rendered static diagra
 - **WHEN** the active Markion theme changes between light and dark while a Visual Edit diagram is displayed
 - **THEN** the diagram is re-rendered for the new theme using an independent cache key
 - **AND** the document text, dirty flag, undo history, and document version remain unchanged
-

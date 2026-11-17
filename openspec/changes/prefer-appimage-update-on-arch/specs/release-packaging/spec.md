@@ -62,3 +62,10 @@ The application SHALL expose a "Check for Updates…" action in the Help menu th
 #### Scenario: Update check does not alter cached Markdown state
 - **WHEN** update discovery, download, verification, or installation preparation runs
 - **THEN** it executes off the main render path and does not recompute any preview block, outline, stat, syntax-highlighting, or text-handle cache
+
+#### Scenario: AppImage install updates itself in place
+- **WHEN** the user chooses "Check for Updates…" inside an AppImage-launched Linux x86_64 tagged build, the published Release is newer, updater public-key material is present, and all documents are clean
+- **THEN** the dialog offers "Download and Install" and "Later" actions
+- **AND** choosing "Download and Install" downloads and verifies the signed AppImage off the main render path
+- **AND** Markion replaces the running AppImage file at its original path, relaunches the updated AppImage, and quits the current instance
+- **AND** the whole operation requires no privilege escalation and no system package manager

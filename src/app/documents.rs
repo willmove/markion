@@ -242,6 +242,7 @@ impl MarkionApp {
     }
 
     pub(super) fn close_tab_confirmed(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_document_editing_overlays();
         if self.active_tab().is_document() {
             let document = self.active_tab().document.instance_id();
             self.image_operations.invalidate_document(document);
@@ -613,6 +614,7 @@ impl MarkionApp {
         targets: &[TabContextTarget],
         cx: &mut Context<Self>,
     ) {
+        self.dismiss_document_editing_overlays();
         let indexes: Vec<usize> = self
             .tabs
             .iter()

@@ -73,3 +73,18 @@ Closing a dirty document tab, quitting, or closing the window while any document
 #### Scenario: Single-tab layout is unchanged
 - **WHEN** only one content tab is open
 - **THEN** no tab bar is rendered and the active document or image surface occupies the normal document-workspace area
+
+#### Scenario: File→Open replaces the active tab
+- **WHEN** the user invokes File → Open and picks a supported file that is not already open
+- **THEN** the active tab's content is replaced after applying a dirty guard when that tab contains an editable document, rather than spawning a new tab
+- **AND** replacing a read-only image tab does not require a dirty confirmation
+
+#### Scenario: Closing an unsaved tab prompts for confirmation
+- **WHEN** the user closes a document tab whose content has unsaved changes
+- **THEN** the editor prompts for confirmation before discarding those changes
+- **AND** closing a read-only image tab never presents an unsaved-changes prompt
+
+#### Scenario: Quitting with multiple unsaved tabs
+- **WHEN** the user quits or closes the window while two or more document tabs have unsaved changes and any number of image tabs are open
+- **THEN** the editor detects the unsaved document tabs and prompts before discarding them
+- **AND** image tabs do not contribute to the dirty-tab count

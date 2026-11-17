@@ -118,6 +118,38 @@ The editor SHALL provide a toggleable file tree panel whose workspace root can b
 - **THEN** the editor asks the operating system file manager to reveal that target
 - **AND** failures are surfaced as localized status text without modifying editor state
 
+#### Scenario: Workspace is scanned and displayed as Markdown-only
+- **WHEN** a workspace root is established via File → Open Folder, the File → Open dialog, the sidebar, or Save As
+- **THEN** the file tree scans the applicable root on a background executor, displays only Markdown files nested under the folders that contain them, and renders a bounded number of rows per frame
+- **AND** non-Markdown files and folders that contain no Markdown files are not listed
+
+#### Scenario: New workspace initially shows one level
+- **WHEN** the first successful scan for a newly established workspace contains files and Markdown-bearing folders at multiple depths
+- **THEN** the file tree shows the files and folders directly inside the workspace root
+- **AND** every deeper descendant remains hidden behind its collapsed top-level folder row
+
+#### Scenario: User controls directory expansion
+- **WHEN** the user expands or collapses a visible directory row after the initial tree is shown
+- **THEN** that directory's descendants become visible or hidden accordingly without changing other directory branches
+
+#### Scenario: Same-workspace refresh preserves expansion state
+- **WHEN** the user changes directory expansion state and refreshes the current workspace
+- **THEN** surviving directory paths retain their prior expanded or collapsed state
+- **AND** the one-level initial default is not reapplied
+
+#### Scenario: Filtering searches collapsed descendants
+- **WHEN** the user filters by a filename or relative path that matches a descendant of a collapsed directory
+- **THEN** the matching nested entry is included in the filtered results subject to the bounded row limit
+- **AND** clearing the filter restores the prior collapse state
+
+#### Scenario: Contained documents preserve the selected root
+- **WHEN** a Markdown document inside the current workspace root is opened or focused
+- **THEN** the current workspace root remains unchanged and the document is marked in the tree
+
+#### Scenario: External document rebases the workspace
+- **WHEN** a Markdown document outside the current workspace root is opened through an existing document-opening flow
+- **THEN** the workspace root changes to that document's parent directory and the file tree rescans it
+
 ### Requirement: Session restore for workspace root and open documents
 The editor SHALL persist a session snapshot containing the current file-tree workspace root (when one is established), the ordered list of open saved document and image paths (Markdown, curated plain-text, data text, and supported image tabs), and the active document path when it has a file path. The snapshot SHALL be stored in a dedicated `session.toml` under the Markion config directory, separate from `config.toml`. On launch with no CLI file/folder open intent, the editor SHALL restore that session: re-establish a still-valid workspace root and scan it asynchronously, reopen still-existing recorded paths as tabs of their appropriate kind (document or image), and focus the restored active document when it is among the reopened tabs. Untitled or recovery-only tabs SHALL NOT be written into the session snapshot. Missing paths SHALL be skipped on restore. Crash-recovery prompting SHALL continue to run after session restore. A CLI file or folder open intent SHALL take precedence over the conflicting session fields for that launch while still allowing the recent-files list to load.
 

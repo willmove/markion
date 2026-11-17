@@ -18,3 +18,28 @@ The system SHALL route every user-visible UI string (menu bar titles and items, 
 #### Scenario: Document content is never translated
 - **WHEN** the active language is Simplified Chinese
 - **THEN** document content, the welcome Markdown, and user files remain untouched (only UI chrome is translated)
+
+#### Scenario: Menu labels reflect French
+- **WHEN** the active interface language is French
+- **THEN** the native OS menu bar and the in-app dropdown render every menu title and item label in French via `t(language, Msg::…)`
+
+#### Scenario: Menu labels reflect German
+- **WHEN** the active interface language is German
+- **THEN** the native OS menu bar and the in-app dropdown render every menu title and item label in German via `t(language, Msg::…)`
+
+#### Scenario: Menu labels reflect Spanish
+- **WHEN** the active interface language is Spanish
+- **THEN** the native OS menu bar and the in-app dropdown render every menu title and item label in Spanish via `t(language, Msg::…)`
+
+#### Scenario: File tree name prompt is localized
+- **WHEN** the user invokes Create File, Create Folder, or Rename and the inline name prompt is shown
+- **THEN** the prompt label (e.g. "Name"), the pre-filled default name, the empty-name warning status text, the commit/cancel behavior, and the caret/selection/click-away behavior are presented in the active language through the i18n layer
+
+#### Scenario: Recursive folder delete confirmation is localized
+- **WHEN** the user deletes a non-empty folder and the second confirmation dialog is shown
+- **THEN** the dialog title and detail text are produced in the active language through the i18n layer, and the confirm/cancel button labels reuse the existing localized delete/cancel strings
+
+#### Scenario: Search overlay chrome reflects the active language
+- **WHEN** the Find / Replace overlay is visible and the active interface language changes
+- **THEN** external field identity, navigation and option tooltips, accessibility labels, current/total or empty-state feedback, regular-expression errors, replacement actions, close guidance, and Read-mode replacement guidance render in the active language through the i18n layer
+- **AND** no user-visible search status or validation text is hard-coded in English

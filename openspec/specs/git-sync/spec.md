@@ -1,7 +1,7 @@
 # git-sync Specification
 
 ## Purpose
-TBD - created by archiving change add-git-workspace-sync. Update Purpose after archive.
+Synchronize a bound notes repository through explicit, bounded Git operations that preserve local edits, staging ownership, and remote history.
 
 ## Requirements
 

@@ -40,3 +40,13 @@ Visual Edit SHALL present an exactly ranged block-math construct as a rendered f
 #### Scenario: Expand and collapse do not edit the document
 - **WHEN** the user expands or collapses a block-math source pane without editing the payload
 - **THEN** document text, dirty flag, undo history, and document version remain unchanged
+
+#### Scenario: Formula and LaTeX editor remain visible together
+- **WHEN** an exactly ranged block-math construct appears in Visual Edit
+- **THEN** its rendered formula or readable error state is shown together with the editable LaTeX payload
+- **AND** focusing the payload does not replace the whole block with raw delimiter source
+
+#### Scenario: Invalid LaTeX remains directly editable
+- **WHEN** a payload edit makes the formula invalid or its render cache reports an error
+- **THEN** the editor shows the validation or render error without discarding the payload editor
+- **AND** the authored source remains available for correction

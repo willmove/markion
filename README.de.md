@@ -12,9 +12,9 @@
 
 Markion ist ein nativer Desktop-Markdown-Editor, gebaut mit Rust und GPUI. Er vereint reaktionsschnelle Quelltextbearbeitung, einen quellgestützten visuellen Bearbeitungsmodus, Live-Vorschau, Arbeitsbereichswerkzeuge und Mehrformat-Export in einer leichtgewichtigen Anwendung. Markdown bleibt das kanonische Dokumentformat — kein Electron, Tauri oder WebView.
 
-## Projektfortschritt (2026-11-13)
+## Projektfortschritt (2026-11-17)
 
-Visual Edit unterstützt Auswahl und Verschieben mehrerer Blöcke und ganzer Listenunterbäume, rechteckige Tabellenauswahl, TSV/HTML-Kopieren, Matrixeinfügen, eine neue Zeile mit Tab in der letzten Zelle und Codefaltung. Lokale Änderungen verwenden unveränderte Regionen weiter. Für Windows-Eingabeframes und IME-Undo liegen echte Eingabenachweise vor. JSON/YAML/TOML öffnen sich im Quelltexteditor; Wayland bietet Fenstertasten, abgerundete Ecken und Größenänderungsränder. Der Dateibaum unterstützt das Verschieben von Dateien und Ordnern per Ziehen sowie das Kopieren absoluter und relativer Pfade. [Implementierung, Nachweise und offene Prüfungen](docs/project-status.md).
+Visual Edit bietet kompakte Blockaktionen, Untermenüs beim Darüberfahren, genaues Kopieren der Auswahl, Zeilen-/Spaltenmenüs, Zellumbrüche mit Umschalt+Enter und Bildeigenschaften. Die H1–H5-Slash-Palette lässt sich abschalten; die Emoji-Palette zeigt bis zu 36 Vorschläge. Die Gliederung kann links oder als unabhängiges, größenverstellbares rechtes Panel neben dem Dateibaum stehen. Über Hilfe sind fünf Offline-Anleitungen und zwölf Vorlagen erreichbar; kopieren Sie vor dem Bearbeiten den gesamten Ordner. [Implementierung, Nachweise und offene Prüfungen](docs/project-status.md) · [Beispiele](assets/examples/README.md).
 
 ## Installation
 
@@ -30,7 +30,7 @@ Windows-Releases sind nicht codesigniert; SmartScreen verlangt eventuell **Weite
 
 ## Bearbeitungsmodi
 
-Markion hat vier Ansichtsmodi. Standard ist die geteilte Vorschau.
+Markion hat vier Ansichtsmodi. Standard ist Visual Edit.
 
 - **Bearbeiten** — ein fokussierter Editor für rohen Markdown-Quelltext.
 - **Visuelle Bearbeitung** — eine WYSIWYG-first, quellgestützte Oberfläche. Fließtext bleibt gerendert mit progressiver Syntaxeinblendung; gewöhnliche Fenced-Code-Inhalte, Blockformeln, registrierte Diagramme (Mermaid), Inline-Bildfelder und GFM-Tabellenzellen haben exakte Direkteditoren. Konstrukte, deren WYSIWYG-Rendering noch nicht implementiert ist — mehrzeilige oder fehlerhafte Bilder sowie byte-mehrdeutige Syntax — behalten als Übergangslösung eine exakte quellgestützte Bearbeitungsmöglichkeit, verfolgt in der [WYSIWYG-Abdeckungsmatrix und Roadmap der visuellen Bearbeitung](docs/visual-editing-quality.md). Eine Slash-Befehlspalette und ein kompaktes Block-Kontextmenü bieten exakte Blockumwandlungen (Absatz, Überschriften, Listen, Zitat, Fenced Code, Trennlinie, Tabelle), Duplizieren, Nach-oben/unten-Verschieben, quellsicheres Ziehen zum Umordnen und Löschen; eine auswahlkontextbezogene Formatierungsleiste und ein visueller Link-Editor führen pro Aktion genau eine quellgestützte Mutation aus. Markdown-Begrenzer werden standardmäßig automatisch gepaart, `:shortcode` öffnet die Emoji-Vervollständigung, Aufgabenlisten-Kästchen lassen sich direkt umschalten, und das Verlassen einer Überschriften-, Listen-, Aufgaben- oder Zitatzeile stellt sie sofort wieder gerendert dar. Dies ist kein separates Rich-Text-Dokumentmodell — das zugrunde liegende Markdown bleibt stets die Wahrheitsquelle.
@@ -103,6 +103,10 @@ heading_menu_max_level = 5        # 5 oder 6
 sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" oder "outline"
+outline_position = "left"        # "left" or "right"
+outline_visible = true
+block_handle_menu = true
+slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
 

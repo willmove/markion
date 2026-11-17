@@ -311,6 +311,27 @@ impl VisualNavigationWindow {
 }
 
 impl VisualNavigationSnapshot {
+    /// Resolve a pointer through current painted text windows, including wraps
+    /// and independent table-cell projections, without changing the caret.
+    pub(super) fn source_for_position(&self, position: Point<Pixels>) -> Option<usize> {
+        let line = self
+            .lines
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                let distance = |line: &VisualNavigationLine| {
+                    line.windows
+                        .iter()
+                        .map(|window| (position.y - window.sample_y(line.y)).abs())
+                        .min_by(|a, b| a.partial_cmp(b).unwrap())
+                        .unwrap_or(px(f32::MAX))
+                };
+                distance(left).partial_cmp(&distance(right)).unwrap()
+            })?
+            .0;
+        self.closest_source_on_line(line, position.x)
+    }
+
     /// Keep only geometry belonging to one exact table cell. A table row's
     /// windows share Y coordinates, but sibling columns are not arrow or
     /// Home/End targets for the active cell.

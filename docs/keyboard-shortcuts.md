@@ -67,6 +67,9 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Move selected visual blocks / subtrees | Ctrl+Shift+Up / Ctrl+Shift+Down |
 | Extend a visual cell rectangle | Shift+click; drag across cells; Alt+click starts a cell selection |
 | Add a body row from the final visual table cell | Tab |
+| Insert an in-cell hard break in Visual Edit | Shift+Enter |
+
+Right-click preserves the current exact text/content selection; block commands target the clicked block. Row and Column open separate hover flyouts, and Image Properties edits URL/alt/title without revealing raw Markdown. In-cell Shift+Enter inserts `<br>` as one undoable edit.
 
 Click a visual block grip to select its complete source unit; Shift+click another grip to extend. Drag any selected grip to move the whole selection. Table row and column grips select their corresponding cells and expose the structural menu. Delete clears selected cells while retaining the table structure; Ctrl+C copies TSV and HTML, and Ctrl+V pastes a matrix. Ordinary code blocks provide a Fold code / Expand code control; navigation into a folded payload expands it.
 
@@ -75,7 +78,7 @@ Click a visual block grip to select its complete source unit; Shift+click anothe
 | Action | Shortcut |
 |---|---|
 | Cycle view mode (Edit → Visual Edit → Split → Read) | Ctrl+Shift+V |
-| Edit mode (source only) | Ctrl+/ |
+| Toggle Source / Split Preview (enters Source from Visual Edit or Read) | Ctrl+/ |
 | Visual Edit mode (WYSIWYG-first, source-backed) | Ctrl+E |
 | Split mode (source + preview) | Ctrl+P |
 | Read mode (preview only) | Ctrl+R |

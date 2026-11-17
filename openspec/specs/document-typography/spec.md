@@ -1,7 +1,7 @@
 # document-typography Specification
 
 ## Purpose
-TBD - created by archiving change customize-document-typography. Update Purpose after archive.
+Provide configurable document fonts, sizes, spacing, and inline geometry consistently across source and rendered surfaces without changing document content.
 
 ## Requirements
 

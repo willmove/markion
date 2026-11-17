@@ -1,6 +1,6 @@
 # 块首快捷菜单与选区边界验证（2026-11-16）
 
-变更：[fix-block-handle-selection-and-menu](../../openspec/changes/fix-block-handle-selection-and-menu/proposal.md)。本记录覆盖 Windows 开发构建，不表示新版本已经发布；稳定规格将在变更归档时同步。
+变更：[fix-block-handle-selection-and-menu](../../openspec/changes/archive/2026-11-17-fix-block-handle-selection-and-menu/proposal.md)。本记录覆盖 Windows 开发构建，不表示新版本已经发布；稳定规格将在变更归档时同步。
 
 ## 实现结果
 

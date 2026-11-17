@@ -1,7 +1,7 @@
 # git-version-management Specification
 
 ## Purpose
-TBD - created by archiving change add-daily-version-management. Update Purpose after archive.
+Let users create, browse, compare, and restore local document versions while preserving reviewed content and unsaved editor work.
 
 ## Requirements
 

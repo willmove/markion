@@ -442,6 +442,14 @@ impl MarkionApp {
             cx.notify();
             return;
         }
+        if self
+            .link_editor
+            .as_ref()
+            .is_some_and(|editor| editor.kind == LinkEditorKind::ImageProperties)
+        {
+            self.cancel_link_editor(cx);
+            return;
+        }
         if self.slash_commands.is_some() {
             self.dismissed_slash_query = self.slash_commands.take().map(|state| state.query);
             cx.notify();
@@ -457,6 +465,9 @@ impl MarkionApp {
             return;
         }
         if self.block_menu.is_some() || self.visual_table_menu.is_some() {
+            if self.back_visual_context_submenu(cx) {
+                return;
+            }
             self.close_visual_block_menu(cx);
             return;
         }

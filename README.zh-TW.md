@@ -12,9 +12,9 @@
 
 Markion 是一款使用 Rust 和 GPUI 打造的原生桌面 Markdown 編輯器。它在單一輕量應用中結合了流暢的原始碼編輯、基於原始碼的視覺化編輯模式、即時預覽、工作區工具與多格式匯出。Markdown 始終是文件的標準資料格式——不使用 Electron、Tauri 或 WebView。
 
-## 專案進展（2026-11-13）
+## 專案進展（2026-11-17）
 
-可視化編輯已支援多區塊與清單子樹操作、表格矩形選取、TSV/HTML 複製與矩陣貼上、末格 Tab 加列，以及程式碼摺疊。局部派生會重用未變區域；Windows 輸入後繪製與 IME 復原修復已有真實輸入記錄。JSON/YAML/TOML 使用純原始碼編輯器；Wayland 已有視窗按鈕、圓角與縮放邊緣。 檔案樹已支援拖曳移動檔案/資料夾及複製絕對/相對路徑。 [實作、驗證與待驗收事項](docs/project-status.md).
+視覺化編輯新增緊湊區塊操作、懸停子選單、精確選取範圍剪貼簿操作、表格列欄選單、儲存格 Shift+Enter 換行與圖片屬性編輯。斜線補全提供 H1–H5 控制項並可關閉自動彈出；emoji 面板最多顯示 36 個候選。大綱可放在左側，或作為獨立可調寬的右側面板與檔案樹並排。透過「說明」中的樣例與範本入口可取得 5 篇離線指南與 12 份範本；編輯前請複製整個資料夾。[實作、證據與待驗收事項](docs/project-status.md) · [樣例索引](assets/examples/README.md)。
 
 ## 安裝
 
@@ -30,7 +30,7 @@ Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → �
 
 ## 編輯模式
 
-Markion 提供四種檢視模式，預設使用分割預覽。
+Markion 提供四種檢視模式，預設使用視覺化編輯。
 
 - **編輯** — 專注的原始 Markdown 原始碼編輯器。
 - **視覺化編輯** — 所見即所得優先、基於原始碼的編輯介面。正文保持渲染並逐步顯示必要語法；一般圍欄程式碼內容、區塊數學公式、已註冊的圖表（Mermaid）、行內圖片欄位與 GFM 表格儲存格提供精確的直接編輯器。尚未實作所見即所得渲染的結構——多行或畸形圖片及位元組對應不明確的語法——暫時保留精確的原始碼編輯通道，並登記在[視覺化編輯 WYSIWYG 涵蓋矩陣與路線圖](docs/visual-editing-quality.md)中等待逐步關閉。斜線命令面板與精簡的右鍵區塊選單提供精確的區塊轉換（段落、標題、清單、引用、圍欄程式碼、分隔線、表格）、複製、上移/下移、原始碼安全的拖曳重排與刪除；選取範圍上下文格式工具列與視覺化連結編輯器對每次操作執行一次精確的原始碼變更。Markdown 分隔符號預設自動配對，輸入 `:shortcode` 會開啟 emoji 自動完成，任務清單核取方塊可直接點擊切換；游標離開標題、清單、任務或引用列後，該列會立即恢復為渲染形態。它不是獨立的富文字文件模型——底層 Markdown 始終是唯一資料來源。
@@ -103,6 +103,10 @@ heading_menu_max_level = 5        # 5 或 6
 sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" 或 "outline"
+outline_position = "left"        # "left" or "right"
+outline_visible = true
+block_handle_menu = true
+slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
 

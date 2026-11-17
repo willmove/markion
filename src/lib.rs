@@ -64,6 +64,10 @@ pub const DEFAULT_WELCOME_MARKDOWN: &str = r#"# Welcome to Markion
 
 This starter document is a quick tour of Markdown in Markion. Edit the source on the left and see the preview update on the right.
 
+## Examples and templates
+
+Choose **Help → Examples and Templates** to find the offline library in `assets/examples`: getting-started and formatting guides, plus daily notes, meeting notes, project plans, and more. Copy the whole examples folder to your own documents directory before editing; the index explains each template and how to keep local images with your copies.
+
 ## Heading hierarchy
 
 ### Level three heading
@@ -1976,6 +1980,7 @@ impl MarkdownDocument {
                 MarkdownFormat::Bold
                     | MarkdownFormat::Italic
                     | MarkdownFormat::InlineCode
+                    | MarkdownFormat::Strikethrough
                     | MarkdownFormat::Link
             );
             if !inside_one_cell || !inline_ok {
@@ -1986,6 +1991,7 @@ impl MarkdownDocument {
             MarkdownFormat::Bold => self.wrap_inline(range, "**", "**", "bold"),
             MarkdownFormat::Italic => self.wrap_inline(range, "*", "*", "italic"),
             MarkdownFormat::InlineCode => self.wrap_inline(range, "`", "`", "code"),
+            MarkdownFormat::Strikethrough => self.wrap_inline(range, "~~", "~~", "text"),
             MarkdownFormat::Link => self.wrap_link(range, false),
             MarkdownFormat::Image => self.wrap_link(range, true),
             MarkdownFormat::Paragraph => self.apply_paragraph(range),
@@ -3467,11 +3473,39 @@ impl MarkdownDocument {
         })
     }
 
+    /// The atomic HTML break containing or adjacent to a Visual Edit cell
+    /// caret in the requested direction. Parsed ranges exclude code/escapes.
+    pub fn visual_table_break_range_at(
+        &self,
+        byte_index: usize,
+        forward: bool,
+    ) -> Option<Range<usize>> {
+        let blocks = self.visual_blocks_shared();
+        let block = blocks.iter().find(|block| {
+            block.source_range.start <= byte_index && byte_index <= block.source_range.end
+        })?;
+        let VisualBlockEditor::Table { cells } = block.editor.as_ref()? else {
+            return None;
+        };
+        cells
+            .iter()
+            .flat_map(|cell| &cell.hard_breaks)
+            .find(|range| {
+                if forward {
+                    range.start <= byte_index && byte_index < range.end
+                } else {
+                    range.start < byte_index && byte_index <= range.end
+                }
+            })
+            .cloned()
+    }
+
     /// One canonical removal of an elided data-URI payload token adjacent to
     /// the caret: Backspace at the token's trailing edge and forward-Delete
     /// at its leading edge remove the whole opaque payload in a single
     /// undoable replacement, because the token is one atomic unit. Works on
-    /// every payload-bearing surface (image source, raw-HTML blocks).
+    /// every payload-bearing surface (image source, raw-HTML blocks), and
+    /// on parsed table-cell HTML breaks displayed as a single newline.
     pub fn visual_atomic_token_edit(
         &self,
         byte_index: usize,
@@ -3479,6 +3513,13 @@ impl MarkdownDocument {
     ) -> Option<VisualStructuralEdit> {
         let offset = clamp_to_char_boundary(&self.text, byte_index);
         let blocks = self.visual_blocks_shared();
+        if let Some(range) = self.visual_table_break_range_at(offset, forward) {
+            return Some(VisualStructuralEdit {
+                range: range.clone(),
+                replacement: String::new(),
+                selection_after: range.start..range.start,
+            });
+        }
         let payload_range = blocks.iter().find_map(|block| {
             let editor = block.editor.as_ref()?;
             let payload = match editor {

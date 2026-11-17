@@ -126,6 +126,7 @@ Run the complete workspace suite and inspect the release-only diff:
 ```bash
 cargo test --workspace
 cargo run -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
+pwsh -File scripts/verify-examples.ps1
 git diff --check
 git status --short --branch
 git diff -- Cargo.toml Cargo.lock packager.toml
@@ -167,7 +168,9 @@ All of these jobs must succeed:
 - Mirror installers to Aliyun OSS.
 
 Each native build also extracts every generated package and verifies its
-packaged `assets/marknice-workspace` manifest before upload. Complete the manual
+packaged `assets/marknice-workspace` manifest and the complete `assets/examples`
+collection before upload. Every example document and image must match the
+checkout; missing or altered files fail package verification. Complete the manual
 browser and WeChat matrix in `docs/marknice-workspace-release-evidence.md`; a
 release with pending rows is not ready to publish.
 

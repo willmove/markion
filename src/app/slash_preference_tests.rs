@@ -126,6 +126,7 @@ fn slash_preference_does_not_disable_emoji_or_block_commands(cx: &mut TestAppCon
         assert!(app.block_menu.is_some());
         app.activate_visual_block_menu_item(
             BlockMenuItem::Transform(BlockTransform::Heading(2)),
+            None,
             cx,
         );
         assert_eq!(app.active_tab().document.text(), "## :smi");

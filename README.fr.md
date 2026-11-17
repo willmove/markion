@@ -12,9 +12,9 @@
 
 Markion est un éditeur Markdown de bureau natif, construit avec Rust et GPUI. Il réunit dans une application légère une édition de source réactive, un mode d'édition visuelle adossé au source, un aperçu en direct, des outils d'espace de travail et une exportation multiformat. Le Markdown reste le format canonique du document — ni Electron, ni Tauri, ni WebView.
 
-## Avancement du projet (2026-11-13)
+## Avancement du projet (2026-11-17)
 
-L’édition visuelle propose la sélection et le déplacement de plusieurs blocs et sous-arbres de liste, les sélections rectangulaires de tableaux, la copie TSV/HTML, le collage de matrices, l’ajout d’une ligne par Tab dans la dernière cellule et le repli du code. Les modifications locales réutilisent les régions inchangées ; les correctifs de rendu après saisie et d’annulation IME Windows disposent de preuves de saisie réelle. JSON/YAML/TOML s’ouvrent dans un éditeur source ; Wayland dispose de boutons de fenêtre, de coins arrondis et de zones de redimensionnement. L’arborescence permet de déplacer fichiers et dossiers par glisser-déposer et de copier les chemins absolus ou relatifs. [Implémentation, preuves et vérifications restantes](docs/project-status.md).
+L’édition visuelle propose des commandes de bloc compactes, des sous-menus au survol, une copie fidèle à la sélection, des menus de lignes/colonnes, des sauts de ligne dans les cellules avec Maj+Entrée et les propriétés des images. La palette slash H1–H5 peut être désactivée ; la palette emoji affiche jusqu’à 36 candidats. Le plan peut rester à gauche ou devenir un panneau droit indépendant et redimensionnable à côté des fichiers. Le menu Aide donne accès à cinq guides hors ligne et douze modèles : copiez le dossier entier avant de les modifier. [Implémentation, preuves et vérifications restantes](docs/project-status.md) · [Exemples](assets/examples/README.md).
 
 ## Installation
 
@@ -30,7 +30,7 @@ Les publications Windows ne sont pas signées ; SmartScreen peut exiger **Inform
 
 ## Modes d'édition
 
-Markion propose quatre modes d'affichage. L'aperçu fractionné est le mode par défaut.
+Markion propose quatre modes d'affichage. L’édition visuelle est le mode par défaut.
 
 - **Édition** — un éditeur de code source Markdown brut et concentré.
 - **Édition visuelle** — une surface WYSIWYG d'abord, adossée au source. Le texte reste rendu avec révélation progressive de la syntaxe ; les contenus de blocs de code ordinaires, les formules mathématiques en bloc, les diagrammes enregistrés (Mermaid), les champs d'images en ligne et les cellules de tableaux GFM disposent d'éditeurs directs exacts. Les constructions dont le rendu WYSIWYG n'est pas encore implémenté — images multilignes ou malformées et syntaxe ambiguë en octets — conservent une possibilité d'édition exacte adossée au source à titre transitoire, suivie dans la [matrice de couverture WYSIWYG et la feuille de route de l'édition visuelle](docs/visual-editing-quality.md). Une palette de commandes slash et un menu contextuel de bloc compact au clic droit offrent des transformations de bloc exactes (paragraphe, titres, listes, citation, bloc de code, séparateur, tableau), la duplication, le déplacement vers le haut/bas, le réordonnancement par glisser sans risque pour le source et la suppression ; une barre d'outils de formatage contextuelle à la sélection et un éditeur de liens visuel effectuent une mutation exacte du source par action. Les délimiteurs Markdown s'apparient automatiquement par défaut, `:shortcode` ouvre la complétion d'emoji, les cases des listes de tâches se basculent directement, et quitter une ligne de titre, de liste, de tâche ou de citation la ramène immédiatement à sa forme rendue. Il ne s'agit pas d'un modèle de document riche séparé — le Markdown sous-jacent reste toujours la source de vérité.
@@ -103,6 +103,10 @@ heading_menu_max_level = 5        # 5 ou 6
 sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" ou "outline"
+outline_position = "left"        # "left" or "right"
+outline_visible = true
+block_handle_menu = true
+slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
 

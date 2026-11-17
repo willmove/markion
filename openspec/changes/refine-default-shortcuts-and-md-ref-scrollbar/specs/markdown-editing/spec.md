@@ -39,6 +39,16 @@ The editor SHALL provide keyboard shortcuts for switching to each view mode dire
 - **WHEN** the user assigns or resets an override for Edit, Visual Edit, Split Preview, or Read mode
 - **THEN** keymap dispatch, View-menu labels, and the in-app shortcut reference all use the same effective binding
 
+#### Scenario: Combined shortcut returns to Source from Split Preview
+- **WHEN** the active view mode is Split Preview and the user presses the Source/Split Preview shortcut
+- **THEN** the active view mode becomes Source
+- **AND** status feedback identifies Source mode
+
+#### Scenario: Source layout toggle preserves document state and caches
+- **WHEN** the user alternates between Source and Split Preview with the combined shortcut
+- **THEN** document text, dirty state, cursor and selection, undo and redo history, scroll positions, and tab identity remain unchanged
+- **AND** derived Markdown state continues to follow the existing per-document-version cache rules
+
 ## ADDED Requirements
 
 ### Requirement: Inline code factory shortcut uses Ctrl+Shift+backtick

@@ -163,13 +163,12 @@ The comment SHALL NOT appear as a separate Html preview or Visual Edit block whe
 - **THEN** the same source mutation rewrites the comment to `<!-- markion-cols:30,50,20 -->`
 
 ### Requirement: Visual Edit table cells expose in-cell inline format controls
-
-When Visual Edit owns a non-empty selection that lies entirely inside one table cell’s exact source range, the block context menu for that table SHALL expose the existing Bold, Italic, Inline Code, and Link formatting group. Invoking a control SHALL wrap or unwrap that cell’s selected bytes through the existing Markdown format path as one undoable mutation. A selection that crosses a cell boundary, a `|` delimiter, or more than one cell SHALL NOT expose those actions and SHALL NOT apply inline wrapping that would break the table. Focused cells continue to reveal authored source markup; unfocused cells continue to render inline formatting.
+When Visual Edit owns a non-empty selection that lies entirely inside one table cell’s exact source range, the block context menu for that table SHALL expose the existing Bold, Italic, Inline Code, Strikethrough, and Link formatting group. Invoking a control SHALL wrap or unwrap that cell’s selected bytes through the existing Markdown format path as one undoable mutation. A selection that crosses a cell boundary, a `|` delimiter, or more than one cell SHALL NOT expose those actions and SHALL NOT apply inline wrapping that would break the table. Focused cells continue to reveal authored source markup; unfocused cells continue to render inline formatting.
 
 #### Scenario: Cell selection shows Bold in the context menu
 
 - **WHEN** the user selects a non-empty range fully inside one Visual Edit table cell and opens that table’s context menu
-- **THEN** the menu includes Bold, Italic, Inline Code, and Link
+- **THEN** the menu includes Bold, Italic, Inline Code, Strikethrough, and Link
 - **AND** opening the menu does not change document version
 
 #### Scenario: Bold wraps only the cell selection
@@ -372,3 +371,92 @@ Visual Edit SHALL support rectangular cell selection, including whole rows and c
 - **WHEN** a two-by-two TSV matrix is pasted at a selected cell
 - **THEN** four target cells receive the corresponding escaped values in one undoable operation
 - **AND** required rows are added without changing unrelated cells
+
+### Requirement: Visual Edit table vertical navigation preserves the column
+
+In an editable GFM table, Up/Down and their selection variants SHALL first move between painted lines inside the current cell. At the cell's upper or lower line boundary, they SHALL enter the previous or next logical row in the same column, including empty cells and the header, retaining the preferred horizontal position. The delimiter row SHALL NOT be a navigation stop. Only movement beyond the first or last logical row SHALL hand control to the adjacent visual block, without creating a row or mutating Markdown.
+
+#### Scenario: Down traverses populated and empty rows
+- **WHEN** the caret reaches the last painted line of a cell and the user presses Down
+- **THEN** the caret enters the next row's cell in the same column, including an empty cell
+- **AND** repeated Down reaches each existing empty row before leaving the table
+
+#### Scenario: Up returns to the header
+- **WHEN** the caret reaches the first painted line of a body cell and the user presses Up
+- **THEN** the caret enters the preceding logical row in the same column
+- **AND** the header is reachable without stopping on the Markdown delimiter row
+
+#### Scenario: Wrapped cell keeps internal navigation
+- **WHEN** the current cell has an adjacent painted line in the requested direction
+- **THEN** Up/Down stays in that cell and retains the preferred horizontal position
+
+#### Scenario: Selection uses the same cell targets
+- **WHEN** the user presses Shift-Up or Shift-Down within an editable table
+- **THEN** the selection head follows the same wrapped-line and same-column navigation targets
+- **AND** the source selection stays normalized and UTF-8 safe
+
+#### Scenario: Table boundary hands off without edits
+- **WHEN** the user moves Up beyond the header or Down beyond the last body row
+- **THEN** the caret moves to the adjacent visual block when one exists
+- **AND** text, document version, dirty state, history, and shared derived Markdown caches remain unchanged
+
+### Requirement: Empty Visual Edit table cells remain clickable and paint a caret
+
+Each editable GFM table cell SHALL accept left-click caret placement throughout its interior, including empty content and padding, except on explicit structural controls. Text clicks SHALL retain precise text hit testing. An empty cell SHALL paint a visible caret at its source insertion position and accept text input and IME through the existing cell-editing path. Pointer placement and empty-cell geometry SHALL NOT insert placeholder bytes into Markdown or change document version, dirty state, history, or shared derived Markdown caches.
+
+#### Scenario: Click an empty cell
+- **WHEN** the user left-clicks the interior of an empty header or body cell
+- **THEN** the source caret belongs to that cell and is visibly painted inside it
+- **AND** typing edits that logical cell and Undo restores the prior source
+
+#### Scenario: Click cell padding
+- **WHEN** the user left-clicks cell padding outside its painted text and structural controls
+- **THEN** the caret is placed inside that cell
+- **AND** clicking its text continues to resolve the precise source-backed text position
+
+#### Scenario: Empty cell reached by keyboard
+- **WHEN** Tab, Shift-Tab, Up, or Down enters an empty cell
+- **THEN** the cell paints a visible caret without adding source text
+
+#### Scenario: Structural controls keep their actions
+- **WHEN** the user activates a row grip, column grip, or resize handle
+- **THEN** the intended structural interaction is retained without a cell-padding handler overriding it
+
+### Requirement: Compact table-specific context menus
+A table-cell editing context menu SHALL omit block type conversions and block/image insertion controls. It SHALL offer each inline Link action only once and retain selection clipboard/formatting plus separate Row and Column entries whose bounded side flyouts contain their respective existing checked operations. Whole-table operations SHALL remain at the root, with labels naming Table explicitly. Hover SHALL open either flyout without a click; Right/Enter and click SHALL remain supported. Pointer, keyboard, back navigation, scrolling and click-away SHALL preserve source, selection and caches, including short windows and left-flipped flyouts; stale submenu targets SHALL be rejected just like root targets.
+
+#### Scenario: Safe cell catalog and separate axis flyouts
+- **WHEN** the user opens a context menu inside a table cell
+- **THEN** heading, list, quote, code-block, divider, table and image insertion/conversion controls are absent and Link occurs at most once
+- **AND** separate Row and Column entries open only their respective axis operations beside the root without a left click, while whole-table operations remain directly available at the root
+- **AND** Left or Back returns to the root, while outside clicks and tab changes dismiss the complete menu
+
+### Requirement: Shift+Enter inserts a cell-local hard break
+In Visual Edit, Shift+Enter within an exactly ranged header or body cell SHALL insert an HTML `<br>` at the caret or replace the cell-local selection with that break as one undoable edit. The caret SHALL remain in that cell after the break. Unfocused rendering SHALL display a line break. Other cells, pipe delimiters and surrounding source bytes SHALL remain unchanged. Ordinary Enter and Tab traversal, Shift+Enter search navigation and source-mode newline behavior SHALL remain available.
+
+#### Scenario: Break within a Unicode cell and undo
+- **WHEN** the user presses Shift+Enter inside a header or body cell containing Unicode text
+- **THEN** only the selected range becomes `<br>` and the caret remains immediately after it in the same cell
+- **AND** subsequent typing stays in that cell, and one Undo restores the original break edit and selection
+
+### Requirement: Visual Edit context menu exposes exact row and column actions
+The combined Visual Edit context menu SHALL retain whole-table block commands and selection clipboard/formatting while offering row and column action groups for the clicked exact cell. Keyboard invocation SHALL use the caret-owning cell or current structured cell-selection head. Row actions SHALL include insert above/below, move up/down, duplicate, clear and delete; column actions SHALL include insert left/right, move left/right, alignment, duplicate, clear and delete. These actions SHALL reuse the established header, table-edge and lone-column restrictions, capture document identity/version, table identity/shape and row/column indices, and reject stale or ambiguous targets. Selected text or rectangles SHALL remain the clipboard/inline-editing target even if the cell used for structural commands differs. Menu lifecycle SHALL not mutate source, selection, history, dirty state or derived caches; every successful structural action SHALL perform one checked source mutation and one undo step, preserving unrelated tables and content.
+
+#### Scenario: Right-click a cell while the caret is elsewhere
+- **WHEN** the user right-clicks row 2, column 1 of an editable table while the caret belongs to another cell or block
+- **THEN** row/column groups target exactly row 2 and column 1 of the clicked table
+- **AND** clipboard and inline formatting retain any active selection
+
+#### Scenario: Keyboard menu uses the selected cell
+- **WHEN** the user invokes the keyboard context menu while a table cell owns the caret or a rectangle is selected
+- **THEN** structural groups target the caret cell or rectangle head cell respectively
+- **AND** clipboard operations still act on the selected text or rectangle
+
+#### Scenario: Structural restrictions and stale targets
+- **WHEN** a header/edge/lone-column action is unavailable, or document identity/version or captured table shape is stale
+- **THEN** the action is disabled or rejected without changing source, selection, history or caches
+
+#### Scenario: Exact row or column mutation and undo
+- **WHEN** a row or column action is activated for an exact live cell
+- **THEN** only its captured table is edited with existing alignment and column-width metadata behavior
+- **AND** one Undo restores the original source and selection

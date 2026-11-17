@@ -65,3 +65,8 @@ Every open request that does not explicitly ask for a new tab — File → Open,
 #### Scenario: Single-tab layout is unchanged
 - **WHEN** only one content tab is open
 - **THEN** no tab bar is rendered and the active document or image surface occupies the normal document-workspace area
+
+#### Scenario: File→Open replaces the active tab
+- **WHEN** the user invokes File → Open and picks a supported file that is not already open
+- **THEN** the active tab's content is replaced after applying a dirty guard when that tab contains an editable document, rather than spawning a new tab
+- **AND** replacing a read-only image tab does not require a dirty confirmation

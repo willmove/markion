@@ -417,7 +417,7 @@ Markion 当前有三处明显远程交互：
 
 Quiet 的应用内复制携带纯文本和 DocxXML metadata，粘贴按内部结构、HTML、Markdown 文本、图片及目标上下文分派；但系统 HTML 读取当前只在 macOS 实现。[Quiet 剪贴板](https://github.com/s1dashu/quiet-md/blob/57884b9c8e49d22effe18885c6d717d8acb67278/src/editor/view.rs#L1753-L1884)、[平台边界](https://github.com/s1dashu/quiet-md/blob/57884b9c8e49d22effe18885c6d717d8acb67278/src/clipboard.rs#L1-L34)。
 
-Markion 的 HTML/TSV/Word/图片粘贴与资源策略已经很强，不应以 Quiet 的非 macOS 缺口为目标降级。真正的差异是 Visual 的 Copy 固定复制 canonical Markdown source；例如选择渲染后的粗体文本，普通 Copy 得到的是带 `**` 的源片段。证据：`src/app/editing.rs:4397-4405`，当前契约亦见 `openspec/changes/fix-visual-undo-viewport-and-selection-copy/design.md:13-29`。
+Markion 的 HTML/TSV/Word/图片粘贴与资源策略已经很强，不应以 Quiet 的非 macOS 缺口为目标降级。真正的差异是 Visual 的 Copy 固定复制 canonical Markdown source；例如选择渲染后的粗体文本，普通 Copy 得到的是带 `**` 的源片段。证据：`src/app/editing.rs:4397-4405`，当前契约亦见 `openspec/changes/archive/2026-11-17-fix-visual-undo-viewport-and-selection-copy/design.md:13-29`。
 
 建议提供明确的格式语义：
 

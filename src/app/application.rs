@@ -502,6 +502,7 @@ impl MarkionApp {
         if index >= self.tabs.len() {
             return;
         }
+        self.dismiss_document_editing_overlays();
         let previous = self.active_tab;
         // Selecting in another tab's preview must not leave a drag in progress
         // on the previous tab; clear the drag flag on all tabs for safety.
@@ -1574,6 +1575,7 @@ impl MarkionApp {
     }
 
     fn open_tab_in_new_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
+        self.dismiss_document_editing_overlays();
         let previous = self.active_tab;
         let opening_image = tab.is_image();
         // Opening a new tab leaves the previous one inactive — same dormancy
@@ -1645,6 +1647,7 @@ impl MarkionApp {
     }
 
     fn replace_active_with_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
+        self.dismiss_document_editing_overlays();
         let active = self.active_tab;
         self.release_tab_image_claims(active, cx);
         if let Some(state) = self.tabs[active].document_tab_mut() {

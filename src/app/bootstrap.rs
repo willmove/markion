@@ -223,6 +223,10 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                     t(language, Msg::ItemMarkdownReference),
                     ShowMarkdownReference,
                 ),
+                MenuItem::action(
+                    t(language, Msg::ItemExamplesTemplates),
+                    ShowExamplesTemplates,
+                ),
                 MenuItem::action(t(language, Msg::ItemReportIssue), ReportIssue),
                 MenuItem::action(t(language, Msg::ItemOnlineDocs), OpenOnlineDocs),
                 MenuItem::separator(),

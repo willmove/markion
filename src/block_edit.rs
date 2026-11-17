@@ -683,6 +683,198 @@ pub fn add_paragraph_below(
     })
 }
 
+/// Insert a fresh block after the complete clicked source unit, without
+/// transforming its content or consuming a selection elsewhere in the document.
+pub fn insert_block_below(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    command: SlashCommand,
+) -> Result<BlockEdit, BlockEditError> {
+    let (template, caret) = slash_template(command, preferred_line_ending(source));
+    insert_template_below(source, current_version, blocks, target, &template, caret)
+}
+
+pub fn insert_callout_below(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    kind: crate::AlertKind,
+) -> Result<BlockEdit, BlockEditError> {
+    let template = callout_template(source, kind);
+    let caret = template.len();
+    insert_template_below(source, current_version, blocks, target, &template, caret)
+}
+
+fn callout_template(source: &str, kind: crate::AlertKind) -> String {
+    format!(
+        "> [!{}]{}> ",
+        kind.label().to_uppercase(),
+        preferred_line_ending(source)
+    )
+}
+
+/// Exact content range of a plain blank line, excluding its LF/CRLF.
+/// Structural quote/list gaps and offsets belonging to the next row are not
+/// plain insertion targets, even when their visual kind is Whitespace.
+pub fn empty_paragraph_range(
+    source: &str,
+    block: &VisualBlock,
+    offset: usize,
+) -> Option<Range<usize>> {
+    if !matches!(block.kind, VisualBlockKind::Whitespace)
+        || block.quote_context.is_some()
+        || block.list_depth > 0
+        || block.source_island.is_some()
+        || offset < block.source_range.start
+        || offset > block.source_range.end
+        || (offset == block.source_range.end && offset != source.len())
+        || !source.is_char_boundary(offset)
+    {
+        return None;
+    }
+    let start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let end = source[offset..]
+        .find('\n')
+        .map_or(source.len(), |relative| offset + relative);
+    let end = if end > start && source.as_bytes()[end - 1] == b'\r' {
+        end - 1
+    } else {
+        end
+    };
+    (start >= block.source_range.start
+        && end <= block.source_range.end
+        && offset <= end
+        && source[start..end]
+            .chars()
+            .all(|ch| matches!(ch, ' ' | '\t')))
+    .then_some(start..end)
+}
+
+pub fn insert_block_at_empty_paragraph(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    offset: usize,
+    command: SlashCommand,
+) -> Result<BlockEdit, BlockEditError> {
+    let (template, caret) = slash_template(command, preferred_line_ending(source));
+    insert_template_at_empty_paragraph(
+        source,
+        current_version,
+        blocks,
+        target,
+        offset,
+        &template,
+        caret,
+    )
+}
+
+pub fn insert_callout_at_empty_paragraph(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    offset: usize,
+    kind: crate::AlertKind,
+) -> Result<BlockEdit, BlockEditError> {
+    let template = callout_template(source, kind);
+    let caret = template.len();
+    insert_template_at_empty_paragraph(
+        source,
+        current_version,
+        blocks,
+        target,
+        offset,
+        &template,
+        caret,
+    )
+}
+
+fn insert_template_at_empty_paragraph(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    offset: usize,
+    template: &str,
+    caret: usize,
+) -> Result<BlockEdit, BlockEditError> {
+    let (_, block) = validate_block_target(current_version, blocks, target)?;
+    let range = empty_paragraph_range(source, block, offset).ok_or(BlockEditError::Unsupported)?;
+    let ending = preferred_line_ending(source);
+    if template.is_empty() {
+        // Inserting Paragraph on a blank row creates another editable line.
+        return Ok(BlockEdit {
+            document_version: current_version,
+            replacement: ending.to_string(),
+            selection_after: range.start..range.start,
+            range,
+        });
+    }
+    let before = &source[..range.start];
+    let trailing = before
+        .chars()
+        .rev()
+        .take_while(|ch| matches!(ch, '\r' | '\n'))
+        .filter(|ch| *ch == '\n')
+        .count();
+    let padding = if before.is_empty() {
+        0
+    } else {
+        2usize.saturating_sub(trailing)
+    };
+    let after = &source[range.end..];
+    let leading = after
+        .chars()
+        .take_while(|ch| matches!(ch, '\r' | '\n'))
+        .filter(|ch| *ch == '\n')
+        .count();
+    let minimum = if after.trim().is_empty() { 1usize } else { 2 };
+    let replacement = format!(
+        "{}{template}{}",
+        ending.repeat(padding),
+        ending.repeat(minimum.saturating_sub(leading))
+    );
+    let position = range.start + padding * ending.len() + caret;
+    Ok(BlockEdit {
+        document_version: current_version,
+        range,
+        replacement,
+        selection_after: position..position,
+    })
+}
+
+fn insert_template_below(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    template: &str,
+    caret: usize,
+) -> Result<BlockEdit, BlockEditError> {
+    let mut edit = add_paragraph_below(source, current_version, blocks, target)?;
+    if !template.is_empty() {
+        let offset = edit.selection_after.start - edit.range.start;
+        edit.replacement.truncate(offset);
+        edit.replacement.push_str(template);
+        // Isolate the next block, including pipe-less prose after a GFM table
+        // and paragraphs following a list/quote. Never rewrite existing bytes.
+        edit.replacement.push_str(
+            &preferred_line_ending(source).repeat(if edit.range.end < source.len() {
+                2
+            } else {
+                1
+            }),
+        );
+        edit.selection_after = edit.range.start + offset + caret..edit.range.start + offset + caret;
+    }
+    Ok(edit)
+}
+
 pub fn reorder_block(
     source: &str,
     current_version: u64,
@@ -958,6 +1150,212 @@ fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
 mod tests {
     use super::*;
     use crate::MarkdownDocument;
+
+    #[test]
+    fn empty_paragraph_insertions_use_the_exact_line_and_preserve_neighbors() {
+        for ending in ["\n", "\r\n"] {
+            for (raw, logical_offset) in [
+                ("", 0),
+                (" \t", 1),
+                ("before\n\nnext", 7),
+                ("before\n\n\n\nnext", 8),
+                ("before\n", 7),
+            ] {
+                let source = raw.replace('\n', ending);
+                let offset = raw[..logical_offset].replace('\n', ending).len();
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let block = blocks
+                    .iter()
+                    .find(|block| empty_paragraph_range(&source, block, offset).is_some())
+                    .unwrap_or_else(|| {
+                        panic!("empty target for {source:?} at {offset}: {blocks:?}")
+                    });
+                let target = BlockTarget::from_block(doc.version(), block);
+                let edits = SlashCommand::ALL
+                    .into_iter()
+                    .map(|command| {
+                        insert_block_at_empty_paragraph(
+                            &source,
+                            doc.version(),
+                            &blocks,
+                            &target,
+                            offset,
+                            command,
+                        )
+                    })
+                    .chain(
+                        [
+                            crate::AlertKind::Note,
+                            crate::AlertKind::Tip,
+                            crate::AlertKind::Important,
+                            crate::AlertKind::Warning,
+                            crate::AlertKind::Caution,
+                        ]
+                        .into_iter()
+                        .map(|kind| {
+                            insert_callout_at_empty_paragraph(
+                                &source,
+                                doc.version(),
+                                &blocks,
+                                &target,
+                                offset,
+                                kind,
+                            )
+                        }),
+                    );
+                for edit in edits {
+                    let edit = edit.unwrap();
+                    assert_eq!(
+                        edit.range,
+                        empty_paragraph_range(&source, block, offset).unwrap()
+                    );
+                    let mut result = source.clone();
+                    result.replace_range(edit.range.clone(), &edit.replacement);
+                    assert_eq!(&result[..edit.range.start], &source[..edit.range.start]);
+                    assert!(result.ends_with(&source[edit.range.end..]));
+                    assert!(result.is_char_boundary(edit.selection_after.start));
+                    if raw.contains("next") {
+                        let parsed = MarkdownDocument::from_text(&result);
+                        assert!(
+                            parsed.visual_blocks_shared().iter().any(|block| matches!(
+                                block.kind,
+                                VisualBlockKind::Paragraph
+                            ) && result
+                                [block.source_range.clone()]
+                            .trim()
+                                == "next"),
+                            "neighbor swallowed: {result:?}"
+                        );
+                    }
+                    if source.contains("\r\n") {
+                        assert!(!result.replace("\r\n", "").contains('\n'));
+                    }
+                }
+                assert_eq!(
+                    insert_block_at_empty_paragraph(
+                        &source,
+                        doc.version() + 1,
+                        &blocks,
+                        &target,
+                        offset,
+                        SlashCommand::Heading(1)
+                    ),
+                    Err(BlockEditError::Stale)
+                );
+                assert!(
+                    insert_callout_at_empty_paragraph(
+                        &source,
+                        doc.version(),
+                        &blocks,
+                        &target,
+                        source.len() + 1,
+                        crate::AlertKind::Note
+                    )
+                    .is_err()
+                );
+            }
+        }
+        let source = "> [!NOTE]\n> \n";
+        let doc = MarkdownDocument::from_text(source);
+        assert!(doc.visual_blocks_shared().iter().all(|block| {
+            empty_paragraph_range(source, block, source.find("> \n").unwrap() + 2).is_none()
+        }));
+    }
+
+    #[test]
+    fn inserted_blocks_preserve_complete_units_neighbors_endings_and_targets() {
+        for ending in ["\n", "\r\n"] {
+            for unit in [
+                "clicked 中文🙂",
+                "- parent\n  - child",
+                "> quote\n> continuation",
+                "```rust\nlet x = 1;\n```",
+            ] {
+                for terminal in [false, true] {
+                    let source = format!(
+                        "before\n\n{unit}{}",
+                        if terminal { "" } else { "\n\nafter" }
+                    )
+                    .replace('\n', ending);
+                    let doc = MarkdownDocument::from_text(&source);
+                    let blocks = doc.visual_blocks_shared();
+                    let block = blocks
+                        .iter()
+                        .find(|b| b.source_range.start == "before\n\n".replace('\n', ending).len())
+                        .unwrap();
+                    let target = BlockTarget::from_block(doc.version(), block);
+                    let edits = SlashCommand::ALL
+                        .into_iter()
+                        .map(|command| {
+                            insert_block_below(&source, doc.version(), &blocks, &target, command)
+                        })
+                        .chain(
+                            [
+                                crate::AlertKind::Note,
+                                crate::AlertKind::Tip,
+                                crate::AlertKind::Important,
+                                crate::AlertKind::Warning,
+                                crate::AlertKind::Caution,
+                            ]
+                            .into_iter()
+                            .map(|kind| {
+                                insert_callout_below(&source, doc.version(), &blocks, &target, kind)
+                            }),
+                        );
+                    for edit in edits {
+                        let edit = edit.unwrap();
+                        assert!(edit.range.is_empty());
+                        let prefix = format!("before\n\n{unit}").replace('\n', ending);
+                        assert!(edit.range.start >= prefix.len());
+                        let mut result = source.clone();
+                        result.replace_range(edit.range.clone(), &edit.replacement);
+                        assert!(result.starts_with(&prefix));
+                        assert!(terminal || result.ends_with(&format!("{ending}{ending}after")));
+                        assert!(result.is_char_boundary(edit.selection_after.start));
+                        let parsed = MarkdownDocument::from_text(&result);
+                        if !terminal {
+                            assert!(
+                                parsed.visual_blocks_shared().iter().any(|block| matches!(
+                                    block.kind,
+                                    VisualBlockKind::Paragraph
+                                ) && result
+                                    [block.source_range.clone()]
+                                .trim()
+                                    == "after"),
+                                "neighbor was swallowed: {result:?}"
+                            );
+                        }
+                        if ending == "\r\n" {
+                            assert!(!result.replace("\r\n", "").contains('\n'));
+                        }
+                    }
+                    assert_eq!(
+                        insert_block_below(
+                            &source,
+                            doc.version() + 1,
+                            &blocks,
+                            &target,
+                            SlashCommand::Heading(2)
+                        ),
+                        Err(BlockEditError::Stale)
+                    );
+                    let mut invalid = target.clone();
+                    invalid.source_range.end -= 1;
+                    assert_eq!(
+                        insert_callout_below(
+                            &source,
+                            doc.version(),
+                            &blocks,
+                            &invalid,
+                            crate::AlertKind::Note
+                        ),
+                        Err(BlockEditError::Stale)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn advanced_subtree_moves_keep_nested_code_and_reject_self_drops() {

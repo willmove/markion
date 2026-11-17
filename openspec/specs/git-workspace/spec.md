@@ -1,7 +1,7 @@
 # git-workspace Specification
 
 ## Purpose
-TBD - created by archiving change add-git-workspace-sync. Update Purpose after archive.
+Make Git repository availability, onboarding, sync destinations, authentication, and personal-notes authorization understandable and explicit.
 
 ## Requirements
 

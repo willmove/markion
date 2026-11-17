@@ -80,7 +80,9 @@ icons = [
     "assets/markion.icns",
     "assets/markion.png",
 ]
-# Non-binary files bundled alongside the app (logo, icons for reuse).
+# Non-binary files bundled alongside the app, including assets/examples.
+# Keep the full assets tree so the offline guides, templates, and images ship
+# in every native format (the portable ZIP copies this same directory).
 resources = ["assets", "THIRD_PARTY_NOTICES.md"]
 
 # The freshly built binary lives in target/release/markion (crate name = `markion`).

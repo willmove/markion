@@ -1,7 +1,7 @@
 # wechat-workspace-content-export Specification
 
 ## Purpose
-TBD - created by archiving change align-marknice-workspace-skin-and-exports. Update Purpose after archive.
+Export the local publishing workspace's current themed preview through clearly labeled actions that match the pinned MarkNice interface.
 
 ## Requirements
 

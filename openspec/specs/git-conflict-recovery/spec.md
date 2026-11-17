@@ -1,7 +1,7 @@
 # git-conflict-recovery Specification
 
 ## Purpose
-TBD - created by archiving change add-git-workspace-sync. Update Purpose after archive.
+Keep synchronization conflicts and interrupted Git operations recoverable through durable sessions, explicit choices, and truthful completion states.
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 # tab-memory-lifecycle Specification
 
 ## Purpose
-TBD - created by archiving change evict-inactive-tab-caches. Update Purpose after archive.
+Release inactive tabs' derived resources and rebuild them lazily on reactivation while preserving canonical content and editing continuity.
 
 ## Requirements
 

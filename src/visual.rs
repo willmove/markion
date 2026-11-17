@@ -607,6 +607,9 @@ pub(crate) fn build_visual_blocks(
     preview: &[PreviewBlock],
     mut allocate_id: impl FnMut() -> VisualBlockId,
 ) -> Vec<VisualBlock> {
+    if text.is_empty() {
+        return vec![gap_block(text, 0..0, None, &mut allocate_id)];
+    }
     // Link / footnote definitions are document-scoped; per-block parsing needs
     // them appended to resolve references (see `inline_runs`).
     let mut reference_definitions = collect_link_reference_definitions(text);
@@ -806,14 +809,25 @@ pub(crate) fn build_visual_blocks(
         if leaf.marker_only {
             let kind = leaf.alert.expect("marker-only leaf carries the alert kind");
             let group = leaf.quote_group.clone().unwrap_or_else(|| range.clone());
+            let marker_end = text[range.clone()]
+                .find('\n')
+                .map_or(range.end, |relative| range.start + relative + 1);
             blocks.push(callout_title_block(
                 text,
-                range.clone(),
+                range.start..marker_end,
                 kind,
                 leaf.alert_title.clone(),
                 &group,
                 &mut allocate_id,
             ));
+            if marker_end < range.end {
+                blocks.push(gap_block(
+                    text,
+                    marker_end..range.end,
+                    Some(&group),
+                    &mut allocate_id,
+                ));
+            }
             covered_until = covered_until.max(range.end);
             continue;
         }
@@ -1164,10 +1178,14 @@ fn assign_quote_group_edges(blocks: &mut [VisualBlock]) {
 pub fn whitespace_visible_line_count(text: &str, range: Range<usize>) -> usize {
     let end = range.end.min(text.len());
     let start = range.start.min(end);
-    let newlines = text[start..end]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count();
+    let slice = &text[start..end];
+    let newlines = slice.bytes().filter(|byte| *byte == b'\n').count()
+        + usize::from(
+            slice
+                .rsplit('\n')
+                .next()
+                .is_some_and(|line| line.contains('>')),
+        );
     if whitespace_collapses_separator(text, start..end) {
         newlines - 1
     } else {
@@ -1180,7 +1198,10 @@ pub fn whitespace_visible_line_count(text: &str, range: Range<usize>) -> usize {
 pub fn whitespace_collapses_separator(text: &str, range: Range<usize>) -> bool {
     let end = range.end.min(text.len());
     let start = range.start.min(end);
-    start > 0 && end < text.len() && text[start..end].bytes().any(|byte| byte == b'\n')
+    start > 0
+        && end < text.len()
+        && text[start..end].trim().is_empty()
+        && text[start..end].bytes().any(|byte| byte == b'\n')
 }
 
 fn gap_block(
@@ -1581,6 +1602,20 @@ fn visual_block_editor(
             let markdown_start = table_column_width_prefix_len(source);
             let markdown = source.get(markdown_start..)?;
             let cell_ranges = table_cell_source_ranges(markdown)?;
+            let hard_breaks: Vec<_> =
+                pulldown_cmark::Parser::new_ext(markdown, visual_markdown_options())
+                    .into_offset_iter()
+                    .filter_map(|(event, range)| {
+                        matches!(event, Event::Html(_) | Event::InlineHtml(_))
+                            .then(|| parse_inline_html_style_tag(&markdown[range.clone()]))
+                            .flatten()
+                            .filter(|tag| *tag == InlineHtmlStyleTag::LineBreak)
+                            .map(|_| {
+                                source_range.start + markdown_start + range.start
+                                    ..source_range.start + markdown_start + range.end
+                            })
+                    })
+                    .collect();
             Some(VisualBlockEditor::Table {
                 cells: cell_ranges
                     .into_iter()
@@ -1591,6 +1626,14 @@ fn visual_block_editor(
                         VisualTableCell {
                             row: cell.row,
                             column: cell.column,
+                            hard_breaks: hard_breaks
+                                .iter()
+                                .filter(|range| {
+                                    range.start >= source_range.start
+                                        && range.end <= source_range.end
+                                })
+                                .cloned()
+                                .collect(),
                             field: VisualEditorField {
                                 kind: VisualEditorFieldKind::TableCell {
                                     row: cell.row,
@@ -3902,7 +3945,8 @@ mod tests {
 
     use super::{
         build_visual_blocks, build_visual_projection, build_visual_projection_with_marked_range,
-        data_uri_payload_ranges, fenced_payload_ranges,
+        data_uri_payload_ranges, fenced_payload_ranges, whitespace_collapses_separator,
+        whitespace_visible_line_count,
     };
     use crate::{
         AlertKind, BlockTarget, BlockTransform, MarkdownDocument, MarkdownFormat, PreviewBlock,
@@ -4143,6 +4187,60 @@ mod tests {
             blocks[0].quote_context.as_ref().unwrap().edge,
             VisualQuoteGroupEdge::Only
         );
+    }
+
+    #[test]
+    fn empty_callout_body_has_disjoint_editable_row_and_body_height() {
+        for ending in ["\n", "\r\n"] {
+            for kind in [
+                AlertKind::Note,
+                AlertKind::Tip,
+                AlertKind::Important,
+                AlertKind::Warning,
+                AlertKind::Caution,
+            ] {
+                for suffix in ["", "\n\nafter"] {
+                    let source =
+                        format!("before\n\n> [!{}]\n> {suffix}", kind.label().to_uppercase())
+                            .replace('\n', ending);
+                    let doc = MarkdownDocument::from_text(&source);
+                    let blocks = doc.visual_blocks_shared();
+                    let index = blocks
+                        .iter()
+                        .position(|block| {
+                            matches!(block.kind, VisualBlockKind::CalloutTitle { .. })
+                        })
+                        .unwrap();
+                    let title = &blocks[index];
+                    assert_eq!(
+                        &source[title.source_range.clone()],
+                        format!("> [!{}]{ending}", kind.label().to_uppercase())
+                    );
+                    let body = &blocks[index + 1];
+                    assert!(
+                        matches!(body.kind, VisualBlockKind::Whitespace),
+                        "{source:?}: {blocks:?}"
+                    );
+                    assert_eq!(
+                        body.quote_context.as_ref().unwrap().group_source_range,
+                        title.quote_context.as_ref().unwrap().group_source_range
+                    );
+                    assert_eq!(body.quote_context.as_ref().unwrap().alert, Some(kind));
+                    assert!(source[body.source_range.clone()].starts_with("> "));
+                    assert!(whitespace_visible_line_count(&source, body.source_range.clone()) >= 1);
+                    assert!(!whitespace_collapses_separator(
+                        &source,
+                        body.source_range.clone()
+                    ));
+                    assert!(
+                        blocks
+                            .windows(2)
+                            .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+                    );
+                    assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # 表情插入与块内显示验证（2026-11-16）
 
-变更：[align-emoji-completion-palette](../../openspec/changes/align-emoji-completion-palette/proposal.md)。本记录对应 Windows 开发构建。
+变更：[align-emoji-completion-palette](../../openspec/changes/archive/2026-11-17-align-emoji-completion-palette/proposal.md)。本记录对应 Windows 开发构建。
 
 ## 问题与修复
 

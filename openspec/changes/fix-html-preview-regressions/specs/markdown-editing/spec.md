@@ -22,3 +22,17 @@ The parser SHALL parse Markdown using `pulldown-cmark` configured for CommonMark
 #### Scenario: Visible spacing between HTML inline elements is preserved
 - **WHEN** a raw HTML text block contains collapsible whitespace between adjacent styled or linked inline elements
 - **THEN** the preview renders one visible separator at that boundary while preserving the elements' style and link metadata
+
+#### Scenario: Local edit reparses affected safe regions
+- **WHEN** a source edit is confined to an independently parseable top-level region
+- **THEN** source-mapped derivation reparses that region and bounded boundary context
+- **AND** text-identical unaffected regions are reused without reparsing
+
+#### Scenario: Globally scoped syntax uses full fallback
+- **WHEN** an edit can affect reference definitions, footnotes, front matter, an unclosed fence, HTML block boundaries, or another cross-region parse dependency
+- **THEN** the editor derives the source-mapped model through the full-document parser
+- **AND** it does not publish a speculative incremental mapping
+
+#### Scenario: Incremental output equals full parse
+- **WHEN** incremental derivation accepts an edit sequence containing insertions, deletions, replacements, UTF-8 text, block splits, or block merges
+- **THEN** its block variants, content, ordering, outline, and every source range equal a full parse of the same canonical source after each edit

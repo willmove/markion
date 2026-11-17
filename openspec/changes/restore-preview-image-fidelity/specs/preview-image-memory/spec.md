@@ -30,3 +30,12 @@ Each open tab SHALL claim the preview image sources referenced by its currently 
 #### Scenario: Unclaimed entries yield to budget pressure
 - **WHEN** the byte budget is exceeded while unclaimed ready entries exist
 - **THEN** unclaimed entries are evicted (oldest first) before any other measure
+
+#### Scenario: Closing a tab releases its image claims
+- **WHEN** a tab that uniquely referenced a set of preview images is closed
+- **THEN** those images have no remaining claimants and are removed from the Markion cache
+- **AND** subsequent memory accounting no longer attributes their raster bytes as owned ready entries
+
+#### Scenario: Shared image across two tabs survives one close
+- **WHEN** two tabs claim the same image source and one of them closes
+- **THEN** the ready entry remains available to the remaining tab

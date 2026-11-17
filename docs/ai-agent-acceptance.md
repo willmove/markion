@@ -1,6 +1,6 @@
 # AI Agent acceptance evidence
 
-For the 2026-10-10 interface refinement and its verification limits, see [workflow refinement acceptance](../openspec/changes/refine-ai-assistant-workflows/verification.md). Native observations below describe the earlier UI.
+For the 2026-10-10 interface refinement and its verification limits, see [workflow refinement acceptance](../openspec/changes/archive/2026-11-17-refine-ai-assistant-workflows/verification.md). Native observations below describe the earlier UI.
 
 Change: `add-configurable-ai-agent`. Tested on Windows on 2026-10-09, with synthetic notes and a loopback mock provider. No user API key, paid service request, or real note was used. Package versions remain 0.4.7.
 

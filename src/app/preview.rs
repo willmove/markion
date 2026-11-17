@@ -1230,6 +1230,50 @@ impl Element for VisualEditableText {
         let row_top = bounds.top();
         let hitbox_for_down = hitbox.clone();
         let block_index = self.block_index;
+        if let Some(whitespace) = whitespace_caret.as_ref() {
+            let entity = self.entity.clone();
+            let hitbox = hitbox.clone();
+            let whitespace = whitespace.clone();
+            let target = {
+                let tab = self.entity.read(cx).active_tab();
+                tab.visual_list_blocks
+                    .get(block_index)
+                    .map(|block| BlockTarget::from_block(tab.document.version(), block))
+            };
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble
+                    || event.button != MouseButton::Right
+                    || !hitbox.is_hovered(window)
+                {
+                    return;
+                }
+                let Some(target) = target.as_ref() else {
+                    return;
+                };
+                let tab = entity.read(cx).active_tab();
+                if tab.document.version() != target.document_version {
+                    return;
+                }
+                let source = whitespace_source_at_y(
+                    whitespace.source_range.clone(),
+                    event.position.y - row_top,
+                    tab.document.text(),
+                    whitespace.line_height,
+                    whitespace.paragraph_spacing,
+                );
+                let focus = entity.read(cx).focus_handle.clone();
+                window.focus(&focus);
+                cx.stop_propagation();
+                entity.update(cx, |app, cx| {
+                    app.open_visual_whitespace_context_menu(
+                        target.clone(),
+                        event.position,
+                        source,
+                        cx,
+                    )
+                });
+            });
+        }
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
                 || event.button != MouseButton::Left
@@ -4458,6 +4502,26 @@ pub(super) fn visual_end_padding_view(
         .w_full()
         .h(height)
         .cursor(CursorStyle::IBeam)
+        .on_mouse_up(
+            MouseButton::Right,
+            cx.listener(|app, event: &MouseUpEvent, window, cx| {
+                let tab = app.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                if let Some(block) = blocks.last().filter(|block| {
+                    markion::block_edit::empty_paragraph_range(
+                        tab.document.text(),
+                        block,
+                        tab.document.text().len(),
+                    )
+                    .is_some()
+                }) {
+                    let target = BlockTarget::from_block(tab.document.version(), block);
+                    cx.stop_propagation();
+                    window.focus(&app.focus_handle);
+                    app.open_visual_pointer_context_menu(target, event.position, None, cx);
+                }
+            }),
+        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|app, event: &MouseDownEvent, window, cx| {
@@ -4506,6 +4570,10 @@ pub(super) fn visual_block_view(
                 && block.source_range.end > app.active_tab().selected_range.start),
         |row| row.bg(app.palette().active_bg),
     )
+    .when(matches!(block.kind, VisualBlockKind::Image { .. })
+        && block.editor.as_ref().is_some_and(|editor| matches!(editor,
+            VisualBlockEditor::Image { payload, .. } if app.active_tab().selected_range == payload.source_range)),
+        |row| row.bg(app.palette().active_bg))
     .when(app.focus_mode && !owns_caret, |row| row.opacity(0.4))
 }
 
@@ -4560,6 +4628,7 @@ fn visual_block_content_view(
         && !is_reference_definition
         && !is_callout_title
         && block.editor.is_none()
+        && !matches!(block.kind, VisualBlockKind::Image { .. })
         && !has_html_image
         && block.source_island.is_some();
     if focused_conservative || always_source {
@@ -4750,11 +4819,19 @@ fn visual_block_content_view(
                 .unwrap_or(image_presentation.width_percent);
             let caption = exact_image
                 .as_ref()
-                .and_then(|image| image.title.as_deref())
-                .or(image_title.as_deref())
+                .map(|image| image.title.as_deref())
+                .unwrap_or(image_title.as_deref())
                 .filter(|title| !title.is_empty())
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
-            let can_resize = owns_caret && exact_image.is_some();
+            let selected = &app.active_tab().selected_range;
+            let image_selected = selected.start == offset
+                && !selected.is_empty()
+                && selected.end <= block.source_range.end
+                || matches!(&app.active_tab().structured_selection,
+                    Some(markion::selection::SelectionState::Blocks(selection))
+                    if selection.indices(&app.active_tab().document, &app.active_tab().visual_list_blocks)
+                        .is_ok_and(|indices| indices.start == block_index && indices.end == block_index + 1));
+            let can_resize = (owns_caret || image_selected) && exact_image.is_some();
             let image = div()
                 .debug_selector(move || format!("visual-markdown-image-content-{offset}"))
                 .relative()
@@ -4831,26 +4908,11 @@ fn visual_block_content_view(
                                 .child(text.to_string())
                         })),
                 );
-            if let Some(VisualBlockEditor::Image {
-                payload,
-                data_uri_fingerprint,
-            }) = block.editor.as_ref()
-            {
-                div().child(visual_image_source_editor(
-                    app,
-                    block,
-                    block_index,
-                    url,
-                    payload,
-                    *data_uri_fingerprint,
-                    presentation.into_any_element(),
-                    document_dir,
-                    cx,
-                ))
-            } else {
-                presentation.mb_3()
-            }
+            // Images stay rendered in every Visual Edit focus/hover/error state.
+            // Properties and resource changes belong to their context commands.
+            presentation.mb_3()
         }
+
         VisualBlockKind::Rule => {
             let offset = block.source_range.start;
             div()
@@ -4875,18 +4937,27 @@ fn visual_block_content_view(
                     .text_size(px(typography.rendered_font_size))
                     .child(visual_text_element(block, block_index, app, cx))
             } else {
-                // Clicking the label lands the caret just inside the marker
-                // line's end, mirroring keyboard entry into the row.
+                // Normal label clicks enter the existing body; explicit
+                // keyboard/source entry can still edit the marker/title.
                 let source_range = &block.source_range;
                 let text = app.active_tab().document.text();
-                let click_target = callout_marker_line_caret_target(text, source_range)
-                    .unwrap_or(source_range.start);
+                let click_target = callout_body_caret_target(
+                    text,
+                    &app.active_tab().document.visual_blocks_shared(),
+                    block_index,
+                )
+                .or_else(|| callout_marker_line_caret_target(text, source_range))
+                .unwrap_or(source_range.start);
                 callout_title_row(*kind, title.as_deref(), typography.rendered_font_size)
                     .debug_selector(move || format!("visual-callout-title-{block_index}"))
                     .cursor(CursorStyle::IBeam)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |app, _, _, cx| app.move_to(click_target, cx)),
+                        cx.listener(move |app, _, window, cx| {
+                            cx.stop_propagation();
+                            window.focus(&app.focus_handle);
+                            app.move_to(click_target, cx);
+                        }),
                     )
             }
         }
@@ -5127,7 +5198,7 @@ fn visual_block_chrome(
             cx.listener(move |app, event: &MouseUpEvent, window, cx| {
                 cx.stop_propagation();
                 window.focus(&app.focus_handle(cx));
-                app.open_visual_block_menu(menu_target.clone(), event.position, cx);
+                app.open_visual_pointer_context_menu(menu_target.clone(), event.position, None, cx);
             }),
         )
         .child(
@@ -5276,189 +5347,311 @@ pub(super) fn visual_block_menu(
     ai_controls: Option<Div>,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
-    let submenu = state.submenu;
-    let root_items = state.root_items();
-    let mut root_panel = div()
-        .id("visual-block-menu-root-panel")
-        .debug_selector(|| "visual-block-menu-panel".to_string())
-        .track_scroll(&state.scroll)
-        .w(px(if state.from_grip && !state.is_image {
-            286.
-        } else {
-            202.
-        }))
-        .max_h(max_height)
-        .overflow_y_scroll()
-        .scrollbar_width(px(8.))
-        .occlude()
-        .p(px(4.))
-        .bg(palette.panel_bg)
-        .border_1()
-        .border_color(palette.border)
-        .rounded_lg()
-        .shadow_lg()
-        .flex()
-        .flex_col();
-    if state.from_grip && !state.is_image {
-        for indices in [0..7, 7..14] {
-            let mut controls = div().flex_none().flex().flex_wrap().gap(px(2.)).p(px(2.));
-            for index in indices {
-                controls = controls.child(block_grip_transform_button(
-                    language,
-                    root_items[index],
-                    index,
-                    &state,
-                    presentation,
-                    palette,
-                    cx,
-                ));
-            }
-            root_panel = root_panel.child(controls);
-        }
-        root_panel = root_panel.child(block_menu_separator(palette));
-    }
-    for (index, item) in root_items.iter().copied().enumerate() {
-        if state.from_grip && !state.is_image && index < 14 {
-            continue;
-        }
-        root_panel = root_panel.child(block_menu_item_button(
-            block_menu_item_element_id(item),
-            block_menu_item_label(language, item),
-            item,
-            state.root_selected == index,
-            block_menu_item_is_current(item, presentation),
-            presentation.item_enabled(item),
-            Some(BlockMenuPointerTarget::Root(index)),
-            matches!(item, BlockMenuItem::Delete),
+    let root = block_menu_panel(
+        language,
+        &state,
+        presentation,
+        palette,
+        max_height,
+        None,
+        ai_controls,
+        cx,
+    );
+    let root_geometry = state.geometry.clone();
+    let child = state.submenu.map(|page| {
+        let panel = block_menu_panel(
+            language,
+            &state,
+            presentation,
             palette,
+            max_height,
+            Some(page),
+            None,
             cx,
-        ));
-        if block_menu_item_is_followed_by_separator(item) {
-            root_panel = root_panel.child(block_menu_separator(palette));
+        );
+        ContextMenuFlyout {
+            child: panel.into_any_element(),
+            geometry: state.geometry.clone(),
+            page,
         }
-    }
-    if let Some(controls) = ai_controls {
-        root_panel = root_panel.child(controls);
-    }
+    });
     div()
         .id(("visual-block-menu", state.target.block_id.as_u64()))
-        .flex()
-        .items_start()
-        .gap_1()
-        .child(root_panel)
-        .when_some(submenu, |menu, submenu| {
-            menu.child(visual_block_submenu(
-                language,
-                submenu,
-                state.submenu_selected,
-                presentation,
-                palette,
-                max_height,
-                cx,
-            ))
-        })
+        .relative()
+        .child(root)
+        .child(
+            canvas(
+                move |bounds, _, _| {
+                    root_geometry.borrow_mut().root = Some(bounds);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0(),
+        )
+        .children(child)
 }
 
-fn block_grip_transform_button(
+fn block_menu_panel(
     language: Language,
-    item: BlockMenuItem,
-    index: usize,
     state: &BlockMenuState,
     presentation: BlockMenuPresentation,
     palette: ThemePalette,
+    max_height: Pixels,
+    page: Option<BlockContextSubmenu>,
+    ai_controls: Option<Div>,
     cx: &mut Context<MarkionApp>,
-) -> impl IntoElement {
-    use crate::ui::icon::{Icon, icon};
-    let id = block_menu_item_element_id(item);
-    let selected = state.root_selected == index;
-    let current = block_menu_item_is_current(item, presentation);
-    let enabled = presentation.item_enabled(item);
-    let label = SharedString::from(block_menu_item_label(language, item));
-    let color = if current {
-        palette.active_text
-    } else {
-        palette.text
-    };
-    let content = match item {
-        BlockMenuItem::Transform(BlockTransform::Heading(level)) => {
-            div().child(format!("H{level}")).into_any_element()
-        }
-        BlockMenuItem::Transform(transform) => icon(
-            match transform {
-                BlockTransform::Text => Icon::Text,
-                BlockTransform::BulletedList => Icon::List,
-                BlockTransform::NumberedList => Icon::ListOrdered,
-                BlockTransform::TaskList => Icon::ListTodo,
-                BlockTransform::Quote => Icon::Quote,
-                BlockTransform::CodeBlock => Icon::Braces,
-                BlockTransform::Divider => Icon::Minus,
-                BlockTransform::Table => Icon::Table,
-                BlockTransform::Heading(_) => unreachable!(),
-            },
-            18.,
-            color,
-        )
-        .into_any_element(),
-        _ => unreachable!("grip quick controls contain only transforms"),
-    };
-    div()
-        .id(id)
-        .relative()
-        .debug_selector(move || {
-            if enabled {
-                id.to_string()
-            } else {
-                format!("{id}-disabled")
-            }
-        })
-        .tooltip(move |_, cx| {
-            cx.new(|_| SearchTooltip {
-                palette,
-                label: label.clone(),
-            })
-            .into()
-        })
-        .w(px(36.))
-        .h(px(30.))
-        .flex_none()
-        .rounded_md()
-        .border_1()
-        .border_color(if selected && enabled {
-            palette.muted
+) -> Stateful<Div> {
+    let mut panel = palette_controls::panel(
+        palette,
+        if page.is_some() {
+            "visual-context-flyout-panel"
         } else {
-            palette.panel_bg
-        })
-        .text_size(px(13.))
-        .text_color(color)
-        .opacity(if enabled { 1. } else { 0.42 })
-        .flex()
-        .items_center()
-        .justify_center()
-        .when(current, |button| button.bg(palette.active_bg))
-        .child(content)
-        .when(enabled, |button| {
-            button
-                .cursor_pointer()
-                .hover(move |style| style.bg(palette.surface_bg))
-                .on_mouse_move(cx.listener(move |app, _: &MouseMoveEvent, _, cx| {
-                    app.select_visual_block_menu_root(index, false, cx);
-                }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                        cx.stop_propagation();
-                        app.activate_visual_block_menu_item(item, cx);
-                    }),
-                )
-        })
+            "visual-block-menu-root-panel"
+        },
+    )
+    .debug_selector(move || {
+        if page.is_some() {
+            "visual-context-flyout".into()
+        } else {
+            "visual-block-menu-panel".into()
+        }
+    })
+    .relative()
+    .track_scroll(if page.is_some() {
+        &state.submenu_scroll
+    } else {
+        &state.scroll
+    })
+    .max_h(max_height)
+    .overflow_y_scroll()
+    .scrollbar_width(px(8.))
+    .gap(px(2.))
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .when(page.is_none(), |panel| {
+        panel.on_mouse_down_out(cx.listener(move |app, event: &MouseDownEvent, _, cx| {
+            let in_child = app.block_menu.as_ref().is_some_and(|menu| {
+                let geometry = menu.geometry.borrow();
+                geometry.child.is_some_and(|(page, bounds)| {
+                    menu.submenu == Some(page) && bounds.contains(&event.position)
+                })
+            });
+            if !in_child {
+                app.close_visual_block_menu(cx);
+            }
+        }))
+    })
+    .child(
+        div()
+            .id(if page.is_some() {
+                "visual-context-flyout-heading"
+            } else {
+                "visual-context-menu-heading"
+            })
+            .px_2()
+            .py_1()
+            .text_size(px(11.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(palette.muted)
+            .when(page.is_some(), |header| {
+                header
+                    .debug_selector(|| "visual-context-submenu-back".into())
+                    .cursor_pointer()
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|app, _, _, cx| {
+                            cx.stop_propagation();
+                            app.back_visual_context_submenu(cx);
+                        }),
+                    )
+            })
+            .child(page.map_or_else(
+                || {
+                    if state.editing_context.is_some() && presentation.is_empty_paragraph {
+                        context_menu_t(language, ContextMenuMsg::FormatBlock).to_string()
+                    } else if state.editing_context.is_some() && !state.is_image && !state.is_table
+                    {
+                        match state.context {
+                            BlockMenuContext::Heading(level) => {
+                                block_transform_label(language, BlockTransform::Heading(level))
+                            }
+                            _ => block_menu_context_label(language, state.context),
+                        }
+                    } else if state.editing_context.is_some() {
+                        t(language, Msg::MenuEdit).to_string()
+                    } else {
+                        p1_t(language, P1Msg::SlashCommands).to_string()
+                    }
+                },
+                |page| {
+                    format!(
+                        "‹  {}",
+                        block_menu_submenu_label(language, page, state.context)
+                    )
+                },
+            )),
+    );
+    for (section_start, items) in state.rows_for(page) {
+        panel = panel.child(
+            div()
+                .flex_none()
+                .flex()
+                .gap(px(2.))
+                .when(section_start, |row| {
+                    row.pt_2().border_t_1().border_color(palette.border)
+                })
+                .children(items.into_iter().map(|(index, item)| {
+                    block_menu_item_button(
+                        language,
+                        item,
+                        index,
+                        state,
+                        presentation,
+                        palette,
+                        page,
+                        cx,
+                    )
+                })),
+        );
+    }
+    if let Some(controls) = ai_controls {
+        panel = panel.child(controls);
+    }
+    panel
 }
 
-fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
+/// Layout the side flyout after the root has published this frame's geometry.
+/// It has no in-flow size, so opening it cannot move the root or document.
+struct ContextMenuFlyout {
+    child: AnyElement,
+    geometry: Rc<RefCell<BlockMenuGeometry>>,
+    page: BlockContextSubmenu,
+}
+
+impl IntoElement for ContextMenuFlyout {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl Element for ContextMenuFlyout {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let style = Style {
+            position: gpui::Position::Absolute,
+            ..Style::default()
+        };
+        (window.request_layout(style, [], cx), ())
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let viewport = window.viewport_size();
+        let child_size = self.child.layout_as_root(
+            size(
+                gpui::AvailableSpace::Definite(px(248.).min(viewport.width)),
+                gpui::AvailableSpace::MinContent,
+            ),
+            window,
+            cx,
+        );
+        let geometry = self.geometry.borrow();
+        let root = geometry.root.unwrap_or_default();
+        let parent = geometry
+            .parents
+            .iter()
+            .find(|(page, _)| *page == self.page)
+            .map(|(_, bounds)| *bounds)
+            .unwrap_or(root);
+        let right = root.right() + px(2.);
+        let x = if right + child_size.width <= viewport.width - px(4.) {
+            right
+        } else {
+            root.left() - child_size.width - px(2.)
+        };
+        let origin = point(
+            x.max(px(4.))
+                .min((viewport.width - child_size.width - px(4.)).max(px(4.))),
+            (parent.top() - px(8.))
+                .max(px(4.))
+                .min((viewport.height - child_size.height - px(4.)).max(px(4.))),
+        );
+        drop(geometry);
+        self.geometry.borrow_mut().child = Some((self.page, Bounds::new(origin, child_size)));
+        self.child.prepaint_at(origin, window, cx);
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
+}
+
+fn block_menu_context_label(language: Language, context: BlockMenuContext) -> String {
+    let message = match context {
+        BlockMenuContext::Paragraph => ContextMenuMsg::Paragraph,
+        BlockMenuContext::Heading(_) => ContextMenuMsg::Heading,
+        BlockMenuContext::Table => ContextMenuMsg::Table,
+        BlockMenuContext::Image => ContextMenuMsg::Image,
+        BlockMenuContext::Block => ContextMenuMsg::Block,
+    };
+    context_menu_t(language, message).to_string()
+}
+
+fn block_menu_submenu_label(
+    language: Language,
+    page: BlockContextSubmenu,
+    _context: BlockMenuContext,
+) -> String {
+    match page {
+        BlockContextSubmenu::TableRows => t(language, Msg::ContextTableRow).into(),
+        BlockContextSubmenu::TableColumns => t(language, Msg::ContextTableColumn).into(),
+        BlockContextSubmenu::Insertion => context_menu_t(language, ContextMenuMsg::Insert).into(),
+        BlockContextSubmenu::ImageScale => {
+            context_menu_t(language, ContextMenuMsg::ScaleImage).into()
+        }
+    }
+}
+
+pub(super) fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
     match item {
         BlockMenuItem::CopyBlock => "visual-block-copy",
         BlockMenuItem::CutBlock => "visual-block-cut",
+        BlockMenuItem::Paste => "visual-block-paste",
         BlockMenuItem::AddBelow => "visual-block-add-below",
         BlockMenuItem::CopySelection => "visual-selection-copy",
+        BlockMenuItem::CutSelection => "visual-selection-cut",
+        BlockMenuItem::DeleteSelection => "visual-selection-delete",
+        BlockMenuItem::SelectAll => "visual-selection-select-all",
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
             "visual-selection-format-bold"
         }
@@ -5468,24 +5661,58 @@ fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
         BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode) => {
             "visual-selection-format-inline-code"
         }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Strikethrough) => {
+            "visual-selection-format-strikethrough"
+        }
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Link) => {
             "visual-selection-format-link"
         }
-        BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => "visual-block-text-headings",
-        BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => "visual-block-lists",
-        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth) => "visual-image-width",
-        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment) => "visual-image-alignment",
+        BlockMenuItem::Insert(SlashPaletteCommand::Link) => "visual-block-insert-link",
+        BlockMenuItem::Insert(SlashPaletteCommand::Formula) => "visual-block-insert-formula",
+        BlockMenuItem::Insert(SlashPaletteCommand::Image) => "visual-block-insert-image",
+        BlockMenuItem::Insert(SlashPaletteCommand::Block(command)) => match command {
+            SlashCommand::Text => "visual-block-insert-paragraph",
+            SlashCommand::Heading(1) => "visual-block-insert-h1",
+            SlashCommand::Heading(2) => "visual-block-insert-h2",
+            SlashCommand::Heading(3) => "visual-block-insert-h3",
+            SlashCommand::Heading(4) => "visual-block-insert-h4",
+            SlashCommand::Heading(5) => "visual-block-insert-h5",
+            SlashCommand::Heading(_) => "visual-block-insert-h6",
+            SlashCommand::BulletedList => "visual-block-insert-bulleted-list",
+            SlashCommand::NumberedList => "visual-block-insert-numbered-list",
+            SlashCommand::TaskList => "visual-block-insert-task-list",
+            SlashCommand::Quote => "visual-block-insert-quote",
+            SlashCommand::CodeBlock => "visual-block-insert-code-block",
+            SlashCommand::Divider => "visual-block-insert-divider",
+            SlashCommand::Table => "visual-block-insert-table",
+        },
+        BlockMenuItem::InsertCallout(kind) => match kind {
+            AlertKind::Note => "visual-block-insert-note",
+            AlertKind::Tip => "visual-block-insert-tip",
+            AlertKind::Important => "visual-block-insert-important",
+            AlertKind::Warning => "visual-block-insert-warning",
+            AlertKind::Caution => "visual-block-insert-caution",
+        },
         BlockMenuItem::Transform(transform) => {
             visual_block_transform_element_id(block_transform_index(transform))
         }
+        BlockMenuItem::TableRow(item) => context_table_item_id(true, item),
+        BlockMenuItem::TableColumn(item) => context_table_item_id(false, item),
+        BlockMenuItem::Submenu(BlockContextSubmenu::TableRows) => "visual-context-table-rows",
+        BlockMenuItem::Submenu(BlockContextSubmenu::TableColumns) => "visual-context-table-columns",
+        BlockMenuItem::Submenu(BlockContextSubmenu::Insertion) => "visual-context-insert",
+        BlockMenuItem::Submenu(BlockContextSubmenu::ImageScale) => "visual-context-image-scale",
         BlockMenuItem::ImageWidth(25) => "visual-image-width-25",
+        BlockMenuItem::ImageWidth(33) => "visual-image-width-33",
         BlockMenuItem::ImageWidth(50) => "visual-image-width-50",
+        BlockMenuItem::ImageWidth(67) => "visual-image-width-67",
+        BlockMenuItem::ImageWidth(80) => "visual-image-width-80",
         BlockMenuItem::ImageWidth(75) => "visual-image-width-75",
         BlockMenuItem::ImageWidth(_) => "visual-image-width-100",
         BlockMenuItem::ImageAlignment(ImageAlignment::Left) => "visual-image-align-left",
         BlockMenuItem::ImageAlignment(ImageAlignment::Center) => "visual-image-align-center",
         BlockMenuItem::ImageAlignment(ImageAlignment::Right) => "visual-image-align-right",
-        BlockMenuItem::ImageEditSource => "visual-image-edit-source",
+        BlockMenuItem::ImageProperties => "visual-image-properties",
         BlockMenuItem::ImageReplace => "visual-image-replace",
         BlockMenuItem::ImageSaveLocal => "visual-image-save-local",
         BlockMenuItem::ImageUpload => "visual-image-upload",
@@ -5496,35 +5723,60 @@ fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
     }
 }
 
-fn block_menu_item_label(language: Language, item: BlockMenuItem) -> String {
+fn block_menu_item_label(
+    language: Language,
+    item: BlockMenuItem,
+    context: BlockMenuContext,
+) -> String {
+    let scope = block_menu_context_label(language, context);
+    let scoped = |message| context_menu_t(language, message).replace("{0}", &scope);
     match item {
-        BlockMenuItem::CopyBlock => t(language, Msg::ItemCopy).to_string(),
-        BlockMenuItem::CutBlock => t(language, Msg::ItemCut).to_string(),
-        BlockMenuItem::AddBelow => block_grip_t(language, BlockGripMsg::AddBelow).to_string(),
+        BlockMenuItem::CopyBlock => scoped(ContextMenuMsg::Copy),
+        BlockMenuItem::CutBlock => scoped(ContextMenuMsg::Cut),
+        BlockMenuItem::Paste => t(language, Msg::ItemPaste).to_string(),
+        BlockMenuItem::AddBelow => scoped(ContextMenuMsg::AddBelow),
         BlockMenuItem::CopySelection => t(language, Msg::ItemCopy).to_string(),
-        BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
-            t(language, Msg::ItemBold).to_string()
+        BlockMenuItem::CutSelection => t(language, Msg::ItemCut).to_string(),
+        BlockMenuItem::DeleteSelection => t(language, Msg::DialogButtonDelete).to_string(),
+        BlockMenuItem::SelectAll => t(language, Msg::ItemSelectAll).to_string(),
+        BlockMenuItem::SelectionFormat(action) => t(
+            language,
+            match action {
+                SelectionFormatAction::Bold => Msg::ItemBold,
+                SelectionFormatAction::Italic => Msg::ItemItalic,
+                SelectionFormatAction::InlineCode => Msg::ItemInlineCode,
+                SelectionFormatAction::Strikethrough => Msg::ItemStrikethrough,
+                SelectionFormatAction::Link => Msg::ItemLink,
+            },
+        )
+        .to_string(),
+        BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Text)) => {
+            t(language, Msg::ItemParagraph).into()
         }
-        BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic) => {
-            t(language, Msg::ItemItalic).to_string()
-        }
-        BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode) => {
-            t(language, Msg::ItemInlineCode).to_string()
-        }
-        BlockMenuItem::SelectionFormat(SelectionFormatAction::Link) => {
-            t(language, Msg::ItemLink).to_string()
-        }
-        BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => {
-            p1_t(language, P1Msg::TextAndHeadings).to_string()
-        }
-        BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => p1_t(language, P1Msg::Lists).to_string(),
-        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth) => {
-            image_t(language, ImageMsg::Width).to_string()
-        }
-        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment) => {
-            image_t(language, ImageMsg::Alignment).to_string()
-        }
+        BlockMenuItem::Insert(command) => slash_command_label(language, command),
+        BlockMenuItem::InsertCallout(kind) => context_menu_t(
+            language,
+            match kind {
+                AlertKind::Note => ContextMenuMsg::CalloutNote,
+                AlertKind::Tip => ContextMenuMsg::CalloutTip,
+                AlertKind::Important => ContextMenuMsg::CalloutImportant,
+                AlertKind::Warning => ContextMenuMsg::CalloutWarning,
+                AlertKind::Caution => ContextMenuMsg::CalloutCaution,
+            },
+        )
+        .into(),
         BlockMenuItem::Transform(transform) => block_transform_label(language, transform),
+        BlockMenuItem::Submenu(page) => block_menu_submenu_label(language, page, context),
+        BlockMenuItem::TableRow(item) => format!(
+            "{} · {}",
+            t(language, Msg::ContextTableRow),
+            visual_table_menu_item_label(language, VisualTableAxis::Row(0), item)
+        ),
+        BlockMenuItem::TableColumn(item) => format!(
+            "{} · {}",
+            t(language, Msg::ContextTableColumn),
+            visual_table_menu_item_label(language, VisualTableAxis::Column(0), item)
+        ),
         BlockMenuItem::ImageWidth(width) => format!("{width}%"),
         BlockMenuItem::ImageAlignment(ImageAlignment::Left) => {
             p0_t(language, P0Msg::Left).to_string()
@@ -5535,33 +5787,19 @@ fn block_menu_item_label(language: Language, item: BlockMenuItem) -> String {
         BlockMenuItem::ImageAlignment(ImageAlignment::Right) => {
             p0_t(language, P0Msg::Right).to_string()
         }
-        BlockMenuItem::ImageEditSource => image_t(language, ImageMsg::EditSource).to_string(),
+        BlockMenuItem::ImageProperties => image_t(language, ImageMsg::EditImage).to_string(),
         BlockMenuItem::ImageReplace => p0_t(language, P0Msg::Replace).to_string(),
         BlockMenuItem::ImageSaveLocal => image_t(language, ImageMsg::SaveSelected).to_string(),
         BlockMenuItem::ImageUpload => image_t(language, ImageMsg::UploadSelected).to_string(),
-        BlockMenuItem::Duplicate => p1_t(language, P1Msg::DuplicateBlock).to_string(),
-        BlockMenuItem::MoveUp => p1_t(language, P1Msg::MoveUp).to_string(),
-        BlockMenuItem::MoveDown => p1_t(language, P1Msg::MoveDown).to_string(),
-        BlockMenuItem::Delete => p1_t(language, P1Msg::DeleteBlock).to_string(),
+        BlockMenuItem::Duplicate => scoped(ContextMenuMsg::Duplicate),
+        BlockMenuItem::MoveUp => scoped(ContextMenuMsg::MoveUp),
+        BlockMenuItem::MoveDown => scoped(ContextMenuMsg::MoveDown),
+        BlockMenuItem::Delete => scoped(ContextMenuMsg::Delete),
     }
 }
 
 fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresentation) -> bool {
     match item {
-        BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => matches!(
-            presentation.current,
-            Some(BlockTransform::Text | BlockTransform::Heading(_))
-        ),
-        BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => matches!(
-            presentation.current,
-            Some(
-                BlockTransform::BulletedList
-                    | BlockTransform::NumberedList
-                    | BlockTransform::TaskList
-            )
-        ),
-        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth)
-        | BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment) => presentation.image.is_some(),
         BlockMenuItem::Transform(transform) => presentation.current == Some(transform),
         BlockMenuItem::ImageWidth(width) => presentation
             .image
@@ -5569,173 +5807,214 @@ fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresen
         BlockMenuItem::ImageAlignment(alignment) => presentation
             .image
             .is_some_and(|image| image.alignment == alignment),
-        BlockMenuItem::CopySelection
-        | BlockMenuItem::CopyBlock
-        | BlockMenuItem::CutBlock
-        | BlockMenuItem::AddBelow
-        | BlockMenuItem::SelectionFormat(_)
-        | BlockMenuItem::ImageEditSource
-        | BlockMenuItem::ImageReplace
-        | BlockMenuItem::ImageSaveLocal
-        | BlockMenuItem::ImageUpload
-        | BlockMenuItem::Duplicate
-        | BlockMenuItem::MoveUp
-        | BlockMenuItem::MoveDown
-        | BlockMenuItem::Delete => false,
+        BlockMenuItem::TableColumn(VisualTableMenuItem::Align(alignment)) => presentation
+            .table_context
+            .is_some_and(|table| table.alignment == alignment),
+        _ => false,
     }
 }
 
-pub(super) fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
-    matches!(
-        item,
-        BlockMenuItem::CopySelection
-            | BlockMenuItem::SelectionFormat(SelectionFormatAction::Link)
-            | BlockMenuItem::ImageUpload
-            | BlockMenuItem::Transform(BlockTransform::Table)
-            | BlockMenuItem::MoveDown
-            | BlockMenuItem::Delete
-    )
+fn block_menu_item_icon(item: BlockMenuItem) -> crate::ui::icon::Icon {
+    use crate::ui::icon::Icon;
+    match item {
+        BlockMenuItem::CopySelection | BlockMenuItem::CopyBlock => Icon::Copy,
+        BlockMenuItem::CutBlock | BlockMenuItem::CutSelection => Icon::Cut,
+        BlockMenuItem::Paste => Icon::Clipboard,
+        BlockMenuItem::Duplicate => Icon::CopyPlus,
+        BlockMenuItem::MoveUp => Icon::Send,
+        BlockMenuItem::MoveDown => Icon::ArrowDown,
+        BlockMenuItem::AddBelow => Icon::Plus,
+        BlockMenuItem::TableRow(_)
+        | BlockMenuItem::TableColumn(_)
+        | BlockMenuItem::Submenu(
+            BlockContextSubmenu::TableRows | BlockContextSubmenu::TableColumns,
+        ) => Icon::Table,
+        BlockMenuItem::Submenu(BlockContextSubmenu::Insertion) => Icon::Plus,
+        BlockMenuItem::Submenu(BlockContextSubmenu::ImageScale) => Icon::FileImage,
+        BlockMenuItem::Delete | BlockMenuItem::DeleteSelection => Icon::Trash,
+        BlockMenuItem::Insert(SlashPaletteCommand::Link)
+        | BlockMenuItem::SelectionFormat(SelectionFormatAction::Link) => Icon::Link,
+        BlockMenuItem::Insert(SlashPaletteCommand::Formula) => Icon::Sigma,
+        BlockMenuItem::Insert(SlashPaletteCommand::Block(command)) => {
+            block_menu_item_icon(BlockMenuItem::Transform(command.transform()))
+        }
+        BlockMenuItem::InsertCallout(kind) => callout_icon(kind),
+        BlockMenuItem::Insert(SlashPaletteCommand::Image) | BlockMenuItem::ImageReplace => {
+            Icon::FileImage
+        }
+        BlockMenuItem::ImageSaveLocal => Icon::Download,
+        BlockMenuItem::ImageUpload => Icon::Upload,
+        BlockMenuItem::ImageProperties => Icon::Settings,
+        BlockMenuItem::ImageAlignment(ImageAlignment::Left) => Icon::AlignLeft,
+        BlockMenuItem::ImageAlignment(ImageAlignment::Center) => Icon::AlignCenter,
+        BlockMenuItem::ImageAlignment(ImageAlignment::Right) => Icon::AlignRight,
+        BlockMenuItem::Transform(transform) => match transform {
+            BlockTransform::Text | BlockTransform::Heading(_) => Icon::Text,
+            BlockTransform::BulletedList => Icon::List,
+            BlockTransform::NumberedList => Icon::ListOrdered,
+            BlockTransform::TaskList => Icon::ListTodo,
+            BlockTransform::Quote => Icon::Quote,
+            BlockTransform::CodeBlock => Icon::Braces,
+            BlockTransform::Divider => Icon::Minus,
+            BlockTransform::Table => Icon::Table,
+        },
+        _ => Icon::FileText,
+    }
 }
 
-#[derive(Clone, Copy)]
-enum BlockMenuPointerTarget {
-    Root(usize),
-    Submenu(BlockMenuSubmenu, usize),
-}
-
-fn visual_block_submenu(
+fn block_menu_item_button(
     language: Language,
-    submenu: BlockMenuSubmenu,
-    selected: usize,
+    item: BlockMenuItem,
+    index: usize,
+    state: &BlockMenuState,
     presentation: BlockMenuPresentation,
     palette: ThemePalette,
-    max_height: Pixels,
+    page: Option<BlockContextSubmenu>,
     cx: &mut Context<MarkionApp>,
-) -> impl IntoElement {
-    let mut panel = div()
-        .id("visual-block-menu-submenu-panel")
-        .debug_selector(|| "visual-block-submenu-panel".to_string())
-        .w(px(202.))
-        .max_h(max_height)
-        .overflow_y_scroll()
-        .scrollbar_width(px(8.))
-        .occlude()
-        .p(px(4.))
-        .bg(palette.panel_bg)
-        .border_1()
-        .border_color(palette.border)
-        .rounded_lg()
-        .shadow_lg()
-        .flex()
-        .flex_col();
-    for (index, item) in submenu.items().iter().copied().enumerate() {
-        panel = panel.child(block_menu_item_button(
-            block_menu_item_element_id(item),
-            block_menu_item_label(language, item),
-            item,
-            selected == index,
-            block_menu_item_is_current(item, presentation),
-            presentation.item_enabled(item),
-            Some(BlockMenuPointerTarget::Submenu(submenu, index)),
-            false,
-            palette,
-            cx,
-        ));
-    }
-    panel
+) -> Stateful<Div> {
+    let id = block_menu_item_element_id(item);
+    let selected = if page.is_some() {
+        state.submenu_focused && state.submenu_selected == index
+    } else {
+        !state.submenu_focused && state.root_selected == index
+    };
+    let compact = item.is_compact() && page != Some(BlockContextSubmenu::ImageScale);
+    let current = block_menu_item_is_current(item, presentation);
+    let enabled = presentation.item_enabled(item);
+    let label = block_menu_item_label(language, item, state.context);
+    let color = if matches!(item, BlockMenuItem::Delete | BlockMenuItem::DeleteSelection) && enabled
+    {
+        rgb(0xdc2626)
+    } else if (selected || current) && enabled {
+        palette.active_text
+    } else {
+        palette.text
+    };
+    let content = match item {
+        BlockMenuItem::Transform(BlockTransform::Heading(level)) => {
+            div().child(format!("H{level}")).into_any_element()
+        }
+        BlockMenuItem::ImageWidth(width) => div()
+            .text_size(px(12.))
+            .child(format!("{width}%"))
+            .into_any_element(),
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => div()
+            .font_weight(FontWeight::BOLD)
+            .child("B")
+            .into_any_element(),
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic) => {
+            div().child("I").into_any_element()
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode) => {
+            div().text_size(px(12.)).child("</>").into_any_element()
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Strikethrough) => {
+            div().child("S̶").into_any_element()
+        }
+        _ => crate::ui::icon::icon(block_menu_item_icon(item), 18., color).into_any_element(),
+    };
+    palette_controls::button(
+        palette,
+        id,
+        (selected || current) && enabled,
+        enabled,
+        SharedString::from(label.clone()),
+    )
+    .debug_selector(move || {
+        if enabled {
+            id.to_string()
+        } else {
+            format!("{id}-disabled")
+        }
+    })
+    .relative()
+    .text_color(color)
+    .when(compact, |button| button.w(px(36.)))
+    .when(!compact, |button| {
+        button.w_full().px_2().justify_start().text_size(px(13.))
+    })
+    .opacity(if enabled { 1. } else { 0.42 })
+    .border_1()
+    .border_color(if selected && enabled {
+        palette.muted
+    } else {
+        palette.panel_bg
+    })
+    .child(
+        div()
+            .when(current, |content| {
+                content.debug_selector(|| "visual-block-current-indicator".to_string())
+            })
+            .child(content),
+    )
+    .when(
+        !compact && !matches!(item, BlockMenuItem::ImageWidth(_)),
+        |button| button.child(label),
+    )
+    .when(matches!(item, BlockMenuItem::Submenu(_)), |button| {
+        button.child(div().flex_1()).child(crate::ui::icon::icon(
+            crate::ui::icon::Icon::ChevronRight,
+            14.,
+            color,
+        ))
+    })
+    .when(matches!(item, BlockMenuItem::Submenu(_)), |button| {
+        let geometry = state.geometry.clone();
+        let BlockMenuItem::Submenu(parent) = item else {
+            unreachable!()
+        };
+        button.child(
+            canvas(
+                move |bounds, _, _| {
+                    let mut geometry = geometry.borrow_mut();
+                    if let Some((_, stored)) = geometry
+                        .parents
+                        .iter_mut()
+                        .find(|(page, _)| *page == parent)
+                    {
+                        *stored = bounds;
+                    } else {
+                        geometry.parents.push((parent, bounds));
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0(),
+        )
+    })
+    .when(enabled, |button| {
+        button
+            .cursor_pointer()
+            .on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
+                app.hover_visual_context_item(index, page, event.position, true, cx);
+            }))
+            .on_hover(cx.listener(move |app, hovered: &bool, window, cx| {
+                if *hovered {
+                    app.hover_visual_context_item(index, page, window.mouse_position(), false, cx);
+                } else if page.is_none()
+                    && let BlockMenuItem::Submenu(parent) = item
+                    && let Some(menu) = &mut app.block_menu
+                    && menu.suppressed_hover == Some(parent)
+                {
+                    menu.suppressed_hover = None;
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                    cx.stop_propagation();
+                    app.activate_visual_block_menu_item(item, Some(window), cx);
+                }),
+            )
+    })
 }
 
 fn block_menu_separator(palette: ThemePalette) -> Div {
     div().flex_none().my(px(3.)).h(px(1.)).bg(palette.border)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn block_menu_item_button(
-    id: &'static str,
-    label: String,
-    item: BlockMenuItem,
-    selected: bool,
-    current: bool,
-    enabled: bool,
-    pointer_target: Option<BlockMenuPointerTarget>,
-    destructive: bool,
-    palette: ThemePalette,
-    cx: &mut Context<MarkionApp>,
-) -> impl IntoElement {
-    let trailing = match item {
-        BlockMenuItem::Submenu(_) if current => "✓  ›",
-        BlockMenuItem::Submenu(_) => "›",
-        _ if current => "✓",
-        _ => "",
-    };
-    div()
-        .id(id)
-        .relative()
-        .flex_none()
-        .debug_selector(move || {
-            if enabled {
-                id.to_string()
-            } else {
-                format!("{id}-disabled")
-            }
-        })
-        .h(px(26.))
-        .px_2()
-        .rounded_sm()
-        .text_size(px(12.))
-        .text_color(if destructive && enabled {
-            rgb(0xdc2626)
-        } else {
-            palette.text
-        })
-        .opacity(if enabled { 1. } else { 0.42 })
-        .when(enabled, |row| {
-            row.cursor_pointer()
-                .hover(move |style| style.bg(palette.surface_bg))
-        })
-        .when(selected && enabled, |row| row.bg(palette.surface_bg))
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
-            div()
-                .min_w_0()
-                .when(current, |label| label.font_weight(FontWeight::SEMIBOLD))
-                .child(label),
-        )
-        .child(
-            div()
-                .ml_2()
-                .flex_none()
-                .text_color(palette.muted)
-                .when(current, |indicator| {
-                    indicator.debug_selector(|| "visual-block-current-indicator".to_string())
-                })
-                .child(trailing),
-        )
-        .when(enabled, |row| {
-            row.on_mouse_move(cx.listener(
-                move |app, _: &MouseMoveEvent, _, cx| match pointer_target {
-                    Some(BlockMenuPointerTarget::Root(index)) => {
-                        app.select_visual_block_menu_root(
-                            index,
-                            matches!(item, BlockMenuItem::Submenu(_)),
-                            cx,
-                        );
-                    }
-                    Some(BlockMenuPointerTarget::Submenu(submenu, index)) => {
-                        app.select_visual_block_menu_submenu(submenu, index, cx);
-                    }
-                    None => {}
-                },
-            ))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                    app.activate_visual_block_menu_item(item, cx);
-                }),
-            )
-        })
 }
 
 fn visual_block_transform_element_id(index: usize) -> &'static str {
@@ -5941,7 +6220,18 @@ fn visual_editor_field_element(
             // collapses into the shared token (falls back to the ordinary
             // cell projection — including escape collapsing — when the
             // scanner finds nothing).
-            let (proj, token_displays) = visual_payload_field_projection(source, field);
+            let breaks = app
+                .active_tab()
+                .visual_list_blocks
+                .get(block_index)
+                .and_then(|block| match &block.editor {
+                    Some(VisualBlockEditor::Table { cells }) => {
+                        cells.iter().find(|cell| cell.field == *field)
+                    }
+                    _ => None,
+                })
+                .map_or(&[][..], |cell| cell.hard_breaks.as_slice());
+            let (proj, token_displays) = visual_table_editing_projection(source, field, breaks);
             let txt = proj.text.clone();
             (proj, txt, Vec::new(), token_displays)
         } else {
@@ -6089,6 +6379,73 @@ pub(super) fn visual_payload_field_projection(
         source_anchor: span.start,
     };
     (projection, token_display_ranges)
+}
+
+/// Keep cell source markup editable while parsed HTML breaks occupy a real
+/// line. Break ranges come from the shared visual derivation, never a render
+/// parse; inline-code/escaped tags and elided payloads stay literal/atomic.
+pub(super) fn visual_table_editing_projection(
+    source: &str,
+    field: &VisualEditorField,
+    hard_breaks: &[Range<usize>],
+) -> (VisualProjection, Vec<Range<usize>>) {
+    let (mut projection, mut tokens) = visual_payload_field_projection(source, field);
+    for source_range in hard_breaks.iter().rev() {
+        let Some(start) = projection.display_for_source(source_range.start) else {
+            continue;
+        };
+        let Some(end) = projection.display_for_source(source_range.end) else {
+            continue;
+        };
+        if start >= end || projection.text.get(start..end) != source.get(source_range.clone()) {
+            continue;
+        }
+        let shrink = end - start - 1;
+        let mut segments = Vec::new();
+        let mut inserted = false;
+        for segment in projection.segments {
+            let display = segment.display_range.clone();
+            if display.end <= start {
+                segments.push(segment);
+            } else if display.start >= end {
+                segments.push(markion::VisualProjectionSegment {
+                    display_range: display.start - shrink..display.end - shrink,
+                    ..segment
+                });
+            } else {
+                if display.start < start {
+                    segments.push(markion::VisualProjectionSegment {
+                        display_range: display.start..start,
+                        source_range: segment.source_range.start..source_range.start,
+                        atomic: false,
+                    });
+                }
+                if !inserted {
+                    segments.push(markion::VisualProjectionSegment {
+                        display_range: start..start + 1,
+                        source_range: source_range.clone(),
+                        atomic: true,
+                    });
+                    inserted = true;
+                }
+                if display.end > end {
+                    segments.push(markion::VisualProjectionSegment {
+                        display_range: start + 1..display.end - shrink,
+                        source_range: source_range.end..segment.source_range.end,
+                        atomic: false,
+                    });
+                }
+            }
+        }
+        projection.segments = segments;
+        projection.text.replace_range(start..end, "\n");
+        for token in &mut tokens {
+            if token.start >= end {
+                *token = token.start - shrink..token.end - shrink;
+            }
+        }
+    }
+    (projection, tokens)
 }
 
 /// Builds a rendered (non-source-revealing) projection for a table cell from
@@ -6283,6 +6640,10 @@ fn visual_code_editor(
             .replace("{0}", &authored.lines().count().to_string());
         return div()
             .id(("visual-code", block_id.as_u64()))
+            .debug_selector(move || format!("visual-code-surface-{block_index}"))
+            .w_full()
+            .min_w_0()
+            .max_w_full()
             .mb_3()
             .p_2()
             .rounded_md()
@@ -6323,6 +6684,13 @@ fn visual_code_editor(
     };
     div()
         .id(ElementId::from(("visual-code", block_id.as_u64())))
+        .debug_selector(move || format!("visual-code-surface-{block_index}"))
+        // List rows are measured again after dormancy/tab activation. Give
+        // the background its own column constraint instead of letting its
+        // intrinsic payload/header width decide the surface width.
+        .w_full()
+        .min_w_0()
+        .max_w_full()
         .mb_3()
         .p_3()
         .rounded_md()
@@ -6708,77 +7076,7 @@ fn visual_diagram_editor(
     ))
 }
 
-/// Shared Obsidian-style chrome for block math and registered diagrams:
-/// render-only by default, hover `</>` expands the payload editor, click
-/// outside collapses (pending/error force the editor open).
-/// Renders a standalone Markdown image in Visual Edit by layering the image
-/// presentation on top of an on-demand whole-span source payload editor
-/// (collapsed by default; expand via the hover `</>` control — same chrome
-/// as `visual_math_editor`). A failed image load forces the payload visible
-/// so the destination can be corrected, mirroring invalid math. An elision
-/// policy collapses an opaque data-URI (or oversized) payload into one atomic
-/// summary token instead of rendering megabytes of base64.
-#[allow(clippy::too_many_arguments)]
-fn visual_image_source_editor(
-    app: &MarkionApp,
-    block: &VisualBlock,
-    block_index: usize,
-    url: &str,
-    payload: &VisualEditorField,
-    data_uri_fingerprint: Option<[u8; 32]>,
-    presentation: gpui::AnyElement,
-    document_dir: Option<&Path>,
-    cx: &mut Context<MarkionApp>,
-) -> Stateful<Div> {
-    let typography = app.typography_metrics();
-    // Data-URI destinations decide forced expansion by fingerprint so no
-    // frame re-derives a multi-megabyte cache key; short destinations keep
-    // the direct entry probe.
-    let forced = match data_uri_fingerprint {
-        Some(fingerprint) => app.failed_data_uri_fingerprints.contains(&fingerprint),
-        None => matches!(
-            app.preview_image_entry(url, &ImageSourceIdentity::FromUrl, document_dir),
-            PreviewImageEntry::Error(_)
-        ),
-    };
-    // The payload renders above the image so the authored span is right where
-    // the user clicks `</>`; the top padding strip reserves room for the
-    // chrome's top-right source toggle so it never covers source text.
-    let payload_editor = move |cx: &mut Context<MarkionApp>| {
-        div()
-            .border_b_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
-            .pt(px(30.))
-            .px_2()
-            .pb_2()
-            .font(code_slot_font(&app.resolved_font_families.code))
-            .text_size(px(typography.source_island_font_size))
-            .line_height(px(typography.source_island_line_height))
-            .child(visual_editor_field_element(
-                app,
-                block_index,
-                payload,
-                ElementId::from(("visual-image-payload", block.id.as_u64())),
-                None,
-                None,
-                cx,
-            ))
-            .into_any_element()
-    };
-    visual_collapsible_source_block(
-        app,
-        block.id,
-        payload,
-        forced,
-        false,
-        true,
-        presentation,
-        payload_editor,
-        cx,
-    )
-}
-
+/// Shared source chrome for non-image math, diagrams, HTML and front matter.
 #[allow(clippy::too_many_arguments)]
 fn visual_collapsible_source_block(
     app: &MarkionApp,
@@ -7266,6 +7564,18 @@ pub(super) fn visual_table_view(
                         })
                         .text_size(px(typography.table_font_size))
                         .cursor(CursorStyle::IBeam)
+                        .on_mouse_up(
+                            MouseButton::Right,
+                            cx.listener(move |app, event: &MouseUpEvent, window, cx| {
+                                cx.stop_propagation();
+                                window.focus(&app.focus_handle);
+                                let tab = app.active_tab();
+                                let blocks = tab.document.visual_blocks_shared();
+                                let Some(block) = blocks.get(block_index).filter(|block| block.id == block_id) else { return };
+                                let target = BlockTarget::from_block(document_version, block);
+                                app.open_visual_pointer_context_menu(target, event.position, Some((row_index, cell_index)), cx);
+                            }),
+                        )
                         .when(field.is_none(), |view| {
                             view.on_mouse_down(
                                 MouseButton::Left,
@@ -8859,6 +9169,29 @@ fn indent_list_nested_row(block: &VisualBlock, row: Div) -> Div {
     }
 }
 
+fn context_table_item_id(row: bool, item: VisualTableMenuItem) -> &'static str {
+    use VisualTableMenuItem as Item;
+    match (row, item) {
+        (true, Item::InsertBefore) => "visual-context-row-insert-before",
+        (true, Item::InsertAfter) => "visual-context-row-insert-after",
+        (true, Item::MoveBefore) => "visual-context-row-move-before",
+        (true, Item::MoveAfter) => "visual-context-row-move-after",
+        (true, Item::Duplicate) => "visual-context-row-duplicate",
+        (true, Item::Clear) => "visual-context-row-clear",
+        (true, Item::Delete) => "visual-context-row-delete",
+        (false, Item::InsertBefore) => "visual-context-column-insert-before",
+        (false, Item::InsertAfter) => "visual-context-column-insert-after",
+        (false, Item::MoveBefore) => "visual-context-column-move-before",
+        (false, Item::MoveAfter) => "visual-context-column-move-after",
+        (false, Item::Duplicate) => "visual-context-column-duplicate",
+        (false, Item::Clear) => "visual-context-column-clear",
+        (false, Item::Delete) => "visual-context-column-delete",
+        (_, Item::Align(TableAlignment::Center)) => "visual-context-column-align-center",
+        (_, Item::Align(TableAlignment::Right)) => "visual-context-column-align-right",
+        (_, Item::Align(_)) => "visual-context-column-align-left",
+    }
+}
+
 fn visual_table_menu_item_label(
     language: Language,
     axis: VisualTableAxis,
@@ -9267,6 +9600,44 @@ pub(super) fn clamp_to_text_boundary(text: &str, offset: usize) -> usize {
 /// owns the caret. A plain `line_end - 1` sits mid-character when the line
 /// ends with multibyte text (e.g. a CJK title), so back off to the nearest
 /// char boundary. Returns `None` when the marker line is empty.
+fn callout_body_caret_target(
+    text: &str,
+    blocks: &[VisualBlock],
+    title_index: usize,
+) -> Option<usize> {
+    let group = &blocks
+        .get(title_index)?
+        .quote_context
+        .as_ref()?
+        .group_source_range;
+    blocks
+        .iter()
+        .skip(title_index + 1)
+        .take_while(|block| {
+            block
+                .quote_context
+                .as_ref()
+                .is_some_and(|quote| &quote.group_source_range == group)
+        })
+        .find_map(|block| {
+            if matches!(block.kind, VisualBlockKind::Whitespace) {
+                Some(whitespace_navigation_offset(
+                    block.source_range.clone(),
+                    text,
+                    true,
+                ))
+            } else {
+                block
+                    .editable_runs
+                    .iter()
+                    .find(|run| {
+                        !run.conservative_fallback && run.math.is_none() && run.html_image.is_none()
+                    })
+                    .map(|run| run.content_range.start)
+            }
+        })
+}
+
 pub(super) fn callout_marker_line_caret_target(text: &str, range: &Range<usize>) -> Option<usize> {
     let line_end = text[range.clone()]
         .find('\n')

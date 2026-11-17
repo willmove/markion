@@ -148,7 +148,9 @@ Upon successful completion of the per-platform `build` jobs for a `v*` tag, the 
 - **AND** the manifest remains available as mirror metadata without being required for the initial in-app update-check verification
 
 ### Requirement: The app SHALL check GitHub's latest published Release for updates
-The application SHALL expose a "Check for Updates…" action in the Help menu that, when invoked, fetches `https://api.github.com/repos/willmove/markion/releases/latest` via the existing in-app HTTP layer, parses the latest published Release, compares its `tag_name` (after the required leading `v`) against `env!("CARGO_PKG_VERSION")` using a semantic-version comparison, and surfaces the result through a modal dialog. When the Release version is newer than the running version, the dialog SHALL display the newer version number without rendering the raw asset URL and SHALL provide localized actionable buttons. On a Windows x86_64 tagged build containing the configured updater public key, the primary action SHALL download the update described by the published updater manifest, verify the cargo-packager Minisign signature before execution, launch the verified current-user NSIS installer in passive mode, and exit Markion only after the installer starts. Automatic installation SHALL NOT begin while any document has unsaved changes. On macOS, Linux, unsupported architectures, or builds without updater public-key material, the primary action SHALL open the matching GitHub asset URL in the system browser, or the Release page when no platform package mapping exists. When the Release version is equal to or older than the running version, the dialog SHALL report that the application is up to date. When the fetch, manifest, download, signature verification, or installer launch fails, or a supported-platform asset is missing, the application SHALL report the failure without crashing and SHALL retain a manual-download fallback. The application SHALL NOT download or install an update without an explicit user action. The application MAY additionally perform the release check on startup when the `check_for_updates_on_startup` preference is `true` (default `false`), in which case it SHALL be silent unless a newer version is found, and SHALL record the check timestamp in the `last_update_check` preference. Update work SHALL run off the main render path and SHALL NOT recompute any cached-per-version Markdown state.
+The signed update flow SHALL try the Aliyun OSS manifest first and the GitHub Release manifest second, falling back after an unsuccessful endpoint. The installer URL and signature SHALL come from the manifest that succeeded.
+
+The application SHALL expose a "Check for Updates…" action in the Help menu that, when invoked, fetches `https://api.github.com/repos/willmove/markion/releases/latest` via the existing in-app HTTP layer, parses the latest published Release, compares its `tag_name` (after the required leading `v`) against `env!("CARGO_PKG_VERSION")` using a semantic-version comparison, and surfaces the result through a modal dialog. When the Release version is newer than the running version, the dialog SHALL display the newer version number without rendering the raw asset URL and SHALL provide localized actionable buttons. On a Windows x86_64 tagged build containing the configured updater public key, the primary action SHALL download the update described by the published updater manifest, verify the cargo-packager Minisign signature before execution, launch the verified current-user NSIS installer in passive mode, and exit Markion only after the installer starts. On a Linux x86_64 tagged build containing the configured updater public key and launched as an AppImage (a non-empty `APPIMAGE` environment variable set by the AppImage runtime), the primary action SHALL download the update described by the published updater manifest, verify the cargo-packager Minisign signature of the AppImage payload before installation, replace the running AppImage file in place, relaunch the updated AppImage, and exit the current instance only after the replacement succeeds. Automatic installation SHALL NOT begin while any document has unsaved changes. On macOS, Linux installs that are not running as an AppImage (deb/rpm or extracted AppDir), unsupported architectures, or builds without updater public-key material, the primary action SHALL open the matching GitHub asset URL in the system browser, or the Release page when no platform package mapping exists. When the Release version is equal to or older than the running version, the dialog SHALL report that the application is up to date. When the fetch, manifest, download, signature verification, installer launch, AppImage replacement, or relaunch fails, or a supported-platform asset is missing, the application SHALL report the failure without crashing and SHALL retain a manual-download fallback; a failed AppImage replacement SHALL leave the previously installed AppImage in place and runnable. The application SHALL NOT download or install an update without an explicit user action. The application MAY additionally perform the release check on startup when the `check_for_updates_on_startup` preference is `true` (default `false`), in which case it SHALL be silent unless a newer version is found, and SHALL record the check timestamp in the `last_update_check` preference. Update work SHALL run off the main render path and SHALL NOT recompute any cached-per-version Markdown state.
 
 #### Scenario: User invokes Check for Updates and a newer version is available
 - **WHEN** the user chooses "Check for Updates…" on a Windows x86_64 tagged build, the published Release is newer, updater public-key material is present, and all documents are clean
@@ -157,7 +159,7 @@ The application SHALL expose a "Check for Updates…" action in the Help menu th
 - **AND** Markion launches the verified installer in passive mode and exits only after the installer starts
 
 #### Scenario: User chooses the download fallback
-- **WHEN** a newer Release is available on macOS, Linux, an unsupported architecture, or a build without updater public-key material
+- **WHEN** a newer Release is available on macOS, on a Linux install that is not running as an AppImage (deb/rpm or extracted AppDir), on an unsupported architecture, or on a build without updater public-key material
 - **THEN** the modal dialog shows the newer version and offers "Download Update" and "Later" actions without displaying a truncated raw URL
 - **AND** choosing "Download Update" opens the matching platform asset, or the Release page when no package mapping exists, in the system browser
 - **AND** no file is installed automatically
@@ -179,9 +181,9 @@ The application SHALL expose a "Check for Updates…" action in the Help menu th
 - **AND** the application continues running normally
 
 #### Scenario: Signed installation fails safely
-- **WHEN** the updater manifest is invalid, the download fails, signature verification fails, or the installer cannot be launched
+- **WHEN** the updater manifest is invalid, the download fails, signature verification fails, the installer cannot be launched, or the AppImage replacement or relaunch fails
 - **THEN** Markion reports that automatic update failed and does not execute an unverified payload
-- **AND** the current installation and open documents remain usable
+- **AND** the current installation and open documents remain usable — on Linux the previously installed AppImage is restored to its original path and stays runnable
 - **AND** the user can open the matching Release asset through the manual-download fallback
 
 #### Scenario: Startup check is opt-in and silent unless newer
@@ -194,14 +196,31 @@ The application SHALL expose a "Check for Updates…" action in the Help menu th
 - **WHEN** update discovery, download, verification, or installation preparation runs
 - **THEN** it executes off the main render path and does not recompute any preview block, outline, stat, syntax-highlighting, or text-handle cache
 
-### Requirement: Tagged releases SHALL publish authenticated Windows updater metadata
-For every stable `v*` release, the publication pipeline SHALL create a cargo-packager Minisign signature for the Windows x86_64 NSIS installer and an updater manifest containing the release version, the signed installer's public download URL, its signature, and the `nsis` update format. The signature and updater manifest SHALL be attached to the GitHub Release and mirrored beside the installer under the Aliyun OSS `latest/` prefix. The signing private key and password SHALL come from repository secrets, the corresponding public key SHALL be embedded only in tagged application builds, and no private signing material SHALL be written to repository files or build artifacts. Updater signing SHALL be treated as payload authentication and SHALL NOT be represented as Windows Authenticode signing.
+#### Scenario: Manifest fetch falls back from OSS to GitHub
+- **WHEN** the signed updater cannot reach the OSS manifest endpoint or it responds without a success status
+- **THEN** the updater fetches the manifest from the GitHub Release asset endpoint
+- **AND** the installer download and signature verification use the installer URL and signature published in the GitHub manifest
+
+#### Scenario: A successful manifest is used end to end on one host
+- **WHEN** an updater manifest endpoint returns a usable manifest
+- **THEN** the installer is downloaded from the URL named by that manifest, which is hosted on the same distribution channel as the manifest
+- **AND** no step of the signed update crosses back to a host that already failed
+
+#### Scenario: AppImage install updates itself in place
+- **WHEN** the user chooses "Check for Updates…" inside an AppImage-launched Linux x86_64 tagged build, the published Release is newer, updater public-key material is present, and all documents are clean
+- **THEN** the dialog offers "Download and Install" and "Later" actions
+- **AND** choosing "Download and Install" downloads and verifies the signed AppImage off the main render path
+- **AND** Markion replaces the running AppImage file at its original path, relaunches the updated AppImage, and quits the current instance
+- **AND** the whole operation requires no privilege escalation and no system package manager
+
+### Requirement: Tagged releases SHALL publish authenticated Windows and Linux updater metadata
+For every stable `v*` release, the publication pipeline SHALL create a cargo-packager Minisign signature for the Windows x86_64 NSIS installer and for the Linux x86_64 AppImage, and SHALL publish an updater manifest containing the release version and, per supported signed-update platform (`windows-x86_64`, `linux-x86_64`), the signed package's public download URL, its signature, and its update format (`nsis`, `appimage`). The signatures and updater manifest SHALL be attached to the GitHub Release and mirrored beside the installers under the Aliyun OSS `latest/` prefix, with each channel's manifest variant naming the installers hosted on that channel so the manifest, installer, and signature stay self-consistent per host. The signing private key and password SHALL come from repository secrets, the corresponding public key SHALL be embedded only in tagged Windows and Linux application builds, and no private signing material SHALL be written to repository files or build artifacts. Updater signing SHALL be treated as payload authentication and SHALL NOT be represented as Windows Authenticode signing or Linux package-manager signing.
 
 #### Scenario: Tagged Windows installer receives updater metadata
 - **WHEN** a stable `v*` release packages the Windows x86_64 NSIS installer
 - **THEN** the pipeline signs that exact installer with the configured updater private key
 - **AND** publishes its `.sig` file and an updater-compatible `update.json` to both the GitHub Release and Aliyun OSS
-- **AND** the manifest directs Windows x86_64 clients to the signed installer mirrored on OSS
+- **AND** each channel's manifest directs Windows x86_64 clients to the signed installer on that same distribution host
 
 #### Scenario: Signing secrets are unavailable
 - **WHEN** a tagged release cannot read the updater private key, password, or matching public key from repository secrets
@@ -213,6 +232,12 @@ For every stable `v*` release, the publication pipeline SHALL create a cargo-pac
 - **WHEN** a branch push or pull request runs the native build matrix
 - **THEN** application compilation remains valid without signing secrets
 - **AND** no updater signature or public update manifest is published
+
+#### Scenario: Tagged installers receive updater metadata
+- **WHEN** a stable `v*` release packages the Windows x86_64 NSIS installer and the Linux x86_64 AppImage
+- **THEN** the pipeline signs each exact package with the configured updater private key
+- **AND** publishes both `.sig` files and an updater-compatible `update.json` carrying both platform entries to the GitHub Release and Aliyun OSS
+- **AND** the GitHub manifest variant directs clients to the GitHub-hosted packages and the OSS variant to the OSS-mirrored packages, with identical signatures in both
 
 ### Requirement: Packaged local WeChat publishing workspace
 Every supported Markion native package SHALL include the complete pinned MarkNice publishing workspace, its locally hosted third-party runtime assets and fonts, a machine-readable provenance manifest, and applicable license notices. Release construction and verification SHALL require neither a sibling MarkNice checkout nor Node.js, SHALL verify that the bundled application shell has no remote runtime dependency, and SHALL fail before publication when required workspace assets are absent, unlisted, or inconsistent with their manifest.
@@ -234,3 +259,69 @@ Every supported Markion native package SHALL include the complete pinned MarkNic
 #### Scenario: Incomplete bundle blocks publication
 - **WHEN** a required workspace file, provenance entry, or applicable third-party notice is missing or inconsistent
 - **THEN** packaging or release verification fails before the release is published
+
+### Requirement: Linux AppImage SHALL start without a host Vulkan driver
+The Linux x86_64 AppImage SHALL contain a software Vulkan implementation and a Vulkan loader, built for the same C-library baseline as the application. When the host Vulkan stack cannot initialize Markion's renderer, the AppImage SHALL start on the bundled software implementation and show a usable main window without any user configuration or extra system packages.
+
+#### Scenario: Host without any Vulkan driver opens a window
+- **WHEN** the AppImage is launched on an X11 desktop (including Xvfb under `firejail --appimage`) that has no Vulkan driver installed and no GPU
+- **THEN** the main Markion window appears and renders its content
+- **AND** the diagnostic log records that the bundled software Vulkan driver is in use
+
+#### Scenario: Host without a Vulkan loader still starts
+- **WHEN** the AppImage is launched on a host that has neither a Vulkan loader nor a Vulkan driver
+- **THEN** Markion starts on the bundled loader and software driver and shows its main window
+
+#### Scenario: Bundled stack does not raise the C-library baseline
+- **WHEN** the release pipeline assembles the AppImage
+- **THEN** no bundled software-Vulkan file requires a newer glibc symbol version than the application binary itself
+
+### Requirement: Hardware Vulkan SHALL stay preferred over the bundled software driver
+The AppImage SHALL initialize the host Vulkan stack first and SHALL load the bundled software Vulkan stack only after host initialization has failed, at most once per launch. Users SHALL be able to force the bundled stack or disable the fallback through a documented environment variable.
+
+#### Scenario: Working GPU driver keeps hardware rendering
+- **WHEN** the AppImage is launched on a host whose Vulkan driver initializes successfully
+- **THEN** Markion renders through the host driver and does not load the bundled software stack
+
+#### Scenario: User forces or disables the software fallback
+- **WHEN** the AppImage is launched with `MARKION_SOFTWARE_VULKAN=1`
+- **THEN** Markion uses the bundled software stack without first trying the host driver
+- **AND** when launched with `MARKION_SOFTWARE_VULKAN=0`, a host initialization failure is reported instead of falling back
+
+#### Scenario: Fallback failure is reported, not retried forever
+- **WHEN** renderer initialization also fails on the bundled software stack
+- **THEN** Markion reports the renderer failure with remediation guidance and exits with a non-zero status without restarting again
+
+### Requirement: Release pipeline SHALL verify that the AppImage opens a window without a GPU
+Before a Linux AppImage is published, the release workflow SHALL launch it the way the AppImage catalog does — Xvfb with a window manager, `firejail --appimage`, on ubuntu-22.04 with no Vulkan driver installed — and SHALL fail unless a visible Markion window appears while the process is still running. The AppImage SHALL also keep its world-readable permissions and its updater signature SHALL be computed over the final file that contains the bundled stack.
+
+#### Scenario: Catalog-equivalent launch succeeds
+- **WHEN** the Linux build job has produced the AppImage
+- **THEN** the smoke job finds a visible Markion window and a non-blank screenshot is uploaded as a workflow artifact
+
+#### Scenario: Regression blocks publication
+- **WHEN** the launched AppImage exits early or shows no visible window
+- **THEN** the smoke job fails and no GitHub Release is published for that run
+
+#### Scenario: Bundling keeps permissions and signatures valid
+- **WHEN** the software Vulkan stack is added to the AppImage
+- **THEN** AppRun, the application binary and every directory remain world-executable and every file world-readable
+- **AND** the tagged-release `.sig` file and `update.json` entry are produced from that final AppImage
+
+### Requirement: Updater manifest variants SHALL name their own distribution host
+For every stable `v*` release, the publication pipeline SHALL produce two updater manifests for the same signed Windows installer: the manifest attached to the GitHub Release SHALL name the GitHub asset URL as the installer download URL, and the manifest mirrored to Aliyun OSS SHALL name the OSS object URL. Both variants SHALL carry the same release `version`, the same `format`, and byte-identical installer `signature` content, because the signed installer is byte-for-byte identical on both hosts. A variant SHALL NOT be published to the other host: the pipeline and the release procedure SHALL verify that each published manifest's installer URL names its own distribution host and that both variants report the tag version.
+
+#### Scenario: GitHub Release manifest names the GitHub asset
+- **WHEN** the `prepare-update` job publishes updater metadata for a stable `v*` release
+- **THEN** the `update.json` attached to the GitHub Release directs Windows x86_64 clients to the NSIS installer asset on the GitHub Release
+- **AND** its signature content matches the `.sig` published beside that installer
+
+#### Scenario: OSS manifest names the OSS object
+- **WHEN** the `mirror-oss` job uploads updater metadata for a stable `v*` release
+- **THEN** the mirrored `update.json` directs Windows x86_64 clients to the NSIS installer under the OSS `latest/` prefix
+- **AND** its signature content is identical to the GitHub manifest's signature content
+
+#### Scenario: Variant swap is detected
+- **WHEN** either publication target verifies its updater manifest
+- **THEN** it confirms the manifest version equals the tag version and the installer URL names that target's own host
+- **AND** a mismatch fails the release verification instead of being published

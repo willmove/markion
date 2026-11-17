@@ -324,6 +324,22 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn show_examples_templates(
+        &mut self,
+        _: &ShowExamplesTemplates,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = bundled_resource_path("assets/examples/README.md") {
+            cx.reveal_path(&index);
+            self.status = t(self.language, Msg::ItemExamplesTemplates).into();
+        } else {
+            self.status = t(self.language, Msg::StatusExamplesMissing).into();
+        }
+        self.active_menu = None;
+        cx.notify();
+    }
+
     pub(super) fn open_about_link(&mut self, link: AboutLink, cx: &mut Context<Self>) {
         cx.open_url(link.url());
     }

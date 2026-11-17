@@ -14,3 +14,8 @@ All user-visible AI settings, setup, panel/composer, writing presets, context sc
 #### Scenario: AI translation is missing
 - **WHEN** an AI message is added without a non-empty translation in a supported language
 - **THEN** compilation or the completeness test fails
+
+#### Scenario: New settings labels follow the interface language
+- **WHEN** the interface is German or Japanese and the user opens AI settings
+- **THEN** the context-size label, show API key action, protocol choice labels, and limit-range messages are in that language
+- **AND** the stored protocol code and model id are unchanged

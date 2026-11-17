@@ -43,3 +43,25 @@ The system SHALL keep source-backed whitespace ranges available for exact caret 
 - **WHEN** a whitespace row does not own the source caret
 - **THEN** it still occupies stable empty-paragraph height and remains pointer-editable
 - **AND** it does not paint an insertion caret until it owns the caret
+
+#### Scenario: A single inter-block newline is paragraph spacing
+- **WHEN** Visual Edit displays two blocks separated by exactly one newline that belongs to a whitespace row
+- **THEN** that row occupies the rendered paragraph spacing and does not add a body-height blank line
+- **AND** increasing paragraph spacing increases the row's occupied extent
+- **AND** the source text is unchanged
+
+#### Scenario: Newlines beyond the separator stay body lines
+- **WHEN** a whitespace row between two blocks contains more than one newline
+- **THEN** the first newline occupies paragraph spacing
+- **AND** each remaining newline occupies one body paragraph line
+
+#### Scenario: A normal trailing newline does not paint a blank line
+- **WHEN** a block ends with its own line ending at the document end, so the only following whitespace row has an empty source range
+- **THEN** Visual Edit does not paint a body-height blank line for that row
+- **AND** the caret can still be placed at the document end
+- **AND** an additional authored newline after that block occupies one body paragraph line
+
+#### Scenario: Typing into a structural separator moves following content
+- **WHEN** the user types a line of text into a single-newline gap between two blocks
+- **THEN** the new line occupies body line height
+- **AND** rendered content below that gap moves down

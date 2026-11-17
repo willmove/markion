@@ -88,6 +88,15 @@ icon_set! {
     Table => "table",
     Link => "link",
     Sigma => "sigma",
+    Cut => "cut",
+    Clipboard => "clipboard",
+    CopyPlus => "copy-plus",
+    ArrowDown => "arrow-down",
+    Download => "download",
+    Upload => "upload",
+    AlignLeft => "align-left",
+    AlignCenter => "align-center",
+    AlignRight => "align-right",
 }
 
 /// GPUI asset source for embedded icons. Install once on `Application::with_assets`.

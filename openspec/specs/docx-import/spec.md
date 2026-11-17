@@ -1,7 +1,7 @@
 # docx-import Specification
 
 ## Purpose
-TBD - created by archiving change normalize-docx-bold-boundary-spacing. Update Purpose after archive.
+Preserve interoperable Markdown semantics when importing supported Word document content, including exact boundaries around strong emphasis.
 
 ## Requirements
 

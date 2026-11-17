@@ -29,8 +29,9 @@ use gpui::{
 #[cfg(test)]
 use markion::OrganizeCandidate;
 use markion::i18n::{
-    BlockGripMsg, GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, TableMsg, block_grip_t,
-    git_t, git_tf, image_recovery_t, image_status_tf, image_t, table_t,
+    BlockGripMsg, ContextMenuMsg, GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, TableMsg,
+    block_grip_t, context_menu_t, git_t, git_tf, image_recovery_t, image_status_tf, image_t,
+    table_t,
 };
 use markion::{
     AlertKind, AppPreferences, AutoPairAction, AutoSavePreferences, BlockEdit, BlockEditError,
@@ -215,6 +216,7 @@ actions!(
         ToggleFindRegex,
         ShowShortcuts,
         ShowMarkdownReference,
+        ShowExamplesTemplates,
         ShowPreferences,
         ResetPreferences,
         CheckForUpdates,
@@ -1473,6 +1475,7 @@ enum OverlayTextDrag {
 enum LinkEditorKind {
     Link,
     Image,
+    ImageProperties,
     ImageDirectory,
     PicGoEndpoint,
     PicGoCoreArguments,
@@ -1581,14 +1584,58 @@ const EMOJI_PALETTE_LIMIT: usize = 36;
 struct BlockMenuState {
     target: BlockTarget,
     from_grip: bool,
+    editing_context: Option<EditorContextTarget>,
     scroll: ScrollHandle,
     selection_copy: Option<Range<usize>>,
     selection_format: Option<VisualSelectionFormatTarget>,
     is_image: bool,
+    is_table: bool,
+    image_object_selected: bool,
     anchor: Point<Pixels>,
     root_selected: usize,
-    submenu: Option<BlockMenuSubmenu>,
     submenu_selected: usize,
+    submenu_focused: bool,
+    suppressed_hover: Option<BlockContextSubmenu>,
+    keyboard_navigation: bool,
+    pointer_position: Option<Point<Pixels>>,
+    submenu_scroll: ScrollHandle,
+    geometry: Rc<RefCell<BlockMenuGeometry>>,
+    context: BlockMenuContext,
+    insertion_range: Option<Range<usize>>,
+    empty_paragraph_offset: Option<usize>,
+    table_context: Option<VisualTableContext>,
+    submenu: Option<BlockContextSubmenu>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockContextSubmenu {
+    TableRows,
+    TableColumns,
+    Insertion,
+    ImageScale,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockMenuContext {
+    Paragraph,
+    Heading(u8),
+    Table,
+    Image,
+    Block,
+}
+
+#[derive(Default, Debug)]
+struct BlockMenuGeometry {
+    root: Option<Bounds<Pixels>>,
+    child: Option<(BlockContextSubmenu, Bounds<Pixels>)>,
+    parents: Vec<(BlockContextSubmenu, Bounds<Pixels>)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VisualTableContext {
+    row: VisualTableAxisTarget,
+    column: VisualTableAxisTarget,
+    alignment: TableAlignment,
 }
 
 /// Row/column menu opened from a Visual Edit table grip. `alignment` is the
@@ -1614,29 +1661,42 @@ enum SelectionFormatAction {
     Bold,
     Italic,
     InlineCode,
+    Strikethrough,
     Link,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BlockMenuSubmenu {
-    TextAndHeadings,
-    Lists,
-    ImageWidth,
-    ImageAlignment,
+enum BlockMenuGroup {
+    Clipboard,
+    Selection,
+    Transforms,
+    Insertion,
+    Operations,
+    TableRows,
+    TableColumns,
+    Delete,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockMenuItem {
     CopySelection,
+    CutSelection,
+    DeleteSelection,
+    SelectAll,
     CopyBlock,
     CutBlock,
+    Paste,
     AddBelow,
     SelectionFormat(SelectionFormatAction),
-    Submenu(BlockMenuSubmenu),
+    Insert(SlashPaletteCommand),
+    InsertCallout(AlertKind),
     Transform(BlockTransform),
+    Submenu(BlockContextSubmenu),
+    TableRow(VisualTableMenuItem),
+    TableColumn(VisualTableMenuItem),
     ImageWidth(u8),
     ImageAlignment(ImageAlignment),
-    ImageEditSource,
+    ImageProperties,
     ImageReplace,
     ImageSaveLocal,
     ImageUpload,
@@ -1646,34 +1706,21 @@ enum BlockMenuItem {
     Delete,
 }
 
-const BLOCK_MENU_SELECTION_FORMAT_ITEMS: [BlockMenuItem; 4] = [
+const BLOCK_MENU_SELECTION_FORMAT_ITEMS: [BlockMenuItem; 5] = [
     BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold),
     BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic),
     BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode),
+    BlockMenuItem::SelectionFormat(SelectionFormatAction::Strikethrough),
     BlockMenuItem::SelectionFormat(SelectionFormatAction::Link),
 ];
 
-const BLOCK_MENU_ROOT_ITEMS: [BlockMenuItem; 10] = [
-    BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings),
-    BlockMenuItem::Submenu(BlockMenuSubmenu::Lists),
-    BlockMenuItem::Transform(BlockTransform::Quote),
-    BlockMenuItem::Transform(BlockTransform::CodeBlock),
-    BlockMenuItem::Transform(BlockTransform::Divider),
-    BlockMenuItem::Transform(BlockTransform::Table),
-    BlockMenuItem::Duplicate,
-    BlockMenuItem::MoveUp,
-    BlockMenuItem::MoveDown,
-    BlockMenuItem::Delete,
-];
-
-const BLOCK_MENU_TEXT_ITEMS: [BlockMenuItem; 7] = [
+const BLOCK_MENU_TEXT_ITEMS: [BlockMenuItem; 6] = [
     BlockMenuItem::Transform(BlockTransform::Text),
     BlockMenuItem::Transform(BlockTransform::Heading(1)),
     BlockMenuItem::Transform(BlockTransform::Heading(2)),
     BlockMenuItem::Transform(BlockTransform::Heading(3)),
     BlockMenuItem::Transform(BlockTransform::Heading(4)),
     BlockMenuItem::Transform(BlockTransform::Heading(5)),
-    BlockMenuItem::Transform(BlockTransform::Heading(6)),
 ];
 
 const BLOCK_MENU_LIST_ITEMS: [BlockMenuItem; 3] = [
@@ -1695,95 +1742,289 @@ const BLOCK_MENU_IMAGE_ALIGNMENT_ITEMS: [BlockMenuItem; 3] = [
     BlockMenuItem::ImageAlignment(ImageAlignment::Right),
 ];
 
-const BLOCK_MENU_IMAGE_ROOT_ITEMS: [BlockMenuItem; 10] = [
-    BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth),
-    BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment),
-    BlockMenuItem::ImageEditSource,
+const BLOCK_MENU_IMAGE_ACTIONS: [BlockMenuItem; 4] = [
+    BlockMenuItem::ImageProperties,
     BlockMenuItem::ImageReplace,
     BlockMenuItem::ImageSaveLocal,
     BlockMenuItem::ImageUpload,
+];
+
+const BLOCK_MENU_OPERATIONS: [BlockMenuItem; 7] = [
+    BlockMenuItem::CopyBlock,
+    BlockMenuItem::CutBlock,
+    BlockMenuItem::Paste,
     BlockMenuItem::Duplicate,
     BlockMenuItem::MoveUp,
     BlockMenuItem::MoveDown,
-    BlockMenuItem::Delete,
+    BlockMenuItem::AddBelow,
 ];
 
-fn block_menu_root_items(has_selection_format: bool) -> Vec<BlockMenuItem> {
-    let mut items = Vec::with_capacity(
-        BLOCK_MENU_ROOT_ITEMS.len()
-            + if has_selection_format {
-                BLOCK_MENU_SELECTION_FORMAT_ITEMS.len()
-            } else {
-                0
-            },
-    );
-    if has_selection_format {
-        items.extend(BLOCK_MENU_SELECTION_FORMAT_ITEMS);
-    }
-    items.extend(BLOCK_MENU_ROOT_ITEMS);
-    items
-}
-
 impl BlockMenuState {
-    fn scroll_selection_into_view(&self) {
-        if !self.from_grip || self.submenu.is_some() {
-            return;
-        }
-        let compact = !self.is_image;
-        if compact && self.root_selected < 14 {
-            self.scroll
-                .scroll_to_item(usize::from(self.root_selected >= 7));
-            return;
-        }
-        let start = if compact { 14 } else { 0 };
-        let items = self.root_items();
-        let selected = self.root_selected.min(items.len().saturating_sub(1));
-        let separators = items[start..selected]
-            .iter()
-            .filter(|&&item| preview::block_menu_item_is_followed_by_separator(item))
-            .count();
-        let child = (if compact { 3 } else { 0 }) + selected - start + separators;
-        self.scroll.scroll_to_item(child);
-    }
-
     fn root_items(&self) -> Vec<BlockMenuItem> {
-        if self.from_grip {
-            let mut items = if self.is_image {
-                BLOCK_MENU_IMAGE_ROOT_ITEMS.to_vec()
-            } else {
-                let mut items = BLOCK_MENU_TEXT_ITEMS.to_vec();
+        let mut items = Vec::new();
+        if self.editing_context.is_some() {
+            if !self.is_image && !self.is_table {
+                items.extend(BLOCK_MENU_TEXT_ITEMS);
                 items.extend(BLOCK_MENU_LIST_ITEMS);
-                items.extend(BLOCK_MENU_ROOT_ITEMS.iter().copied().skip(2));
-                items
-            };
-            let actions = if self.is_image { 6 } else { 14 };
-            items.splice(
-                actions..actions,
-                [BlockMenuItem::CopyBlock, BlockMenuItem::CutBlock],
-            );
-            items.push(BlockMenuItem::AddBelow);
+                items.extend([
+                    BlockMenuItem::Transform(BlockTransform::Quote),
+                    BlockMenuItem::Transform(BlockTransform::CodeBlock),
+                    BlockMenuItem::Transform(BlockTransform::Divider),
+                    BlockMenuItem::Transform(BlockTransform::Table),
+                    BlockMenuItem::CopyBlock,
+                    BlockMenuItem::CutBlock,
+                    BlockMenuItem::Duplicate,
+                    BlockMenuItem::MoveUp,
+                    BlockMenuItem::MoveDown,
+                    BlockMenuItem::AddBelow,
+                    BlockMenuItem::Delete,
+                ]);
+            }
+            items.extend([
+                BlockMenuItem::CutSelection,
+                BlockMenuItem::CopySelection,
+                BlockMenuItem::Paste,
+            ]);
+            if !self.image_object_selected {
+                items.push(BlockMenuItem::DeleteSelection);
+            }
+            items.push(BlockMenuItem::SelectAll);
+            if self.selection_format.is_some() {
+                items.extend(BLOCK_MENU_SELECTION_FORMAT_ITEMS);
+            }
+            if self.is_image {
+                items.push(BlockMenuItem::ImageProperties);
+                items.push(BlockMenuItem::Submenu(BlockContextSubmenu::ImageScale));
+                items.extend(BLOCK_MENU_IMAGE_ALIGNMENT_ITEMS);
+                items.extend([
+                    BlockMenuItem::ImageReplace,
+                    BlockMenuItem::ImageSaveLocal,
+                    BlockMenuItem::ImageUpload,
+                ]);
+                if !self.image_object_selected {
+                    items.extend([BlockMenuItem::CopyBlock, BlockMenuItem::CutBlock]);
+                }
+                items.extend([
+                    BlockMenuItem::Duplicate,
+                    BlockMenuItem::MoveUp,
+                    BlockMenuItem::MoveDown,
+                    BlockMenuItem::Delete,
+                ]);
+            } else if self.is_table {
+                items.extend([
+                    BlockMenuItem::Submenu(BlockContextSubmenu::TableRows),
+                    BlockMenuItem::Submenu(BlockContextSubmenu::TableColumns),
+                    BlockMenuItem::CopyBlock,
+                    BlockMenuItem::Duplicate,
+                    BlockMenuItem::MoveUp,
+                    BlockMenuItem::MoveDown,
+                    BlockMenuItem::Delete,
+                ]);
+            } else {
+                items.push(BlockMenuItem::Submenu(BlockContextSubmenu::Insertion));
+            }
             return items;
         }
-        let mut items = if self.is_image {
-            BLOCK_MENU_IMAGE_ROOT_ITEMS.to_vec()
-        } else {
-            block_menu_root_items(self.selection_format.is_some())
-        };
         if self.selection_copy.is_some() {
-            items.insert(0, BlockMenuItem::CopySelection);
+            items.push(BlockMenuItem::CopySelection);
+        }
+        if self.selection_format.is_some() {
+            items.extend(
+                BLOCK_MENU_SELECTION_FORMAT_ITEMS
+                    .into_iter()
+                    .filter(|item| {
+                        self.is_image
+                            || *item != BlockMenuItem::SelectionFormat(SelectionFormatAction::Link)
+                    }),
+            );
+        }
+        if self.is_image {
+            items.extend(BLOCK_MENU_IMAGE_WIDTH_ITEMS);
+            items.extend(BLOCK_MENU_IMAGE_ALIGNMENT_ITEMS);
+            items.extend(BLOCK_MENU_IMAGE_ACTIONS);
+        } else {
+            items.extend(BLOCK_MENU_TEXT_ITEMS);
+            items.extend(BLOCK_MENU_LIST_ITEMS);
+            items.extend([
+                BlockMenuItem::Transform(BlockTransform::Quote),
+                BlockMenuItem::Transform(BlockTransform::CodeBlock),
+                BlockMenuItem::Transform(BlockTransform::Divider),
+                BlockMenuItem::Transform(BlockTransform::Table),
+                BlockMenuItem::Insert(SlashPaletteCommand::Link),
+                BlockMenuItem::Insert(SlashPaletteCommand::Formula),
+                BlockMenuItem::Insert(SlashPaletteCommand::Image),
+            ]);
+        }
+        items.extend(BLOCK_MENU_OPERATIONS);
+        items.push(BlockMenuItem::Delete);
+        items
+    }
+
+    fn submenu_items(&self, page: BlockContextSubmenu) -> Vec<BlockMenuItem> {
+        let mut items = Vec::new();
+        match page {
+            BlockContextSubmenu::TableRows | BlockContextSubmenu::TableColumns => {
+                if let Some(table) = self.table_context {
+                    let rows = page == BlockContextSubmenu::TableRows;
+                    let axis = if rows {
+                        table.row.axis
+                    } else {
+                        table.column.axis
+                    };
+                    items.extend(visual_table_menu_items(axis).iter().copied().map(|item| {
+                        if rows {
+                            BlockMenuItem::TableRow(item)
+                        } else {
+                            BlockMenuItem::TableColumn(item)
+                        }
+                    }));
+                }
+            }
+            BlockContextSubmenu::Insertion => {
+                items.extend(
+                    SlashCommand::ALL
+                        .into_iter()
+                        .filter(|command| *command != SlashCommand::Heading(6))
+                        .map(|command| BlockMenuItem::Insert(SlashPaletteCommand::Block(command))),
+                );
+                items.extend(
+                    [
+                        AlertKind::Note,
+                        AlertKind::Tip,
+                        AlertKind::Important,
+                        AlertKind::Warning,
+                        AlertKind::Caution,
+                    ]
+                    .map(BlockMenuItem::InsertCallout),
+                );
+                items.extend([
+                    BlockMenuItem::Insert(SlashPaletteCommand::Link),
+                    BlockMenuItem::Insert(SlashPaletteCommand::Formula),
+                    BlockMenuItem::Insert(SlashPaletteCommand::Image),
+                ]);
+            }
+            BlockContextSubmenu::ImageScale => {
+                items.extend([25, 33, 50, 67, 75, 80, 100].map(BlockMenuItem::ImageWidth));
+            }
         }
         items
     }
+
+    fn visible_items(&self) -> Vec<BlockMenuItem> {
+        if self.submenu_focused
+            && let Some(page) = self.submenu
+        {
+            self.submenu_items(page)
+        } else {
+            self.root_items()
+        }
+    }
+
+    fn offers(&self, item: BlockMenuItem) -> bool {
+        self.root_items().contains(&item)
+            || self
+                .submenu
+                .is_some_and(|page| self.submenu_items(page).contains(&item))
+    }
+
+    fn selected_index(&self) -> usize {
+        if self.submenu_focused {
+            self.submenu_selected
+        } else {
+            self.root_selected
+        }
+    }
+
+    fn sections_for(
+        items: Vec<BlockMenuItem>,
+    ) -> Vec<(BlockMenuGroup, Vec<(usize, BlockMenuItem)>)> {
+        let mut sections: Vec<(BlockMenuGroup, Vec<(usize, BlockMenuItem)>)> = Vec::new();
+        for (index, item) in items.into_iter().enumerate() {
+            let group = item.group();
+            if sections.last().is_none_or(|(last, _)| *last != group) {
+                sections.push((group, Vec::new()));
+            }
+            sections.last_mut().unwrap().1.push((index, item));
+        }
+        sections
+    }
+
+    fn rows_for(
+        &self,
+        page: Option<BlockContextSubmenu>,
+    ) -> Vec<(bool, Vec<(usize, BlockMenuItem)>)> {
+        let items = page.map_or_else(|| self.root_items(), |page| self.submenu_items(page));
+        Self::sections_for(items)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(section, (_, items))| {
+                let columns =
+                    if items[0].1.is_compact() && page != Some(BlockContextSubmenu::ImageScale) {
+                        6
+                    } else {
+                        1
+                    };
+                items
+                    .chunks(columns)
+                    .enumerate()
+                    .map(|(row, cells)| (section > 0 && row == 0, cells.to_vec()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn scroll_selection_into_view(&self) {
+        let page = self.submenu.filter(|_| self.submenu_focused);
+        if let Some(row) = self.rows_for(page).iter().position(|(_, items)| {
+            items
+                .iter()
+                .any(|(index, _)| *index == self.selected_index())
+        }) {
+            let scroll = if page.is_some() {
+                &self.submenu_scroll
+            } else {
+                &self.scroll
+            };
+            scroll.scroll_to_item(row + 1);
+        }
+    }
 }
 
-impl BlockMenuSubmenu {
-    fn items(self) -> &'static [BlockMenuItem] {
+impl BlockMenuItem {
+    fn group(self) -> BlockMenuGroup {
         match self {
-            Self::TextAndHeadings => &BLOCK_MENU_TEXT_ITEMS,
-            Self::Lists => &BLOCK_MENU_LIST_ITEMS,
-            Self::ImageWidth => &BLOCK_MENU_IMAGE_WIDTH_ITEMS,
-            Self::ImageAlignment => &BLOCK_MENU_IMAGE_ALIGNMENT_ITEMS,
+            Self::CopySelection
+            | Self::CutSelection
+            | Self::Paste
+            | Self::DeleteSelection
+            | Self::SelectAll => BlockMenuGroup::Clipboard,
+            Self::SelectionFormat(_) => BlockMenuGroup::Selection,
+            Self::Transform(BlockTransform::Table)
+            | Self::Insert(_)
+            | Self::InsertCallout(_)
+            | Self::ImageProperties
+            | Self::ImageReplace
+            | Self::ImageSaveLocal
+            | Self::ImageUpload => BlockMenuGroup::Insertion,
+            Self::Transform(_) | Self::ImageWidth(_) | Self::ImageAlignment(_) => {
+                BlockMenuGroup::Transforms
+            }
+            Self::Delete => BlockMenuGroup::Delete,
+            Self::TableRow(_) => BlockMenuGroup::TableRows,
+            Self::TableColumn(_) => BlockMenuGroup::TableColumns,
+            Self::Submenu(_) => BlockMenuGroup::TableRows,
+            _ => BlockMenuGroup::Operations,
         }
+    }
+
+    fn is_compact(self) -> bool {
+        matches!(
+            self.group(),
+            BlockMenuGroup::Clipboard
+                | BlockMenuGroup::Selection
+                | BlockMenuGroup::Transforms
+                | BlockMenuGroup::Operations
+        )
     }
 }
 
@@ -1795,12 +2036,31 @@ struct BlockMenuPresentation {
     can_duplicate_or_delete: bool,
     can_move_up: bool,
     can_move_down: bool,
+    can_insert_inline: bool,
+    can_insert_block: bool,
+    is_empty_paragraph: bool,
+    editing_context: bool,
+    can_edit_selection: bool,
+    can_paste: bool,
+    table_context: Option<VisualTableContext>,
 }
 
 impl BlockMenuPresentation {
     fn item_enabled(self, item: BlockMenuItem) -> bool {
         match item {
-            BlockMenuItem::CopySelection => true,
+            BlockMenuItem::CopySelection
+            | BlockMenuItem::CutSelection
+            | BlockMenuItem::DeleteSelection => self.can_edit_selection,
+            BlockMenuItem::SelectAll => true,
+            BlockMenuItem::Submenu(BlockContextSubmenu::ImageScale) => self.image.is_some(),
+            BlockMenuItem::Submenu(
+                BlockContextSubmenu::TableRows | BlockContextSubmenu::TableColumns,
+            ) => self.table_context.is_some(),
+            BlockMenuItem::Submenu(_) => true,
+            BlockMenuItem::Paste => self.can_paste,
+            BlockMenuItem::Insert(SlashPaletteCommand::Block(_))
+            | BlockMenuItem::InsertCallout(_) => self.can_insert_block,
+            BlockMenuItem::Insert(_) => self.can_insert_inline,
             BlockMenuItem::MoveUp => self.can_move_up,
             BlockMenuItem::MoveDown => self.can_move_down,
             BlockMenuItem::Duplicate
@@ -1809,13 +2069,20 @@ impl BlockMenuPresentation {
             | BlockMenuItem::CutBlock
             | BlockMenuItem::AddBelow => self.can_duplicate_or_delete,
             BlockMenuItem::ImageWidth(_) | BlockMenuItem::ImageAlignment(_) => self.image.is_some(),
-            BlockMenuItem::ImageEditSource
+            BlockMenuItem::ImageProperties
             | BlockMenuItem::ImageReplace
             | BlockMenuItem::ImageSaveLocal
             | BlockMenuItem::ImageUpload => self.is_image,
-            BlockMenuItem::SelectionFormat(_)
-            | BlockMenuItem::Submenu(_)
-            | BlockMenuItem::Transform(_) => self.current.is_some() || self.is_image,
+            BlockMenuItem::SelectionFormat(_) => {
+                self.editing_context || self.current.is_some() || self.is_image
+            }
+            BlockMenuItem::Transform(_) => self.current.is_some() || self.is_image,
+            BlockMenuItem::TableRow(item) => self.table_context.is_some_and(|table| {
+                visual_table_menu_item_edit(table.row, item, table.alignment).is_some()
+            }),
+            BlockMenuItem::TableColumn(item) => self.table_context.is_some_and(|table| {
+                visual_table_menu_item_edit(table.column, item, table.alignment).is_some()
+            }),
         }
     }
 }
@@ -2424,6 +2691,15 @@ struct EditorContextMenu {
     selection: Range<usize>,
 }
 
+/// Immutable document selection captured by the ordinary Visual editing menu.
+#[derive(Debug, Clone)]
+struct EditorContextTarget {
+    document: (DocumentInstanceId, u64),
+    selection: Range<usize>,
+    structured: Option<markion::selection::SelectionState>,
+    edit_range: Option<Range<usize>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorContextAction {
     Cut,
@@ -2616,6 +2892,7 @@ mod memory;
 mod native_smoke;
 mod network;
 mod overlay;
+mod palette_controls;
 mod performance;
 mod preview;
 mod preview_image;
@@ -2640,6 +2917,8 @@ use workspace::{ExternalDropIntent, classify_external_drop_path};
 
 #[cfg(test)]
 mod advanced_editing_tests;
+#[cfg(test)]
+mod block_context_tests;
 #[cfg(test)]
 mod block_grip_tests;
 #[cfg(test)]

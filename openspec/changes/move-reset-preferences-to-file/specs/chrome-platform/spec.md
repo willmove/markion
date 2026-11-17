@@ -23,3 +23,7 @@ The editor SHALL provide a Preferences panel and a persisted preferences file co
 #### Scenario: Reset restores defaults
 - **WHEN** the user triggers the reset action
 - **THEN** all preferences are reset to their defaults
+
+#### Scenario: Preferences summary and reset
+- **WHEN** the user opens the Help → preferences summary or triggers the reset action
+- **THEN** a summary including supported typography values, Markdown auto-pair, and auto-save panel settings is shown, or all preferences including typography, Markdown auto-pair (default on), shortcut overrides, and `[auto_save]` defaults (`enabled` true, `silent_save` true, `delay_secs` 5) are reset to their defaults

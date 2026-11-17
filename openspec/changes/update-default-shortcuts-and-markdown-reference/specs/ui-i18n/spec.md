@@ -39,6 +39,11 @@ The system SHALL route every user-visible UI string (menu bar titles and items, 
 - **WHEN** the active language is Japanese, French, German, or Spanish
 - **THEN** document content, the welcome Markdown, and user files remain untouched (only UI chrome is translated)
 
+#### Scenario: Search overlay chrome reflects the active language
+- **WHEN** the Find / Replace overlay is visible and the active interface language changes
+- **THEN** external field identity, navigation and option tooltips, accessibility labels, current/total or empty-state feedback, regular-expression errors, replacement actions, close guidance, and Read-mode replacement guidance render in the active language through the i18n layer
+- **AND** no user-visible search status or validation text is hard-coded in English
+
 ## ADDED Requirements
 
 ### Requirement: Markdown Reference chrome and body are localized

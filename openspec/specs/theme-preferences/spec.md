@@ -423,11 +423,11 @@ The Preferences panel General tab SHALL include an Auto-save section with (1) a 
 - **THEN** no control is offered for `[auto_save] enabled`
 
 ### Requirement: Preferences panel SHALL expose an Appearance tab
-The Preferences panel SHALL provide an Appearance tab at the same tab-strip level as General, Shortcuts, and Export. The tab order SHALL be General, Appearance, Shortcuts, Export. Opening the Preferences panel from File → Preferences SHALL land on General. The Appearance tab SHALL host the theme swatch grid and the document typography controls (Source font size, Reading font size, Paragraph spacing, and the source/rendered/code font-family slots). The Appearance tab SHALL NOT host language, display/workspace toggles, auto-save, shortcut, or export controls.
+The Preferences panel SHALL provide an Appearance tab at the same tab-strip level as General, Shortcuts, Export, and AI. General, Appearance, Shortcuts, and Export SHALL retain that relative order; additional capability-owned tabs such as Images SHALL retain their existing placement, and AI SHALL be appended after Export. Opening the Preferences panel from File → Preferences SHALL land on General. The Appearance tab SHALL host the theme swatch grid and the document typography controls (Source font size, Reading font size, Paragraph spacing, and the source/rendered/code font-family slots). The Appearance tab SHALL NOT host language, display/workspace toggles, auto-save, shortcut, export, or AI controls.
 
 #### Scenario: Appearance tab sits beside the other Preferences tabs
 - **WHEN** the user opens the Preferences panel
-- **THEN** the tab strip offers General, Appearance, Shortcuts, and Export as sibling tabs in that order
+- **THEN** General, Appearance, Shortcuts, and Export appear in their existing relative order, other existing tabs retain their placement, and AI is appended after Export
 
 #### Scenario: Opening Preferences lands on General
 - **WHEN** the user opens the Preferences panel from File → Preferences
@@ -436,7 +436,7 @@ The Preferences panel SHALL provide an Appearance tab at the same tab-strip leve
 #### Scenario: Appearance tab contains theme and typography
 - **WHEN** the Appearance tab is active
 - **THEN** the tab body shows the theme swatch grid and the typography controls
-- **AND** language, display/workspace, auto-save, shortcut, and export controls are not rendered in that body
+- **AND** language, display/workspace, auto-save, shortcut, export, and AI controls are not rendered in that body
 
 #### Scenario: General tab does not host appearance controls
 - **WHEN** the Preferences panel General tab is open
@@ -570,3 +570,89 @@ When Outline position is Right, Outline and File Tree actions SHALL toggle only 
 - **WHEN** a configuration has Right position but no `outline_visible` key
 - **THEN** both pane visibility values inherit the previous sidebar visibility
 - **AND** a missing or invalid outline width uses the existing sidebar-width default and bounds
+
+### Requirement: Preferences SHALL expose accessible AI setup
+The Preferences panel SHALL provide an AI tab even while AI is disabled. It SHALL expose basic enablement/provider/key/model/test controls and collapsed advanced settings using editable controls, visible validation/status, active-theme colors, and the current language. Content and the tab strip SHALL remain reachable when viewport width/height or font scaling prevents fitting all controls. Explicit AI setup entry points SHALL land on AI without changing the default File → Preferences landing tab. Invalid draft values SHALL not replace a working stored profile until committed validly.
+
+#### Scenario: Disabled feature can be configured
+- **WHEN** AI is disabled and the user opens Preferences → AI
+- **THEN** setup controls remain usable and no AI request is sent merely by opening the tab
+
+#### Scenario: Invalid endpoint draft
+- **WHEN** the user types an invalid advanced endpoint
+- **THEN** inline feedback appears and the last valid profile remains intact
+
+### Requirement: Preferences tab strip SHALL stay on one row
+The Preferences panel tab strip SHALL lay out every preferences tab on a single non-wrapping row, in the existing tab order. Tabs SHALL size to their labels instead of using a minimum width that forces a second row. When the panel is narrower than the labels, the strip SHALL scroll horizontally and every tab SHALL remain reachable. The strip SHALL NOT wrap a tab onto a second row. Opening File → Preferences SHALL still land on General.
+
+#### Scenario: Six tabs stay on one row
+- **WHEN** the Preferences panel is open at its normal width in Simplified Chinese
+- **THEN** General, Appearance, Images, Shortcuts, Export, and AI Agent appear on one row
+- **AND** no tab is placed on a second row
+
+#### Scenario: Narrow panel scrolls the strip
+- **WHEN** the preferences panel is narrower than the combined tab labels
+- **THEN** the tab strip scrolls horizontally
+- **AND** the user can still activate every tab, including AI Agent
+
+#### Scenario: Opening Preferences lands on General
+- **WHEN** the user opens the Preferences panel from File → Preferences
+- **THEN** the General tab is active
+
+### Requirement: Preferences SHALL expose a default-on slash-command popup toggle
+
+Preferences General SHALL expose a localized actionable boolean control for showing quick commands when typing `/`, reflecting the current value and using the active theme. The setting SHALL default to enabled, apply immediately, and persist as `slash_commands_enabled` in `config.toml`. Missing or non-boolean values SHALL fall back to enabled while retaining other valid settings. Reset Preferences SHALL restore enabled behavior. Changing the setting SHALL NOT modify document text, version, selection, dirty state, undo/redo history, or shared derived Markdown caches.
+
+#### Scenario: Disable and reload
+- **WHEN** the user disables the slash-command popup in General preferences and restarts the app
+- **THEN** the control remains disabled and automatic slash completion remains off
+
+#### Scenario: Older or invalid configuration
+- **WHEN** `slash_commands_enabled` is absent or contains a non-boolean TOML value
+- **THEN** the popup setting defaults to enabled and other valid preferences still load
+
+#### Scenario: Reset restores enabled
+- **WHEN** the user confirms Reset Preferences after disabling the popup
+- **THEN** the setting returns to enabled and that value is saved
+
+#### Scenario: Toggle preserves the document
+- **WHEN** the user changes the popup setting in either direction
+- **THEN** document text, version, selection, dirty state, undo/redo history, and shared derived-cache identities remain unchanged
+
+### Requirement: Preferences SHALL control the automatic block-grip popup
+
+General preferences SHALL expose a localized **Show block menu on grip click** toggle using the active theme. The toggle SHALL default to enabled, apply immediately and persist across application restarts. Disabling it SHALL close an open grip-invoked popup while retaining its selected block range. The toggle SHALL control only automatic grip-click opening; block selection, Shift extension, dragging, explicit right-click and keyboard context menus SHALL remain available. Changing this preference SHALL NOT change document source, version, dirty state, undo history or shared derived-cache identity.
+
+#### Scenario: Enabled preference opens the popup
+- **WHEN** the preference is enabled and the user completes an ordinary click on an eligible Visual Edit block grip
+- **THEN** the clicked block is selected and its compact quick-settings popup opens
+
+#### Scenario: Disabled preference retains selection-only clicks
+- **WHEN** the preference is disabled and the user clicks a block grip
+- **THEN** the block is selected without opening a popup
+- **AND** Shift-click extension, dragging, right-click and keyboard context menus retain their documented behavior
+
+#### Scenario: Toggling off dismisses only the automatic popup
+- **WHEN** the user disables the preference while a grip popup is open
+- **THEN** that popup closes immediately and its established block selection remains
+- **AND** document source, version, dirty state, history and shared derived caches remain unchanged
+
+### Requirement: Block-grip popup preference SHALL persist safely
+
+The editor SHALL persist the automatic block-grip popup preference as the boolean `block_handle_menu` in `config.toml`. Missing or non-boolean values SHALL fall back to enabled without preventing startup or losing unrelated valid preferences. Reset Preferences SHALL restore enabled.
+
+#### Scenario: Old configuration enables the popup
+- **WHEN** an existing configuration omits `block_handle_menu`
+- **THEN** automatic grip-click popups are enabled
+
+#### Scenario: Invalid configuration falls back safely
+- **WHEN** `block_handle_menu` contains a string, number or other non-boolean value
+- **THEN** automatic grip-click popups default to enabled and unrelated valid preferences are honored
+
+#### Scenario: Disabled value round-trips
+- **WHEN** the user disables automatic grip-click popups and restarts the editor
+- **THEN** the preference and its General-tab control remain disabled
+
+#### Scenario: Reset restores enabled
+- **WHEN** the user resets preferences after disabling automatic grip-click popups
+- **THEN** automatic grip-click popups are enabled again

@@ -162,6 +162,7 @@ echo 'AppImage permissions OK: AppRun and directories are world-executable, file
         Where-Object { $_.Directory.Name -eq "marknice-workspace" })
     if (-not $manifests) { throw "Packaged MarkNice workspace manifest not found in $Format output" }
     foreach ($manifest in $manifests) {
+        & (Join-Path $PSScriptRoot "verify-examples.ps1") -PackagedRoot (Join-Path $manifest.Directory.Parent.FullName "examples")
         Invoke-Native "Packaged workspace verification" {
             cargo run --release -p wechat-workspace --bin verify-bundle -- $manifest.Directory.FullName
         }

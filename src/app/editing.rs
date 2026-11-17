@@ -262,35 +262,50 @@ fn visual_block_transform(block: &VisualBlock) -> Option<BlockTransform> {
     }
 }
 
-pub(super) fn block_menu_root_index_for_transform(transform: BlockTransform) -> usize {
-    match transform {
-        BlockTransform::Text | BlockTransform::Heading(_) => 0,
-        BlockTransform::BulletedList | BlockTransform::NumberedList | BlockTransform::TaskList => 1,
-        BlockTransform::Quote => 2,
-        BlockTransform::CodeBlock => 3,
-        BlockTransform::Divider => 4,
-        BlockTransform::Table => 5,
+fn block_menu_insertion_range(
+    tab: &EditorTab,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+) -> Option<Range<usize>> {
+    let (_, block) = validate_block_target(tab.document.version(), blocks, target).ok()?;
+    if matches!(block.kind, VisualBlockKind::Whitespace) {
+        let caret = tab.cursor_offset();
+        return markion::block_edit::empty_paragraph_range(tab.document.text(), block, caret)
+            .map(|_| caret..caret);
     }
-}
-
-fn block_menu_submenu_current_index(
-    submenu: BlockMenuSubmenu,
-    presentation: BlockMenuPresentation,
-) -> usize {
-    submenu
-        .items()
-        .iter()
-        .position(|item| match item {
-            BlockMenuItem::Transform(transform) => presentation.current == Some(*transform),
-            BlockMenuItem::ImageWidth(width) => presentation
-                .image
-                .is_some_and(|image| image.width_percent == *width),
-            BlockMenuItem::ImageAlignment(alignment) => presentation
-                .image
-                .is_some_and(|image| image.alignment == *alignment),
-            _ => false,
+    if block.source_island.is_some()
+        || block.editor.is_some()
+        || !matches!(
+            block.kind,
+            VisualBlockKind::Paragraph
+                | VisualBlockKind::Heading { .. }
+                | VisualBlockKind::ListItem { .. }
+                | VisualBlockKind::BlockQuote
+                | VisualBlockKind::DefinitionTerm
+                | VisualBlockKind::DefinitionDetail
+                | VisualBlockKind::FootnoteDefinition { .. }
+        )
+    {
+        return None;
+    }
+    if let Some(selection) = visual_selection_format_target_for_block(tab, blocks, target) {
+        return Some(selection.range);
+    }
+    let caret = tab.cursor_offset();
+    if tab.selected_range.is_empty()
+        && block.editable_runs.iter().any(|run| {
+            !run.conservative_fallback
+                && run.math.is_none()
+                && run.html_image.is_none()
+                && run.content_range.start <= caret
+                && caret <= run.content_range.end
         })
-        .unwrap_or(0)
+    {
+        return Some(caret..caret);
+    }
+    let authored = tab.document.text().get(block.source_range.clone())?;
+    let end = block.source_range.start + authored.trim_end_matches(['\r', '\n']).len();
+    Some(end..end)
 }
 
 pub(super) fn visual_selection_format_target_for_block(
@@ -299,13 +314,34 @@ pub(super) fn visual_selection_format_target_for_block(
     target: &BlockTarget,
 ) -> Option<VisualSelectionFormatTarget> {
     let selection = &tab.selected_range;
-    if selection.is_empty()
+    if selection.is_empty() {
+        return None;
+    }
+    let (_, block) = validate_block_target(tab.document.version(), blocks, target).ok()?;
+    visual_inline_format_target(tab, block, selection)
+}
+
+fn visual_inline_format_target(
+    tab: &EditorTab,
+    block: &VisualBlock,
+    selection: &Range<usize>,
+) -> Option<VisualSelectionFormatTarget> {
+    if selection.start > selection.end
         || !tab.document.text().is_char_boundary(selection.start)
         || !tab.document.text().is_char_boundary(selection.end)
     {
         return None;
     }
-    let (_, block) = validate_block_target(tab.document.version(), blocks, target).ok()?;
+    if selection.is_empty()
+        && markion::block_edit::empty_paragraph_range(tab.document.text(), block, selection.start)
+            .is_some()
+    {
+        return Some(VisualSelectionFormatTarget {
+            document_version: tab.document.version(),
+            range: selection.clone(),
+            block_id: block.id,
+        });
+    }
     if let Some(VisualBlockEditor::Table { cells }) = block.editor.as_ref() {
         let inside_cell = cells.iter().any(|cell| {
             cell.field.source_range.start <= selection.start
@@ -410,13 +446,18 @@ impl MarkionApp {
                 .unwrap_or_else(|| point(px(24.), px(62.)));
         }
         let block = block_index.and_then(|index| tab.visual_list.bounds_for_item(index));
-        overlay::overlay_anchor(
-            tab.visual_caret_bounds,
-            block,
-            tab.visual_input_bounds,
-            placement,
-        )
-        .unwrap_or_else(|| point(px(24.), px(62.)))
+        // A context action can belong to a different block than the preserved caret.
+        let caret = tab.visual_caret_bounds.filter(|_| {
+            block_index.is_none_or(|index| {
+                visual_block_index_for_offset(
+                    &tab.document.visual_blocks_shared(),
+                    tab.cursor_offset(),
+                    tab.document.text().len(),
+                ) == Some(index)
+            })
+        });
+        overlay::overlay_anchor(caret, block, tab.visual_input_bounds, placement)
+            .unwrap_or_else(|| point(px(24.), px(62.)))
     }
 
     pub(super) fn selection_toolbar_presentation(
@@ -484,6 +525,11 @@ impl MarkionApp {
             SelectionFormatAction::InlineCode => self.apply_markdown_format(
                 MarkdownFormat::InlineCode,
                 self.tr(Msg::StatusFmtInlineCode).into(),
+                cx,
+            ),
+            SelectionFormatAction::Strikethrough => self.apply_markdown_format(
+                MarkdownFormat::Strikethrough,
+                self.tr(Msg::ItemStrikethrough).into(),
                 cx,
             ),
             SelectionFormatAction::Link => self.open_link_editor(cx),
@@ -621,10 +667,19 @@ impl MarkionApp {
             return;
         }
 
-        // Capture the query as the editor's replacement range. Opening and
-        // canceling settings must not first delete it or add an undo entry.
-        self.slash_commands = None;
         self.dismissed_slash_query = Some(query.clone());
+        self.open_palette_insertion_editor(query.source_range, command, None, cx);
+    }
+
+    fn open_palette_insertion_editor(
+        &mut self,
+        source_range: Range<usize>,
+        command: SlashPaletteCommand,
+        selected_text: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let document_version = self.active_tab().document.version();
+        self.slash_commands = None;
         self.emoji_completer = None;
         self.input_marked_len = 0;
         match command {
@@ -636,9 +691,10 @@ impl MarkionApp {
                     } else {
                         LinkEditorKind::Link
                     },
-                    source_range: query.source_range,
-                    document_version: query.document_version,
-                    label: slash_command_label(self.language, command),
+                    source_range,
+                    document_version,
+                    label: selected_text
+                        .unwrap_or_else(|| slash_command_label(self.language, command)),
                     url: String::new(),
                     title: String::new(),
                     field: LinkEditorField::Url,
@@ -649,12 +705,14 @@ impl MarkionApp {
             }
             SlashPaletteCommand::Formula => {
                 self.link_editor = None;
+                let draft = selected_text.unwrap_or_default();
+                let cursor = draft.len();
                 self.token_editor = Some(TokenEditorState {
                     kind: TokenEditorKind::MathPayload,
-                    source_range: query.source_range,
-                    document_version: query.document_version,
-                    draft: String::new(),
-                    cursor: 0,
+                    source_range,
+                    document_version,
+                    draft,
+                    cursor,
                     anchor: 0,
                 });
             }
@@ -835,33 +893,79 @@ impl MarkionApp {
             let blocks = tab.document.visual_blocks_shared();
             visual_selection_format_target_for_block(tab, &blocks, &target)
         };
-        let root_selected = if presentation.is_image {
-            0
-        } else {
-            presentation
-                .current
-                .map(block_menu_root_index_for_transform)
-                .unwrap_or(0)
-                + if selection_format.is_some() {
-                    BLOCK_MENU_SELECTION_FORMAT_ITEMS.len()
-                } else {
-                    0
-                }
-        };
-        let root_selected = root_selected + usize::from(selection_copy.is_some());
+        let insertion_range = block_menu_insertion_range(
+            self.active_tab(),
+            &self.active_tab().document.visual_blocks_shared(),
+            &target,
+        );
         self.visual_table_menu = None;
+        let context = self
+            .active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find(|block| block.id == target.block_id)
+            .map(|block| match block.kind {
+                VisualBlockKind::Table { .. } => BlockMenuContext::Table,
+                VisualBlockKind::Image { .. } => BlockMenuContext::Image,
+                VisualBlockKind::Heading { level } => BlockMenuContext::Heading(level),
+                VisualBlockKind::Paragraph => BlockMenuContext::Paragraph,
+                _ => BlockMenuContext::Block,
+            })
+            .unwrap_or(BlockMenuContext::Block);
+        let is_table = context == BlockMenuContext::Table;
+        let empty_paragraph_offset = self
+            .active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find(|block| block.id == target.block_id)
+            .and_then(|block| {
+                let tab = self.active_tab();
+                [
+                    tab.cursor_offset(),
+                    whitespace_navigation_offset(
+                        block.source_range.clone(),
+                        tab.document.text(),
+                        true,
+                    ),
+                ]
+                .into_iter()
+                .find(|offset| {
+                    markion::block_edit::empty_paragraph_range(tab.document.text(), block, *offset)
+                        .is_some()
+                })
+            });
         self.block_menu = Some(BlockMenuState {
             target,
             from_grip: false,
+            editing_context: None,
             scroll: ScrollHandle::new(),
             selection_copy,
             selection_format,
             is_image: presentation.is_image,
+            is_table,
+            image_object_selected: false,
             anchor,
-            root_selected,
-            submenu: None,
+            root_selected: 0,
             submenu_selected: 0,
+            submenu_focused: false,
+            suppressed_hover: None,
+            keyboard_navigation: false,
+            pointer_position: None,
+            submenu_scroll: ScrollHandle::new(),
+            geometry: Rc::new(RefCell::new(BlockMenuGeometry::default())),
+            context,
+            insertion_range,
+            empty_paragraph_offset,
+            table_context: None,
+            submenu: None,
         });
+        if let Some(menu) = &mut self.block_menu {
+            menu.root_selected = menu.root_items().iter().position(|item| {
+                matches!(item, BlockMenuItem::Transform(transform) if Some(*transform) == presentation.current)
+            }).unwrap_or(0);
+        }
         self.slash_commands = None;
         self.emoji_completer = None;
         self.preview_context_menu = None;
@@ -870,6 +974,241 @@ impl MarkionApp {
         self.tab_context_menu = None;
         self.active_menu = None;
         self.link_editor = None;
+        self.token_editor = None;
+        cx.notify();
+    }
+
+    pub(super) fn open_visual_edit_context_menu(
+        &mut self,
+        target: BlockTarget,
+        anchor: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let range = self.active_tab().safe_selected_range();
+        self.open_visual_edit_context_menu_at(target, anchor, Some(range), None, cx);
+    }
+
+    pub(super) fn open_visual_pointer_context_menu(
+        &mut self,
+        target: BlockTarget,
+        position: Point<Pixels>,
+        cell: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_visual_pointer_context_menu_with_source(target, position, cell, None, cx);
+    }
+
+    pub(super) fn open_visual_whitespace_context_menu(
+        &mut self,
+        target: BlockTarget,
+        position: Point<Pixels>,
+        source: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_visual_pointer_context_menu_with_source(target, position, None, Some(source), cx);
+    }
+
+    fn open_visual_pointer_context_menu_with_source(
+        &mut self,
+        target: BlockTarget,
+        position: Point<Pixels>,
+        cell: Option<(usize, usize)>,
+        source_override: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let Ok((index, block)) = validate_block_target(tab.document.version(), &blocks, &target)
+        else {
+            self.close_visual_block_menu(cx);
+            return;
+        };
+        let field = match (&block.editor, cell) {
+            (Some(VisualBlockEditor::Table { cells }), Some((row, column))) => cells
+                .iter()
+                .find(|cell| cell.row == row && cell.column == column)
+                .map(|cell| &cell.field),
+            _ => None,
+        };
+        let snapshot = tab
+            .visual_navigation_snapshots
+            .get(&index)
+            .filter(|snapshot| {
+                snapshot.document_version == tab.document.version()
+                    && tab.visual_navigation_snapshot_ids.get(&index) == Some(&block.id)
+            });
+        let source = if let Some(source) = source_override.filter(|source| {
+            *source >= block.source_range.start
+                && *source <= block.source_range.end
+                && tab.document.text().is_char_boundary(*source)
+        }) {
+            Some(source)
+        } else if let Some(field) = field {
+            snapshot
+                .and_then(|snapshot| {
+                    snapshot
+                        .for_source_range(&field.source_range)
+                        .source_for_position(position)
+                })
+                .or(Some(field.source_range.start))
+        } else if matches!(block.kind, VisualBlockKind::Whitespace) {
+            let metrics = self.typography_metrics();
+            tab.visual_list
+                .bounds_for_item(index)
+                .filter(|_| {
+                    tab.visual_list_blocks
+                        .get(index)
+                        .is_some_and(|row| row.id == block.id)
+                })
+                .map(|bounds| {
+                    whitespace_source_at_y(
+                        block.source_range.clone(),
+                        position.y - bounds.top(),
+                        tab.document.text(),
+                        metrics.paragraph_line_height,
+                        metrics.paragraph_spacing,
+                    )
+                })
+                .or_else(|| {
+                    Some(whitespace_navigation_offset(
+                        block.source_range.clone(),
+                        tab.document.text(),
+                        true,
+                    ))
+                })
+        } else {
+            snapshot
+                .and_then(|snapshot| snapshot.source_for_position(position))
+                .or_else(|| {
+                    block
+                        .editable_runs
+                        .first()
+                        .map(|run| run.content_range.start)
+                })
+        };
+        let cell = cell.or_else(|| match &block.editor {
+            Some(VisualBlockEditor::Table { cells }) => cells
+                .iter()
+                .find(|cell| {
+                    source.is_some_and(|source| {
+                        cell.field.source_range.start <= source
+                            && source <= cell.field.source_range.end
+                    })
+                })
+                .map(|cell| (cell.row, cell.column)),
+            _ => None,
+        });
+        let selected = tab.safe_selected_range();
+        let range = if !selected.is_empty() || tab.structured_selection.is_some() {
+            Some(selected)
+        } else {
+            source
+                .filter(|source| tab.document.text().is_char_boundary(*source))
+                .map(|source| source..source)
+        };
+        let empty_paragraph_offset = source.filter(|offset| {
+            markion::block_edit::empty_paragraph_range(tab.document.text(), block, *offset)
+                .is_some()
+        });
+        self.open_visual_edit_context_menu_at(target, position, range, cell, cx);
+        if let Some(offset) = empty_paragraph_offset
+            && let Some(menu) = &mut self.block_menu
+        {
+            menu.empty_paragraph_offset = Some(offset);
+        }
+    }
+
+    fn open_visual_edit_context_menu_at(
+        &mut self,
+        target: BlockTarget,
+        anchor: Point<Pixels>,
+        edit_range: Option<Range<usize>>,
+        cell: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_visual_block_menu(target, anchor, cx);
+        if self.block_menu.is_none() {
+            return;
+        }
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let context = EditorContextTarget {
+            document: self.active_document_target(),
+            selection: tab.safe_selected_range(),
+            structured: tab.structured_selection.clone(),
+            edit_range,
+        };
+        let selection_format = if context.structured.is_none() {
+            context.edit_range.as_ref().and_then(|range| {
+                blocks
+                    .iter()
+                    .find_map(|block| visual_inline_format_target(tab, block, range))
+            })
+        } else {
+            None
+        };
+        let insertion_range = selection_format.as_ref().map(|target| target.range.clone());
+        let table_context = self.block_menu.as_ref().and_then(|menu| {
+            let block = blocks
+                .iter()
+                .find(|block| block.id == menu.target.block_id)?;
+            let cell = cell.or_else(|| {
+                if let Some(markion::selection::SelectionState::Cells(selection)) =
+                    &context.structured
+                    && selection.target.block_id == block.id
+                {
+                    return Some(selection.head);
+                }
+                let VisualBlockEditor::Table { cells } = block.editor.as_ref()? else {
+                    return None;
+                };
+                cells
+                    .iter()
+                    .find(|cell| {
+                        cell.field.source_range.start <= tab.cursor_offset()
+                            && tab.cursor_offset() <= cell.field.source_range.end
+                    })
+                    .map(|cell| (cell.row, cell.column))
+            })?;
+            let row = VisualTableAxisTarget::for_block(
+                tab.document.version(),
+                block,
+                VisualTableAxis::Row(cell.0),
+            )?;
+            let column = VisualTableAxisTarget::for_block(
+                tab.document.version(),
+                block,
+                VisualTableAxis::Column(cell.1),
+            )?;
+            let alignment = match &block.kind {
+                VisualBlockKind::Table { alignments, .. } => alignments
+                    .get(cell.1)
+                    .copied()
+                    .unwrap_or(TableAlignment::Default),
+                _ => TableAlignment::Default,
+            };
+            Some(VisualTableContext {
+                row,
+                column,
+                alignment,
+            })
+        });
+        let clicked_id = self.block_menu.as_ref().unwrap().target.block_id;
+        let image_object_selected = self.block_menu.as_ref().is_some_and(|menu| menu.is_image)
+            && blocks.iter().find(|block| block.id == clicked_id).is_some_and(|block| {
+                let range = match &block.editor { Some(VisualBlockEditor::Image { payload, .. }) => &payload.source_range, _ => &block.source_range };
+                (context.structured.is_none() && context.selection == *range)
+                    || matches!(&context.structured, Some(markion::selection::SelectionState::Blocks(selection))
+                        if selection.anchor == selection.head && selection.head == clicked_id
+                            && selection.indices(&tab.document, &blocks).is_ok())
+            });
+        let menu = self.block_menu.as_mut().unwrap();
+        menu.editing_context = Some(context);
+        menu.image_object_selected = image_object_selected;
+        menu.selection_format = selection_format;
+        menu.insertion_range = insertion_range;
+        menu.table_context = table_context;
+        menu.root_selected = 0;
         cx.notify();
     }
 
@@ -889,9 +1228,6 @@ impl MarkionApp {
         else {
             return;
         };
-        if !block_can_transform_at(&blocks, index) {
-            return;
-        }
         let target = BlockTarget::from_block(tab.document.version(), &blocks[index]);
         let anchor = tab
             .visual_caret_bounds
@@ -901,7 +1237,7 @@ impl MarkionApp {
                     .map(|bounds| point(bounds.left() + px(12.), bounds.top() + px(12.)))
             });
         if let Some(anchor) = anchor {
-            self.open_visual_block_menu(target, anchor, cx);
+            self.open_visual_edit_context_menu(target, anchor, cx);
         }
     }
 
@@ -932,15 +1268,39 @@ impl MarkionApp {
     }
 
     pub(super) fn block_menu_presentation(&self) -> Option<BlockMenuPresentation> {
-        self.block_menu
-            .as_ref()
-            .and_then(|menu| self.block_menu_presentation_for_target(&menu.target))
+        let menu = self.block_menu.as_ref()?;
+        if self.active_tab().is_image() {
+            return None;
+        }
+        if let Some(context) = &menu.editing_context
+            && context.document != self.active_document_target()
+        {
+            return None;
+        }
+        let mut presentation = self.block_menu_presentation_for_target(&menu.target)?;
+        if menu.editing_context.is_some() {
+            presentation.editing_context = true;
+            presentation.can_insert_inline = menu.insertion_range.is_some();
+            presentation.can_paste = menu
+                .editing_context
+                .as_ref()
+                .is_some_and(|target| target.edit_range.is_some() || target.structured.is_some());
+            presentation.table_context = menu.table_context;
+            presentation.can_edit_selection = menu
+                .editing_context
+                .as_ref()
+                .is_some_and(|target| !target.selection.is_empty() || target.structured.is_some());
+        }
+        Some(presentation)
     }
 
     fn block_menu_presentation_for_target(
         &self,
         target: &BlockTarget,
     ) -> Option<BlockMenuPresentation> {
+        if self.active_tab().is_image() {
+            return None;
+        }
         let tab = self.active_tab();
         let blocks = tab.document.visual_blocks_shared();
         let (index, block) = validate_block_target(tab.document.version(), &blocks, target).ok()?;
@@ -961,10 +1321,25 @@ impl MarkionApp {
             None
         };
         let can_duplicate_or_delete = block_can_reorder_at(&blocks, index);
+        let is_empty_paragraph = matches!(block.kind, VisualBlockKind::Whitespace)
+            && block.quote_context.is_none()
+            && block.list_depth == 0
+            && tab.document.text()[block.source_range.clone()]
+                .trim()
+                .is_empty();
         Some(BlockMenuPresentation {
             current,
             is_image,
             image,
+            can_insert_inline: block_menu_insertion_range(tab, &blocks, target).is_some(),
+            can_insert_block: can_duplicate_or_delete || is_empty_paragraph,
+            is_empty_paragraph,
+            can_paste: block_menu_insertion_range(tab, &blocks, target).is_some(),
+            table_context: None,
+            editing_context: false,
+            // The block catalog only includes Copy Selection after capture;
+            // its handler revalidates the range before copying.
+            can_edit_selection: true,
             can_duplicate_or_delete,
             can_move_up: can_duplicate_or_delete
                 && adjacent_reorder_target(
@@ -987,47 +1362,119 @@ impl MarkionApp {
         })
     }
 
+    pub(super) fn open_visual_context_submenu(
+        &mut self,
+        page: BlockContextSubmenu,
+        focus: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(presentation) = self.block_menu_presentation() else {
+            return;
+        };
+        let Some(menu) = &mut self.block_menu else {
+            return;
+        };
+        if !menu.root_items().contains(&BlockMenuItem::Submenu(page))
+            || !presentation.item_enabled(BlockMenuItem::Submenu(page))
+        {
+            return;
+        }
+        if !focus && menu.suppressed_hover == Some(page) {
+            return;
+        }
+        menu.suppressed_hover = None;
+        if focus {
+            menu.keyboard_navigation = true;
+        }
+        let changed = menu.submenu != Some(page) || menu.submenu_focused != focus;
+        if menu.submenu != Some(page) {
+            menu.submenu = Some(page);
+            menu.geometry.borrow_mut().child = None;
+            menu.submenu_selected = menu
+                .submenu_items(page)
+                .iter()
+                .position(|item| presentation.item_enabled(*item))
+                .unwrap_or(0);
+            menu.submenu_scroll.set_offset(point(px(0.), px(0.)));
+        }
+        menu.submenu_focused = focus;
+        if focus {
+            menu.scroll_selection_into_view();
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn hover_visual_context_item(
+        &mut self,
+        index: usize,
+        page: Option<BlockContextSubmenu>,
+        position: Point<Pixels>,
+        moved: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = &mut self.block_menu else {
+            return;
+        };
+        if page.is_some() && page != menu.submenu {
+            return;
+        }
+        if menu.keyboard_navigation
+            && (menu.pointer_position == Some(position)
+                || (!moved && menu.pointer_position.is_none()))
+        {
+            return;
+        }
+        if menu.pointer_position != Some(position) {
+            menu.suppressed_hover = None;
+        }
+        menu.pointer_position = Some(position);
+        menu.keyboard_navigation = false;
+        self.select_visual_block_menu_root(index, page, cx);
+    }
+
     pub(super) fn select_visual_block_menu_root(
         &mut self,
         index: usize,
-        open_submenu: bool,
+        page: Option<BlockContextSubmenu>,
         cx: &mut Context<Self>,
     ) {
-        let presentation = self.block_menu_presentation();
-        let Some(state) = &mut self.block_menu else {
+        let Some(menu) = &mut self.block_menu else {
             return;
         };
-        let items = state.root_items();
-        state.root_selected = index.min(items.len().saturating_sub(1));
-        let submenu = match items.get(state.root_selected).copied() {
-            Some(BlockMenuItem::Submenu(submenu)) if open_submenu => Some(submenu),
-            _ => None,
-        };
-        if state.submenu != submenu {
-            state.submenu = submenu;
-            state.submenu_selected = state
-                .submenu
-                .and_then(|submenu| {
-                    presentation
-                        .map(|presentation| block_menu_submenu_current_index(submenu, presentation))
-                })
-                .unwrap_or(0);
+        if let Some(page) = page {
+            if menu.submenu != Some(page) {
+                return;
+            }
+            let index = index.min(menu.submenu_items(page).len().saturating_sub(1));
+            let changed = menu.submenu_selected != index || !menu.submenu_focused;
+            menu.submenu_selected = index;
+            menu.submenu_focused = true;
+            if changed {
+                cx.notify();
+            }
+            return;
         }
-        cx.notify();
-    }
-
-    pub(super) fn select_visual_block_menu_submenu(
-        &mut self,
-        submenu: BlockMenuSubmenu,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(state) = &mut self.block_menu else {
-            return;
-        };
-        state.submenu = Some(submenu);
-        state.submenu_selected = index.min(submenu.items().len().saturating_sub(1));
-        cx.notify();
+        let items = menu.root_items();
+        let index = index.min(items.len().saturating_sub(1));
+        let changed = menu.root_selected != index || menu.submenu_focused;
+        menu.root_selected = index;
+        menu.submenu_focused = false;
+        if let Some(BlockMenuItem::Submenu(page)) = items.get(index) {
+            self.open_visual_context_submenu(*page, false, cx);
+        } else {
+            let menu = self.block_menu.as_mut().unwrap();
+            menu.suppressed_hover = None;
+            let closed = menu.submenu.take().is_some();
+            menu.geometry.borrow_mut().child = None;
+            if closed {
+                cx.notify();
+            }
+        }
+        if changed {
+            cx.notify();
+        }
     }
 
     pub(super) fn move_visual_block_menu_selection(
@@ -1038,114 +1485,128 @@ impl MarkionApp {
         let Some(presentation) = self.block_menu_presentation() else {
             return false;
         };
-        let Some(state) = &mut self.block_menu else {
+        let Some(menu) = &mut self.block_menu else {
             return false;
         };
-        if let Some(submenu) = state.submenu {
-            let items = submenu.items();
-            if items.is_empty() {
-                return true;
+        menu.keyboard_navigation = true;
+        let items = menu.visible_items();
+        if items.is_empty() {
+            return true;
+        }
+        let mut selected = menu.selected_index();
+        for _ in 0..items.len() {
+            selected = if forward {
+                (selected + 1) % items.len()
+            } else {
+                (selected + items.len() - 1) % items.len()
+            };
+            if presentation.item_enabled(items[selected]) {
+                break;
             }
-            for _ in 0..items.len() {
-                state.submenu_selected = if forward {
-                    (state.submenu_selected + 1) % items.len()
-                } else if state.submenu_selected == 0 {
-                    items.len() - 1
-                } else {
-                    state.submenu_selected - 1
-                };
-                if presentation.item_enabled(items[state.submenu_selected]) {
-                    break;
-                }
-            }
+        }
+        if menu.submenu_focused {
+            menu.submenu_selected = selected;
         } else {
-            let items = state.root_items();
-            if items.is_empty() {
-                return true;
-            }
-            for _ in 0..items.len() {
-                state.root_selected = if forward {
-                    (state.root_selected + 1) % items.len()
-                } else if state.root_selected == 0 {
-                    items.len() - 1
-                } else {
-                    state.root_selected - 1
-                };
-                if presentation.item_enabled(items[state.root_selected]) {
-                    break;
-                }
+            menu.root_selected = selected;
+        }
+        menu.scroll_selection_into_view();
+        if !menu.submenu_focused {
+            let page = match items[selected] {
+                BlockMenuItem::Submenu(page) => Some(page),
+                _ => None,
+            };
+            if let Some(page) = page {
+                self.open_visual_context_submenu(page, false, cx);
+            } else {
+                let menu = self.block_menu.as_mut().unwrap();
+                menu.submenu = None;
+                menu.geometry.borrow_mut().child = None;
             }
         }
-        state.scroll_selection_into_view();
         cx.notify();
         true
     }
 
-    pub(super) fn enter_visual_block_menu_submenu(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(state) = self.block_menu.clone() else {
-            return false;
-        };
-        if state.from_grip && !state.is_image {
-            return self.move_visual_block_menu_selection(true, cx);
-        }
-        if state.submenu.is_some() {
-            return true;
-        }
-        let Some(BlockMenuItem::Submenu(submenu)) =
-            state.root_items().get(state.root_selected).copied()
-        else {
-            return true;
-        };
-        let presentation = self.block_menu_presentation();
-        let Some(state) = &mut self.block_menu else {
-            return false;
-        };
-        state.submenu = Some(submenu);
-        state.submenu_selected = presentation
-            .map(|presentation| block_menu_submenu_current_index(submenu, presentation))
-            .unwrap_or(0);
-        cx.notify();
-        true
-    }
-
-    pub(super) fn leave_visual_block_menu_submenu(&mut self, cx: &mut Context<Self>) -> bool {
-        if self
+    pub(super) fn next_visual_block_menu_control(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(BlockMenuItem::Submenu(page)) = self
             .block_menu
             .as_ref()
-            .is_some_and(|menu| menu.from_grip && !menu.is_image)
+            .filter(|menu| !menu.submenu_focused)
+            .and_then(|menu| menu.root_items().get(menu.root_selected).copied())
         {
-            return self.move_visual_block_menu_selection(false, cx);
+            self.open_visual_context_submenu(page, true, cx);
+            return true;
         }
-        let Some(state) = &mut self.block_menu else {
+        self.move_visual_block_menu_selection(true, cx)
+    }
+
+    pub(super) fn previous_visual_block_menu_control(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.back_visual_context_submenu(cx) {
+            return true;
+        }
+        self.move_visual_block_menu_selection(false, cx)
+    }
+
+    pub(super) fn back_visual_context_submenu(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(menu) = &mut self.block_menu else {
             return false;
         };
-        if state.submenu.take().is_some() {
-            cx.notify();
-        }
+        let Some(page) = menu.submenu.take() else {
+            return false;
+        };
+        menu.suppressed_hover = Some(page);
+        menu.keyboard_navigation = true;
+        menu.submenu_focused = false;
+        menu.geometry.borrow_mut().child = None;
+        menu.root_selected = menu
+            .root_items()
+            .iter()
+            .position(|item| *item == BlockMenuItem::Submenu(page))
+            .unwrap_or(0);
+        menu.scroll_selection_into_view();
+        cx.notify();
         true
     }
 
-    pub(super) fn confirm_visual_block_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(state) = self.block_menu.clone() else {
+    pub(super) fn confirm_visual_block_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(menu) = &self.block_menu else {
             return false;
         };
-        let item = if let Some(submenu) = state.submenu {
-            submenu.items().get(state.submenu_selected).copied()
-        } else {
-            state.root_items().get(state.root_selected).copied()
-        };
-        let Some(item) = item else {
-            return true;
-        };
-        self.activate_visual_block_menu_item(item, cx);
+        if let Some(item) = menu.visible_items().get(menu.selected_index()).copied() {
+            self.activate_visual_block_menu_item(item, Some(window), cx);
+        }
         true
     }
 
     pub(super) fn activate_visual_block_menu_item(
         &mut self,
         item: BlockMenuItem,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
+        let Some(menu) = self.block_menu.as_ref() else {
+            return;
+        };
+        if let Some(captured) = &menu.editing_context {
+            let tab = self.active_tab();
+            if self.active_document_target() != captured.document
+                || tab.safe_selected_range() != captured.selection
+                || tab.structured_selection != captured.structured
+            {
+                self.close_visual_block_menu(cx);
+                return;
+            }
+        }
+        if !menu.offers(item) {
+            return;
+        }
+        if item == BlockMenuItem::Paste && window.is_none() {
+            return;
+        }
         let Some(presentation) = self.block_menu_presentation() else {
             self.close_visual_block_menu(cx);
             return;
@@ -1156,7 +1617,148 @@ impl MarkionApp {
         let Some(target) = self.block_menu.as_ref().map(|menu| menu.target.clone()) else {
             return;
         };
+        if presentation.editing_context {
+            let editing_action = match item {
+                BlockMenuItem::CopySelection => Some(EditorContextAction::Copy),
+                BlockMenuItem::CutSelection => Some(EditorContextAction::Cut),
+                BlockMenuItem::Paste => Some(EditorContextAction::Paste),
+                BlockMenuItem::SelectAll => Some(EditorContextAction::SelectAll),
+                _ => None,
+            };
+            if editing_action.is_some() || item == BlockMenuItem::DeleteSelection {
+                if item == BlockMenuItem::CopySelection {
+                    self.dismiss_visual_block_menu();
+                    self.copy_editor_selection(cx);
+                    cx.notify();
+                    return;
+                }
+                let Some(window) = window else { return };
+                let edit_range = self
+                    .block_menu
+                    .as_ref()
+                    .and_then(|menu| menu.editing_context.as_ref())
+                    .and_then(|context| {
+                        context
+                            .structured
+                            .is_none()
+                            .then(|| context.edit_range.clone())
+                            .flatten()
+                    });
+                self.dismiss_visual_block_menu();
+                if matches!(item, BlockMenuItem::Paste | BlockMenuItem::SelectAll)
+                    && let Some(range) = edit_range
+                {
+                    self.active_tab_mut().selected_range = range;
+                    self.active_tab_mut().selection_reversed = false;
+                }
+                // Menu commands own the document selection, independently of
+                // input focus retained by search, rename or tree controls.
+                let search_focus = self.search_focus.take();
+                let control_focus = self.search_control_focus.take();
+                let tree_focus = std::mem::take(&mut self.file_tree_query_focused);
+                let pending_name = self.pending_name_input.take();
+                match editing_action {
+                    Some(EditorContextAction::Cut) => {
+                        self.active_tab_mut().pending_text_edit_intent =
+                            Some(UndoCaptureKind::Atomic);
+                        self.cut(&Cut, window, cx);
+                        self.active_tab_mut().finish_undo_capture();
+                    }
+                    Some(EditorContextAction::Paste) => self.paste(&Paste, window, cx),
+                    Some(EditorContextAction::SelectAll) => self.select_all(&SelectAll, window, cx),
+                    _ => {
+                        self.active_tab_mut().pending_text_edit_intent =
+                            Some(UndoCaptureKind::Atomic);
+                        self.delete(&Delete, window, cx);
+                        self.active_tab_mut().finish_undo_capture();
+                    }
+                }
+                self.search_focus = search_focus;
+                self.search_control_focus = control_focus;
+                self.file_tree_query_focused = tree_focus;
+                self.pending_name_input = pending_name;
+                cx.notify();
+                return;
+            }
+        }
         match item {
+            BlockMenuItem::Submenu(page) => self.open_visual_context_submenu(page, true, cx),
+            BlockMenuItem::Insert(SlashPaletteCommand::Block(_))
+            | BlockMenuItem::InsertCallout(_) => {
+                let tab = self.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                let empty_offset = self
+                    .block_menu
+                    .as_ref()
+                    .and_then(|menu| menu.empty_paragraph_offset);
+                let edit = match item {
+                    BlockMenuItem::Insert(SlashPaletteCommand::Block(command)) => {
+                        if let Some(offset) = empty_offset {
+                            markion::block_edit::insert_block_at_empty_paragraph(
+                                tab.document.text(),
+                                tab.document.version(),
+                                &blocks,
+                                &target,
+                                offset,
+                                command,
+                            )
+                        } else {
+                            markion::block_edit::insert_block_below(
+                                tab.document.text(),
+                                tab.document.version(),
+                                &blocks,
+                                &target,
+                                command,
+                            )
+                        }
+                    }
+                    BlockMenuItem::InsertCallout(kind) => {
+                        if let Some(offset) = empty_offset {
+                            markion::block_edit::insert_callout_at_empty_paragraph(
+                                tab.document.text(),
+                                tab.document.version(),
+                                &blocks,
+                                &target,
+                                offset,
+                                kind,
+                            )
+                        } else {
+                            markion::block_edit::insert_callout_below(
+                                tab.document.text(),
+                                tab.document.version(),
+                                &blocks,
+                                &target,
+                                kind,
+                            )
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                match edit {
+                    Ok(edit) => self.apply_exact_block_edit(
+                        edit,
+                        t(self.language, Msg::StatusEditing).into(),
+                        cx,
+                    ),
+                    Err(error) => self.report_block_edit_error(error, cx),
+                }
+            }
+            table_item @ (BlockMenuItem::TableRow(item) | BlockMenuItem::TableColumn(item)) => {
+                let Some(table) = presentation.table_context else {
+                    return;
+                };
+                let axis = if matches!(table_item, BlockMenuItem::TableColumn(_)) {
+                    table.column
+                } else {
+                    table.row
+                };
+                if let Some(edit) = visual_table_menu_item_edit(axis, item, table.alignment) {
+                    self.apply_visual_table_structure_edit(axis, edit, cx);
+                }
+            }
+            BlockMenuItem::CutSelection
+            | BlockMenuItem::DeleteSelection
+            | BlockMenuItem::SelectAll => {}
             BlockMenuItem::CopyBlock | BlockMenuItem::CutBlock => {
                 self.copy_visual_block(target, item == BlockMenuItem::CutBlock, cx);
             }
@@ -1195,8 +1797,23 @@ impl MarkionApp {
                     .and_then(|menu| menu.selection_format.clone());
                 let selection_is_current = selection_format.as_ref().is_some_and(|captured| {
                     let tab = self.active_tab();
+                    if !presentation.editing_context && tab.safe_selected_range() != captured.range
+                    {
+                        return false;
+                    }
                     let blocks = tab.document.visual_blocks_shared();
-                    visual_selection_format_target_for_block(tab, &blocks, &target).as_ref()
+                    let format_target = blocks
+                        .iter()
+                        .find(|block| block.id == captured.block_id)
+                        .map(|block| BlockTarget::from_block(tab.document.version(), block));
+                    format_target
+                        .and_then(|target| {
+                            let (_, block) =
+                                validate_block_target(tab.document.version(), &blocks, &target)
+                                    .ok()?;
+                            visual_inline_format_target(tab, block, &captured.range)
+                        })
+                        .as_ref()
                         == Some(captured)
                 });
                 if !selection_is_current {
@@ -1204,6 +1821,37 @@ impl MarkionApp {
                     return;
                 }
                 self.dismiss_visual_block_menu();
+                let range = selection_format.unwrap().range;
+                if presentation.editing_context {
+                    if action == SelectionFormatAction::Link {
+                        let label = (!range.is_empty())
+                            .then(|| self.active_tab().document.text()[range.clone()].to_string());
+                        self.open_palette_insertion_editor(
+                            range,
+                            SlashPaletteCommand::Link,
+                            label,
+                            cx,
+                        );
+                    } else {
+                        let (format, label) = match action {
+                            SelectionFormatAction::Bold => {
+                                (MarkdownFormat::Bold, Msg::StatusFmtBold)
+                            }
+                            SelectionFormatAction::Italic => {
+                                (MarkdownFormat::Italic, Msg::StatusFmtItalic)
+                            }
+                            SelectionFormatAction::InlineCode => {
+                                (MarkdownFormat::InlineCode, Msg::StatusFmtInlineCode)
+                            }
+                            SelectionFormatAction::Strikethrough => {
+                                (MarkdownFormat::Strikethrough, Msg::ItemStrikethrough)
+                            }
+                            SelectionFormatAction::Link => unreachable!(),
+                        };
+                        self.apply_markdown_format_at(range, format, self.tr(label).into(), cx);
+                    }
+                    return;
+                }
                 match action {
                     SelectionFormatAction::Bold => self.apply_markdown_format(
                         MarkdownFormat::Bold,
@@ -1220,16 +1868,61 @@ impl MarkionApp {
                         self.tr(Msg::StatusFmtInlineCode).into(),
                         cx,
                     ),
+                    SelectionFormatAction::Strikethrough => self.apply_markdown_format(
+                        MarkdownFormat::Strikethrough,
+                        self.tr(Msg::ItemStrikethrough).into(),
+                        cx,
+                    ),
                     SelectionFormatAction::Link => self.open_link_editor(cx),
                 }
             }
-            BlockMenuItem::Submenu(submenu) => {
-                if let Some(state) = &mut self.block_menu {
-                    state.submenu = Some(submenu);
-                    state.submenu_selected =
-                        block_menu_submenu_current_index(submenu, presentation);
+            BlockMenuItem::Insert(_) | BlockMenuItem::Paste => {
+                let tab = self.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                let range = if presentation.editing_context {
+                    self.block_menu
+                        .as_ref()
+                        .and_then(|menu| menu.editing_context.as_ref())
+                        .and_then(|context| {
+                            let range = context.edit_range.as_ref()?;
+                            blocks
+                                .iter()
+                                .find_map(|block| visual_inline_format_target(tab, block, range))
+                                .map(|target| target.range)
+                        })
+                } else {
+                    block_menu_insertion_range(tab, &blocks, &target)
+                };
+                let captured = self
+                    .block_menu
+                    .as_ref()
+                    .and_then(|menu| menu.insertion_range.clone());
+                let Some(range) = range.filter(|range| Some(range) == captured.as_ref()) else {
+                    self.close_visual_block_menu(cx);
+                    return;
+                };
+                let label =
+                    (!range.is_empty()).then(|| tab.document.text()[range.clone()].to_string());
+                self.dismiss_visual_block_menu();
+                if item == BlockMenuItem::Paste {
+                    let tab = self.active_tab_mut();
+                    tab.selected_range = range;
+                    tab.selection_reversed = false;
+                    tab.structured_selection = None;
+                    // Contextual Paste owns a document range even if a search
+                    // or rename field retains its separate input focus.
+                    let search_focus = self.search_focus.take();
+                    let control_focus = self.search_control_focus.take();
+                    let tree_focus = std::mem::take(&mut self.file_tree_query_focused);
+                    let pending_name = self.pending_name_input.take();
+                    self.paste(&Paste, window.unwrap(), cx);
+                    self.search_focus = search_focus;
+                    self.search_control_focus = control_focus;
+                    self.file_tree_query_focused = tree_focus;
+                    self.pending_name_input = pending_name;
+                } else if let BlockMenuItem::Insert(command) = item {
+                    self.open_palette_insertion_editor(range, command, label, cx);
                 }
-                cx.notify();
             }
             BlockMenuItem::Transform(transform) => {
                 self.transform_visual_block(target, transform, cx)
@@ -1259,15 +1952,8 @@ impl MarkionApp {
                     cx,
                 );
             }
-            BlockMenuItem::ImageEditSource => {
-                self.dismiss_visual_block_menu();
-                self.move_to(target.source_range.start, cx);
-                let tab = self.active_tab_mut();
-                tab.retain_visual_source_expand = Some(target.block_id);
-                if !tab.is_visual_source_expanded(target.block_id) {
-                    tab.toggle_visual_source_expanded(target.block_id);
-                }
-                cx.notify();
+            BlockMenuItem::ImageProperties => {
+                self.open_image_properties_at(target.source_range.start, cx);
             }
             BlockMenuItem::ImageReplace => {
                 self.dismiss_visual_block_menu();
@@ -1303,6 +1989,42 @@ impl MarkionApp {
         let block_menu = self.block_menu.take().is_some();
         let table_menu = self.visual_table_menu.take().is_some();
         block_menu || table_menu
+    }
+
+    /// A tab/document transition ends every overlay bound to the old source.
+    pub(super) fn dismiss_document_editing_overlays(&mut self) {
+        self.dismiss_visual_block_menu();
+        self.preview_context_menu = None;
+        self.editor_context_menu = None;
+        self.tab_context_menu = None;
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
+        self.link_editor = None;
+        self.token_editor = None;
+        self.selection_toolbar_suppressed = true;
+    }
+
+    /// Stored UI targets may outlive their document even when an unusual
+    /// transition bypasses normal dismissal. Never render them speculatively.
+    pub(super) fn discard_stale_visual_menus(&mut self) {
+        let editable =
+            !self.active_tab().is_image() && matches!(self.view_mode, ViewMode::VisualEdit);
+        if self.block_menu.is_some() && (!editable || self.block_menu_presentation().is_none()) {
+            self.block_menu = None;
+        }
+        if self.visual_table_menu.is_some_and(|menu| {
+            !editable
+                || revalidate_visual_table_axis_target(
+                    menu.target,
+                    self.active_tab().document.version(),
+                    &self.active_tab().document.visual_blocks_shared(),
+                )
+                .is_none()
+        }) {
+            self.visual_table_menu = None;
+        }
     }
 
     pub(super) fn open_visual_table_menu(
@@ -2121,6 +2843,17 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        let range = self.active_tab().selected_range.clone();
+        self.apply_markdown_format_at(range, format, status, cx);
+    }
+
+    fn apply_markdown_format_at(
+        &mut self,
+        range: Range<usize>,
+        format: MarkdownFormat,
+        status: SharedString,
+        cx: &mut Context<Self>,
+    ) {
         tracing::debug!(
             target: "markion::editing",
             op = "apply_markdown_format",
@@ -2130,8 +2863,7 @@ impl MarkionApp {
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let tab = self.active_tab_mut();
-        let selected_range = tab.selected_range.clone();
-        let new_range = tab.document.apply_markdown_format(selected_range, format);
+        let new_range = tab.document.apply_markdown_format(range, format);
         let changed = tab.document.text() != snapshot.document.text();
         if changed {
             self.commit_undo_snapshot(snapshot);
@@ -2397,7 +3129,7 @@ impl MarkionApp {
             .unwrap_or("")
             .to_string();
         if editor.kind == TokenEditorKind::MathPayload
-            && current.starts_with(['/', '、'])
+            && !current.trim().starts_with('$')
             && editor.draft.trim().is_empty()
         {
             self.token_editor = Some(editor);
@@ -2769,13 +3501,54 @@ impl MarkionApp {
                 cx.notify();
                 return;
             }
-            LinkEditorKind::Link | LinkEditorKind::Image => {}
+            LinkEditorKind::Link | LinkEditorKind::Image | LinkEditorKind::ImageProperties => {}
         }
         if self.active_tab().document.version() != editor.document_version
             || editor.source_range.end > self.active_tab().document.text().len()
         {
             self.status = p0_t(self.language, P0Msg::LinkStale).into();
             cx.notify();
+            return;
+        }
+        if editor.kind == LinkEditorKind::ImageProperties {
+            let occurrence = self
+                .active_tab()
+                .document
+                .image_occurrence_scan()
+                .occurrences
+                .into_iter()
+                .find(|image| image.full_range == editor.source_range);
+            let Some(image) = occurrence else {
+                cx.notify();
+                return;
+            };
+            let original_label = self.image_property_label(&image);
+            let original_title = self.image_property_title(&image);
+            if original_label == editor.label
+                && image.semantic_url == editor.url
+                && original_title == editor.title
+            {
+                cx.notify();
+                return;
+            }
+            if original_label == editor.label && original_title == editor.title {
+                let edit = image.replacement(editor.url.trim());
+                self.replace_exact_inline_target(edit.range, edit.replacement, cx);
+                self.move_to(image.full_range.start, cx);
+                return;
+            }
+            let presentation =
+                inline_image_at(self.active_tab().document.text(), editor.source_range.start)
+                    .and_then(|image| image.presentation);
+            let replacement = serialize_inline_image(
+                &editor.label,
+                editor.url.trim(),
+                (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+                presentation,
+            );
+            let start = editor.source_range.start;
+            self.replace_exact_inline_target(editor.source_range, replacement, cx);
+            self.move_to(start, cx);
             return;
         }
         if editor.kind == LinkEditorKind::Image {
@@ -2982,6 +3755,75 @@ impl MarkionApp {
         .detach();
     }
 
+    fn image_property_label(&self, image: &markion::ImageOccurrence) -> String {
+        self.active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find_map(|block| {
+                if let VisualBlockKind::Image { alt, .. } = &block.kind
+                    && block.source_range.contains(&image.full_range.start)
+                {
+                    Some(alt.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| image.authored_alt.clone())
+    }
+
+    fn image_property_title(&self, image: &markion::ImageOccurrence) -> String {
+        inline_image_at(self.active_tab().document.text(), image.full_range.start)
+            .map(|target| target.title.unwrap_or_default())
+            .unwrap_or_else(|| image.resolved_title.clone().unwrap_or_default())
+    }
+
+    pub(super) fn open_image_properties_at(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let scan = self.active_tab().document.image_occurrence_scan();
+        let image = scan
+            .occurrences
+            .iter()
+            .find(|image| image.full_range.start <= offset && offset < image.full_range.end);
+        let image = image
+            .or_else(|| {
+                let blocks = self.active_tab().document.visual_blocks_shared();
+                let block = blocks.iter().find(|block| {
+                    matches!(block.kind, VisualBlockKind::Image { .. })
+                        && block.source_range.contains(&offset)
+                })?;
+                let mut images = scan.occurrences.iter().filter(|image| {
+                    image.full_range.start >= block.source_range.start
+                        && image.full_range.end <= block.source_range.end
+                });
+                let image = images.next()?;
+                images.next().is_none().then_some(image)
+            })
+            .cloned();
+        let Some(image) = image else {
+            self.close_visual_block_menu(cx);
+            return;
+        };
+        self.dismiss_visual_block_menu();
+        self.token_editor = None;
+        self.input_marked_len = 0;
+        let cursor = image.semantic_url.len();
+        let label = self.image_property_label(&image);
+        let title = self.image_property_title(&image);
+        self.link_editor = Some(LinkEditorState {
+            kind: LinkEditorKind::ImageProperties,
+            source_range: image.full_range,
+            document_version: self.active_tab().document.version(),
+            label,
+            url: image.semantic_url,
+            title,
+            field: LinkEditorField::Url,
+            html_anchor: false,
+            cursor,
+            anchor: cursor,
+        });
+        cx.notify();
+    }
+
     pub(super) fn insert_image_url(
         &mut self,
         _: &InsertImageUrl,
@@ -3022,7 +3864,9 @@ impl MarkionApp {
                 self.image_preferences.picgo_core.launcher_args.join("\n")
             }
             LinkEditorKind::ImageCommandArguments => self.image_preferences.command.args.join("\n"),
-            LinkEditorKind::Link | LinkEditorKind::Image => return,
+            LinkEditorKind::Link | LinkEditorKind::Image | LinkEditorKind::ImageProperties => {
+                return;
+            }
         };
         self.link_editor = Some(LinkEditorState {
             kind,
@@ -4006,7 +4850,7 @@ impl MarkionApp {
             self.move_name_caret(NameCaretMove::Left, cx);
             return;
         }
-        if self.leave_visual_block_menu_submenu(cx) {
+        if self.previous_visual_block_menu_control(cx) {
             return;
         }
         let (is_empty, start) = {
@@ -4050,7 +4894,7 @@ impl MarkionApp {
             self.move_name_caret(NameCaretMove::Right, cx);
             return;
         }
-        if self.enter_visual_block_menu_submenu(cx) {
+        if self.next_visual_block_menu_control(cx) {
             return;
         }
         let (is_empty, end) = {
@@ -4497,7 +5341,7 @@ impl MarkionApp {
             self.find_next(&FindNext, _window, cx);
             return;
         }
-        if self.confirm_visual_block_menu(cx) {
+        if self.confirm_visual_block_menu(_window, cx) {
             return;
         }
         // When the inline name prompt is open, Enter commits the name instead
@@ -4518,6 +5362,34 @@ impl MarkionApp {
         if self.confirm_selected_emoji(cx) {
             return;
         }
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(markion::selection::SelectionState::Blocks(selection)) =
+                self.active_tab().structured_selection.as_ref()
+        {
+            let tab = self.active_tab();
+            let blocks = tab.document.visual_blocks_shared();
+            if let Ok(_indices) = selection.indices(&tab.document, &blocks)
+                && selection.anchor == selection.head
+                && let Some(block) = blocks.iter().find(|block| block.id == selection.head)
+                && matches!(block.kind, VisualBlockKind::Image { .. })
+            {
+                let target = BlockTarget::from_block(tab.document.version(), block);
+                match markion::block_edit::add_paragraph_below(
+                    tab.document.text(),
+                    tab.document.version(),
+                    &blocks,
+                    &target,
+                ) {
+                    Ok(edit) => self.apply_exact_block_edit(
+                        edit,
+                        t(self.language, Msg::StatusEditing).into(),
+                        cx,
+                    ),
+                    Err(error) => self.report_block_edit_error(error, cx),
+                }
+                return;
+            }
+        }
         let selected = self.active_tab().selected_range.clone();
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(field) = self.active_tab().document.visual_editor_field_at(&selected)
@@ -4533,14 +5405,38 @@ impl MarkionApp {
                     }
                     return;
                 }
+                VisualEditorFieldKind::ImageSource => {
+                    let blocks = self.active_tab().document.visual_blocks_shared();
+                    if let Some(block) = blocks.iter().find(|block| {
+                        matches!(block.kind, VisualBlockKind::Image { .. })
+                            && block.source_range.start <= selected.start
+                            && selected.end <= block.source_range.end
+                    }) {
+                        let target =
+                            BlockTarget::from_block(self.active_tab().document.version(), block);
+                        match markion::block_edit::add_paragraph_below(
+                            self.active_tab().document.text(),
+                            self.active_tab().document.version(),
+                            &blocks,
+                            &target,
+                        ) {
+                            Ok(edit) => self.apply_exact_block_edit(
+                                edit,
+                                t(self.language, Msg::StatusEditing).into(),
+                                cx,
+                            ),
+                            Err(error) => self.report_block_edit_error(error, cx),
+                        }
+                    }
+                    return;
+                }
                 // Indented code gets its line indentation from the field's
                 // replacement sanitizer, like a pasted line break.
                 VisualEditorFieldKind::CodePayload
                 | VisualEditorFieldKind::IndentedCodePayload
                 | VisualEditorFieldKind::MathPayload
                 | VisualEditorFieldKind::HtmlSource
-                | VisualEditorFieldKind::FrontMatterSource
-                | VisualEditorFieldKind::ImageSource => {
+                | VisualEditorFieldKind::FrontMatterSource => {
                     self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
                     self.replace_text_in_range(None, "\n", _window, cx);
                     self.active_tab_mut().finish_undo_capture();
@@ -4626,6 +5522,21 @@ impl MarkionApp {
     ) {
         if self.search_visible && self.search_control_focus.is_some() {
             self.find_previous(&FindPrevious, window, cx);
+        } else if matches!(self.view_mode, ViewMode::VisualEdit)
+            && !self.has_text_input_focus()
+            && self.slash_commands.is_none()
+            && self.emoji_completer.is_none()
+            && self.block_menu.is_none()
+            && self.active_tab().structured_selection.is_none()
+            && self
+                .active_tab()
+                .document
+                .visual_editor_field_at(&self.active_tab().safe_selected_range())
+                .is_some_and(|field| matches!(field.kind, VisualEditorFieldKind::TableCell { .. }))
+        {
+            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
+            self.replace_text_in_range(None, "<br>", window, cx);
+            self.active_tab_mut().finish_undo_capture();
         } else {
             self.insert_newline(&InsertNewline, window, cx);
         }
@@ -5926,6 +6837,39 @@ impl MarkionApp {
     }
 
     pub(super) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        if matches!(self.view_mode, ViewMode::VisualEdit) {
+            let image = self
+                .active_tab()
+                .document
+                .visual_blocks_shared()
+                .iter()
+                .find(|block| {
+                    matches!(block.kind, VisualBlockKind::Image { .. })
+                        && block.source_range.contains(&offset)
+                })
+                .map(|block| BlockTarget::from_block(self.active_tab().document.version(), block));
+            if let Some(target) = image {
+                let blocks = self.active_tab().document.visual_blocks_shared();
+                let Some(block) = blocks.iter().find(|block| block.id == target.block_id) else {
+                    return;
+                };
+                let range = match &block.editor {
+                    Some(VisualBlockEditor::Image { payload, .. }) => payload.source_range.clone(),
+                    _ => block.source_range.clone(),
+                };
+                let tab = self.active_tab_mut();
+                tab.finish_undo_capture();
+                tab.selected_range = range;
+                tab.structured_selection = None;
+                tab.selection_reversed = false;
+                tab.marked_range = None;
+                tab.clear_visual_caret_affinity();
+                tab.clear_visual_navigation_intent();
+                self.selection_toolbar_suppressed = true;
+                cx.notify();
+                return;
+            }
+        }
         self.reveal_visual_code_at(offset);
         let tab = self.active_tab_mut();
         tab.structured_selection = None;
@@ -6079,10 +7023,26 @@ impl MarkionApp {
     }
 
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(range) = self
+                .active_tab()
+                .document
+                .visual_table_break_range_at(offset, false)
+        {
+            return range.start;
+        }
         self.active_tab().previous_boundary(offset)
     }
 
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(range) = self
+                .active_tab()
+                .document
+                .visual_table_break_range_at(offset, true)
+        {
+            return range.end;
+        }
         self.active_tab().next_boundary(offset)
     }
 }

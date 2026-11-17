@@ -15,9 +15,9 @@ Markion is a native desktop Markdown editor built with Rust and GPUI. It combine
 
 [AI Agent guide](docs/ai-agent-guide.md) — Bring your own key or use local models; AI is off by default.
 
-## Project progress (2026-11-13)
+## Project progress (2026-11-17)
 
-Visual Edit now supports block/subtree selection and movement, rectangular table editing, rich-text copy, and code folding. Local edits reuse unchanged visual regions; Windows input-frame and IME undo fixes have recorded native-input evidence. JSON/YAML/TOML documents use a source-only editor, and Linux Wayland windows provide client-side controls, rounded corners, and resize margins. See [project status](docs/project-status.md) for implementation, verification, and pending checks; [editing results](docs/fluent-editing-implementation.md) and [Windows real-input evidence](docs/verification/windows-native-input-2026-11-11.md) explain the measurement boundaries.
+Visual Edit now has compact block controls, hover flyouts, exact selection clipboard actions, table row/column menus, in-cell Shift+Enter breaks, and bounded image Properties. Slash completion has compact H1–H5 controls and an optional popup; emoji completion shares its styling and shows up to 36 candidates. The outline can remain on the left or become an independent resizable right panel alongside Files. **Help → Examples and Templates** reveals five offline guides and twelve reusable templates; copy the whole collection before editing. See [project status](docs/project-status.md), [examples](assets/examples/README.md), and the [release process](docs/release-process.md) for current behavior, evidence, and remaining checks.
 
 Find the published build at [latest stable release](https://github.com/willmove/markion/releases/latest); version preparation and publication follow the [release process](docs/release-process.md).
 
@@ -39,14 +39,14 @@ Windows releases are unsigned; SmartScreen may require **More info → Run anywa
 xattr -cr /Applications/Markion.app
 ```
 
-Repeat the `xattr` command after each browser-downloaded update of a non-notarized build; prefix `sudo` if your install location requires it. The download itself is intact either way — each release ships a `sha256sums.txt` you can verify against.
+Repeat the `xattr` command after each browser-downloaded update of a non-notarized build; prefix `sudo` if your install location requires it. The download itself is intact either way — the OSS mirror provides `sha256sums.txt`, and GitHub asset metadata also exposes SHA-256 digests.
 
 ## Editing modes
 
-Markion has four view modes. Split Preview is the default.
+Markion has four view modes. Visual Edit is the default.
 
 - **Edit** — a focused raw Markdown source editor.
-- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, registered diagrams (Mermaid), inline image fields, and GFM table cells have exact direct editors. YAML front matter has a collapsible header editor, indented code has an indentation-preserving payload editor, and proven HTML entities render decoded text. Multiline/malformed images and byte-ambiguous syntax keep exact source-backed editing paths, tracked in the [Visual Edit WYSIWYG coverage matrix and roadmap](docs/visual-editing-quality.md). A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. Markdown delimiters auto-pair by default, `:shortcode` opens emoji completion, task-list boxes can be toggled directly, and leaving a heading, list, task, or quote row returns it immediately to its rendered form. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, registered diagrams (Mermaid), image Properties fields, and GFM table cells have exact direct editors. YAML front matter has a collapsible header editor, indented code has an indentation-preserving payload editor, and proven HTML entities render decoded text. Multiline/malformed images and byte-ambiguous syntax keep exact source-backed editing paths, tracked in the [Visual Edit WYSIWYG coverage matrix and roadmap](docs/visual-editing-quality.md). A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; selection-contextual formatting commands and a visual link editor perform one exact source-backed mutation per action. Markdown delimiters auto-pair by default, `:shortcode` opens emoji completion, task-list boxes can be toggled directly, and leaving a heading, list, task, or quote row returns it immediately to its rendered form. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
 - **Split Preview** — source and rendered preview side by side, with an optional source-mapped Sync scroll setting that keeps both panes on the same document location rather than scrolling by whole-document percentage.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
@@ -65,7 +65,7 @@ The **View → Source/Split Preview** command (`Ctrl+/` on Windows/Linux, `Cmd+/
 - Right-click file-tree menus provide open, open in new tab, create file/folder, rename, delete, reveal in the system file manager, filter, and refresh actions where applicable.
 - Files and folders can be named inline; deleting a non-empty folder requires an additional confirmation.
 - Supported Markdown, plain-text, and data/config files can be dragged from the operating-system file manager into Markion. Files and folders can also be moved within the file tree by dragging onto a folder or the workspace root; context menus offer Copy Path and Copy Relative Path.
-- The Files and Outline panels are toggleable, and sidebar and split-pane dividers are draggable.
+- Files stays on the left. Preferences → General can place Outline on the left or in an independent right panel; the right outline and Files have separate visibility controls and draggable widths. The layout is restored from preferences/session state.
 - The Outline panel lists the document's heading hierarchy as a collapsible tree: each heading with descendants exposes a disclosure control, outlines start fully expanded, folding is per-document and session-only, and the section containing the cursor is highlighted. Clicking a heading jumps to its source position—or to the rendered heading in Read mode.
 - The native window title shows the active file name after the Markion brand, with a `*` suffix when the document has unsaved changes. The status bar keeps save state and transient operation feedback, plus a compact persistent context: the active document's character and word count, the caret's one-based line and column when an editing surface is present, and the current Git branch when the document or workspace belongs to a repository.
 - **Backup and Sync** keeps a notes folder protected at a sync location with a one-click **Sync Now** flow and plain-language status. Git powers the safe version history underneath; technical controls stay in Advanced Git details. See the [Backup and Sync guide](docs/git-sync.md) for setup, authentication, conflicts, and recovery.
@@ -120,6 +120,10 @@ heading_menu_max_level = 5        # 5 or 6
 sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" or "outline"
+outline_position = "left"        # "left" or "right"
+outline_visible = true
+block_handle_menu = true
+slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
 
@@ -258,9 +262,9 @@ Markion is available under the [MIT License](LICENSE).
 
 Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器。它在一个轻量应用中提供流畅的源码编辑、基于源码的可视化编辑、实时预览、工作区工具与多格式导出。Markdown 始终是文档的标准数据格式——不使用 Electron、Tauri 或 WebView。
 
-## 项目进展（2026-11-13）
+## 项目进展（2026-11-17）
 
-可视化编辑现已支持多块与列表子树选择和移动、表格矩形编辑、富文本复制及代码折叠。局部输入会复用未变化的可视化区域；Windows 输入后帧调度与 IME 撤销修复已有原生输入记录。JSON/YAML/TOML 使用纯源码编辑界面，Linux Wayland 窗口已有客户端按钮、圆角和缩放边缘。[项目进展](docs/project-status.md)区分实现、验证和待验收事项；[编辑实施结果](docs/fluent-editing-implementation.md)与[Windows 真实输入证据](docs/verification/windows-native-input-2026-11-11.md)说明测量范围。
+可视化编辑现已提供紧凑块操作、悬停子菜单、精确选区剪贴板操作、表格行列菜单、单元格 Shift+Enter 换行及有界图片属性编辑。斜杠补全采用 H1–H5 紧凑控件，可在偏好设置中关闭自动弹出；emoji 补全统一外观，最多显示 36 个候选。大纲可放在左侧，或作为可独立缩放的右侧面板与文件树同时显示。通过**帮助 → 样例与模板**可找到 5 篇离线指南与 12 份模板；编辑前请先复制整个目录。实现、证据与待验证项见[项目进展](docs/project-status.md)、[样例索引](assets/examples/README.md)和[发布流程](docs/release-process.md)。
 
 已发布版本见[最新稳定版](https://github.com/willmove/markion/releases/latest)；版本准备与发布按[发布流程](docs/release-process.md)执行。
 
@@ -286,10 +290,10 @@ xattr -cr /Applications/Markion.app
 
 ## 编辑模式
 
-Markion 提供四种视图模式，默认使用分栏预览。
+Markion 提供四种视图模式，默认使用可视化编辑。
 
 - **编辑** — 专注的原始 Markdown 源码编辑器。
-- **可视化编辑** — 所见即所得优先、基于源码的编辑界面。正文保持渲染并渐进显示必要语法；普通围栏代码正文、块级数学公式、已注册的图表（Mermaid）、行内图片字段与 GFM 表格单元格提供精确的直接编辑器。YAML 前言已有可折叠文档头，缩进代码已有保留缩进的正文编辑器，已证明的 HTML 实体可显示解码文字。多行或畸形图片以及字节映射不明确的语法保留精确源码编辑路径，并登记在[可视化编辑 WYSIWYG 覆盖矩阵与路线图](docs/visual-editing-quality.md)中等待逐步关闭。斜杠命令面板与紧凑的右键块级菜单提供精确的块级转换（段落、标题、列表、引用、围栏代码、分隔线、表格）、复制、上移/下移、源码安全的拖拽重排与删除；选区上下文格式工具栏与可视化链接编辑器对每次操作执行一次精确的源码变更。Markdown 分隔符默认自动配对，输入 `:shortcode` 会打开 emoji 补全，任务列表复选框可直接点击切换；光标离开标题、列表、任务或引用行后，该行会立即恢复为渲染形态。它不是独立的富文本文档模型——底层 Markdown 始终是唯一数据源。
+- **可视化编辑** — 所见即所得优先、基于源码的编辑界面。正文保持渲染并渐进显示必要语法；普通围栏代码正文、块级数学公式、已注册的图表（Mermaid）、图片属性字段与 GFM 表格单元格提供精确的直接编辑器。YAML 前言已有可折叠文档头，缩进代码已有保留缩进的正文编辑器，已证明的 HTML 实体可显示解码文字。多行或畸形图片以及字节映射不明确的语法保留精确源码编辑路径，并登记在[可视化编辑 WYSIWYG 覆盖矩阵与路线图](docs/visual-editing-quality.md)中等待逐步关闭。斜杠命令面板与紧凑的右键块级菜单提供精确的块级转换（段落、标题、列表、引用、围栏代码、分隔线、表格）、复制、上移/下移、源码安全的拖拽重排与删除；选区上下文格式命令与可视化链接编辑器对每次操作执行一次精确的源码变更。Markdown 分隔符默认自动配对，输入 `:shortcode` 会打开 emoji 补全，任务列表复选框可直接点击切换；光标离开标题、列表、任务或引用行后，该行会立即恢复为渲染形态。它不是独立的富文本文档模型——底层 Markdown 始终是唯一数据源。
 - **分栏预览** — 左右同时显示源码和渲染预览，可选择启用同步滚动：基于源码映射按文档位置对齐两个面板，而非按整篇滚动百分比同步。
 - **阅读** — 不可编辑的渲染视图，默认居中并限制为适合阅读的 860 px 最大宽度；启用“预览自适应宽度”后可使用整个面板。
 
@@ -308,7 +312,7 @@ Markion 提供四种视图模式，默认使用分栏预览。
 - 文件树右键菜单会根据目标提供打开、在新标签页打开、新建文件/文件夹、重命名、删除、在系统文件管理器中显示、筛选和刷新等操作。
 - 文件和文件夹可就地命名；删除非空文件夹需要二次确认。
 - 可从操作系统文件管理器拖入受支持的 Markdown、纯文本与数据文件。文件树内可将文件或文件夹拖到目标目录或工作区根目录移动；右键菜单可复制绝对路径或相对路径。
-- “文件”和“大纲”面板均可切换显示，侧边栏与分栏预览的分隔线可拖动调整。
+- 文件树始终位于左侧；在“偏好设置 → 通用”中可将大纲放在左侧，或设为独立右侧面板。右侧大纲与文件树可分别显示、隐藏和拖动调宽，布局会随偏好与会话恢复。
 - “大纲”面板以可折叠树形结构列出文档标题层级：含有下级标题的标题会显示展开/折叠控件，新打开的文档大纲默认完全展开，折叠状态按文档独立、仅作用于当前会话，并会高亮显示光标所在章节。点击标题会跳转到对应源码位置——在阅读模式下则跳转到对应的渲染标题。
 - 原生窗口标题在 Markion 品牌文字后显示当前打开的文件名，文档有未保存更改时会带 `*` 后缀。状态栏保留保存状态和瞬时操作反馈，并提供紧凑的持久上下文：当前文档的字符数与字数、在存在编辑界面时显示光标所在的行号与列号（从 1 开始），以及在文档或工作区属于 Git 仓库时显示当前分支名。
 - **备份与同步**通过一次点击的“立即同步”和清晰易懂的状态提示，将笔记文件夹安全地保存在同步位置。底层由 Git 提供可靠的版本历史，技术操作则收纳在“高级 Git 详情”中。设置、认证、冲突与恢复说明见[备份与同步指南](docs/git-sync.md)。
@@ -362,6 +366,10 @@ heading_menu_max_level = 5        # 5 或 6
 sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" 或 "outline"
+outline_position = "left"        # "left" or "right"
+outline_visible = true
+block_handle_menu = true
+slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
 
@@ -418,7 +426,7 @@ PDF 与 DOCX 默认使用内置导出器，无需外部转换工具。在导出�
 
 - 可视化编辑以所见即所得为默认呈现契约，同时保留标准 Markdown；暂无字节精确渲染证明的结构会以源码作为过渡编辑通道（登记在 [WYSIWYG 覆盖路线图](docs/visual-editing-quality.md)中），而不会猜测富文本树变更；仅当可证明存在不重叠的源码边界时才提供块级重排。剩余缺口包括多行或畸形图片，以及无法证明精确归属的残余源码范围；矩阵逐项追踪这些缺口。
 - 屏幕渲染（分栏/阅读预览与可视化编辑）使用内嵌的 RaTeX 引擎排版数学公式；LaTeX 导出保留原生 `$...$`/`$$...$$` 源码交给读者自己的工具链处理，内置 DOCX 导出器会把支持的公式转换为原生 Word 数学公式，不能转换的公式保留可读源码后备。
-- 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。单行引用式块图片保留图片显示与精确源码编辑；多行或畸形图片、无法解析的表格保留保守的源码路径。GFM 合并格、任意多块单元格和图片像素裁剪不受支持。
+- 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。图片在可视化编辑中保留图片或有界错误呈现，通过“图片属性”编辑可精确定位的实例；不确定形式和原始语法请在整篇源码模式中编辑，无法解析的表格保留保守的源码路径。GFM 合并格、任意多块单元格和图片像素裁剪不受支持。
 - 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本，或原地替换运行中的 Linux AppImage 并自动重启；macOS 包替换与 Linux `.deb`/`.rpm` 自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
 - 尚未实现完整的自定义主题安装界面。
 - 导出使用各格式的排版而非截取编辑器像素；超大文档尚未在所有派生子系统中使用 rope 或完全增量解析。

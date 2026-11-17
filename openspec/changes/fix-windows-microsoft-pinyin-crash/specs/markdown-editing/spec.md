@@ -38,3 +38,8 @@ Visual Edit SHALL treat the active IME marked range as first-class projection an
 - **THEN** Markion remains running and does not apply the undecodable payload to canonical source
 - **AND** the active marked range is cleared while canonical source and selection remain at their last successfully decoded state
 - **AND** direct keyboard input remains usable after the failed XIM connection is abandoned
+
+#### Scenario: Candidate-selection pauses preserve the same undo entry
+- **WHEN** the user pauses longer than the ordinary typing capture timeout while choosing candidates or between marked-text updates, then commits
+- **THEN** the whole live composition remains one undo entry
+- **AND** Undo restores pre-composition source rather than an intermediate Pinyin or marked-text value

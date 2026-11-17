@@ -1,7 +1,7 @@
 # memory-diagnostics Specification
 
 ## Purpose
-TBD - created by archiving change add-memory-diagnostics. Update Purpose after archive.
+Expose observational memory attribution and tab-lifecycle measurements without altering editor state or retaining the resources being measured.
 
 ## Requirements
 

@@ -291,7 +291,7 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/build-linux-rpm.sh
 
-      - name: Verify packaged MarkNice workspace (${{ matrix.verify_formats }})
+      - name: Verify packaged workspace and examples (${{ matrix.verify_formats }})
         shell: pwsh
         run: |
           '${{ matrix.verify_formats }}'.Split(',') | ForEach-Object {

@@ -44,6 +44,21 @@ An exactly mapped inline image SHALL expose source-backed editing for alt text, 
 - **THEN** the canonical image source records the setting in valid Markdown
 - **AND** preview and Visual Edit apply the new presentation without maintaining a second document model
 
+#### Scenario: Arbitrary width between 10 and 100 round-trips
+- **WHEN** an inline image title contains `{width=40 align=center}`
+- **THEN** preview and Visual Edit render the image at 40% of the content column
+- **AND** confirming a presentation edit preserves `width=40`
+
+#### Scenario: Drag-resize overlays then commits once
+- **WHEN** the user drags the resize handle of a focused exactly mapped inline image
+- **THEN** the on-screen width follows the pointer without changing document version
+- **AND** releasing the drag writes the new `{width=N align=…}` metadata as one undoable mutation
+
+#### Scenario: Reference-style images keep presentation controls hidden
+- **WHEN** the focused image is reference-style
+- **THEN** width presets and the drag-resize handle are not shown
+- **AND** the source is not rewritten into `![alt](url)` form
+
 ### Requirement: Missing image resources SHALL be explicit and recoverable
 When a local or remote image cannot be loaded or decoded, preview and Visual Edit SHALL show a concise localized failure message and a readable resource filename when available. Long filenames SHALL be bounded and ellipsized within the document column; raw system errors, full filesystem paths, signed queries, and embedded payloads SHALL NOT be rendered in the placeholder. Visual Edit SHALL retain source editing and replacement affordances for exact image ranges. Missing-resource presentation SHALL NOT mutate the document.
 

@@ -11,6 +11,7 @@ impl Focusable for MarkionApp {
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.note_visual_input_stage("render_begin");
+        self.discard_stale_visual_menus();
         // Dropdown anchors follow the rendered labels; re-measure only when
         // the interface language changed since the cached table was built.
         self.ensure_menu_dropdown_offsets(window);
@@ -322,6 +323,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::cycle_theme))
             .on_action(cx.listener(Self::show_shortcuts))
             .on_action(cx.listener(Self::show_markdown_reference))
+            .on_action(cx.listener(Self::show_examples_templates))
             .on_action(cx.listener(Self::show_preferences))
             .on_action(cx.listener(Self::reset_preferences))
             .on_action(cx.listener(Self::check_for_updates))
@@ -1441,15 +1443,14 @@ fn visual_block_menu_overlay_view(
     app: &MarkionApp,
     max_height: Pixels,
     cx: &mut Context<MarkionApp>,
-) -> impl IntoElement {
-    let menu = app
-        .block_menu
-        .as_ref()
-        .expect("block menu overlay is rendered only while its state is present");
+) -> AnyElement {
+    let Some(menu) = app.block_menu.as_ref() else {
+        return Empty.into_any_element();
+    };
     let state = menu.clone();
-    let presentation = app
-        .block_menu_presentation()
-        .expect("an open block menu keeps an exact live target");
+    let Some(presentation) = app.block_menu_presentation() else {
+        return Empty.into_any_element();
+    };
     let ai_controls = (app.ai_preferences.enabled
         && !app.active_tab().safe_selected_range().is_empty())
     .then(|| ai_panel::selection_actions(app, cx));
@@ -1469,6 +1470,7 @@ fn visual_block_menu_overlay_view(
                     cx,
                 )),
         )
+        .into_any_element()
 }
 
 fn selection_toolbar_view(
@@ -1541,22 +1543,7 @@ fn selection_toolbar_view(
 }
 
 fn completion_palette_panel(app: &MarkionApp, id: &'static str) -> Stateful<Div> {
-    let palette = app.palette();
-    div()
-        .id(id)
-        .debug_selector(move || id.to_string())
-        .w(px(248.))
-        .occlude()
-        .p_2()
-        .bg(palette.panel_bg)
-        .text_color(palette.text)
-        .border_1()
-        .border_color(palette.border)
-        .rounded_lg()
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap_2()
+    palette_controls::panel(app.palette(), id)
 }
 
 fn completion_palette_button(
@@ -1565,32 +1552,7 @@ fn completion_palette_button(
     selected: bool,
     label: SharedString,
 ) -> Stateful<Div> {
-    let palette = app.palette();
-    div()
-        .id(id)
-        .debug_selector(move || id.to_string())
-        .tooltip(move |_, cx| {
-            cx.new(|_| SearchTooltip {
-                palette,
-                label: label.clone(),
-            })
-            .into()
-        })
-        .h(px(30.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .rounded_md()
-        .text_size(px(15.))
-        .cursor_pointer()
-        .when(selected, |button| {
-            button.bg(palette.active_bg).text_color(palette.active_text)
-        })
-        .when(!selected, |button| {
-            button.hover(move |style| style.bg(palette.surface_bg))
-        })
+    palette_controls::button(app.palette(), id, selected, true, label).cursor_pointer()
 }
 
 fn completion_palette_anchor(app: &MarkionApp, source_offset: usize) -> Point<Pixels> {
@@ -2510,7 +2472,10 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl Into
         LinkEditorKind::PicGoCoreArguments | LinkEditorKind::ImageCommandArguments => {
             image_t(app.language, ImageMsg::Arguments)
         }
-        LinkEditorKind::Link | LinkEditorKind::Image => p0_t(app.language, P0Msg::LinkUrl),
+        LinkEditorKind::Link => p0_t(app.language, P0Msg::LinkUrl),
+        LinkEditorKind::Image | LinkEditorKind::ImageProperties => {
+            context_menu_t(app.language, ContextMenuMsg::ImageUrl)
+        }
     };
     let field = |id: &'static str,
                  label: &'static str,
@@ -2593,7 +2558,9 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl Into
                         .text_size(px(14.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(match editor.kind {
-                            LinkEditorKind::Image => image_t(app.language, ImageMsg::EditImage),
+                            LinkEditorKind::Image | LinkEditorKind::ImageProperties => {
+                                image_t(app.language, ImageMsg::EditImage)
+                            }
                             LinkEditorKind::ImageDirectory => {
                                 image_t(app.language, ImageMsg::Directory)
                             }
@@ -2628,7 +2595,14 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl Into
                 .when(!preference_editor, |panel| {
                     panel.child(field(
                         "link-editor-label",
-                        p0_t(app.language, P0Msg::LinkText),
+                        if matches!(
+                            editor.kind,
+                            LinkEditorKind::Image | LinkEditorKind::ImageProperties
+                        ) {
+                            context_menu_t(app.language, ContextMenuMsg::ImageAlt)
+                        } else {
+                            p0_t(app.language, P0Msg::LinkText)
+                        },
                         &editor.label,
                         LinkEditorField::Label,
                         editor.field == LinkEditorField::Label,
@@ -5999,6 +5973,11 @@ pub(super) fn active_menu_dropdown(
                 show_markdown_reference,
                 ShowMarkdownReference,
                 menu_shortcuts::SHOW_MARKDOWN_REFERENCE
+            ))
+            .child(action_item!(
+                Msg::ItemExamplesTemplates,
+                show_examples_templates,
+                ShowExamplesTemplates
             ))
             .child(action_item!(
                 Msg::ItemReportIssue,

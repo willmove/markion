@@ -67,6 +67,12 @@ The Preferences panel SHALL expose focus mode, typewriter mode, Preview adaptive
 - **WHEN** the user selects a different sidebar tab in the Preferences panel
 - **THEN** the app switches the sidebar to that tab, keeps the sidebar visible, and persists the new tab
 
+#### Scenario: Right layout exposes independent visibility controls
+- **WHEN** Outline position is Right
+- **THEN** the Files and Outline preference controls reflect and toggle their own pane visibility independently
+- **AND** both controls can be active simultaneously
+- **AND** the master Sidebar control hides both visible panes or shows both when neither is visible
+
 ### Requirement: Preferences panel SHALL expose document font family controls
 The Preferences panel SHALL include one control per font slot with localized labels consistent with the font-size controls: the **source** and **rendered** slots in the typography section, and the **code** slot in the Appearance tab's Code blocks section. Each control SHALL present a follow-theme state and an explicit-family state: in the follow-theme state it SHALL indicate that the theme (or default) font applies; activating the control SHALL present a selection list populated from the fonts installed on the machine, each entry rendered in its own family as live preview, plus a follow-theme entry that clears the stored preference. Selecting an entry SHALL apply it immediately to that document plane and persist it. The control SHALL show an advisory warning when the currently stored family (for example hand-edited into `config.toml`) is not among the installed fonts.
 
@@ -97,3 +103,7 @@ The Preferences panel SHALL include one control per font slot with localized lab
 #### Scenario: Controls follow language and theme
 - **WHEN** the active language or theme changes
 - **THEN** font control labels, states, and colors update on the next render
+
+#### Scenario: General tab does not host font-family slots
+- **WHEN** the Preferences panel General tab is open
+- **THEN** the source, rendered, and code font-family controls are not rendered in that tab

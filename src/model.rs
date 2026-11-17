@@ -1943,6 +1943,9 @@ pub struct VisualTableCell {
     pub row: usize,
     pub column: usize,
     pub field: VisualEditorField,
+    /// Parsed HTML breaks, excluding escaped text and inline code. Cached
+    /// with the document's visual derivation for source-backed cell layout.
+    pub hard_breaks: Vec<Range<usize>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2399,6 +2402,7 @@ pub enum MarkdownFormat {
     Bold,
     Italic,
     InlineCode,
+    Strikethrough,
     Link,
     Image,
     Paragraph,

@@ -34,6 +34,11 @@ The repository SHALL provide a root README whose English edition is followed by 
 - **THEN** affected capability purposes and OpenSpec project context describe the implemented state
 - **AND** no stable metadata contradicts the archived requirements
 
+#### Scenario: Document identity is described on the title bar
+- **WHEN** either README describes application chrome
+- **THEN** it states that the native window title shows the active file name after the Markion brand
+- **AND** it does not claim that the status bar is the document-identity surface
+
 ### Requirement: Local MarkNice workspace docs describe editor-skin parity, session-local Word import, and themed print-to-PDF
 The bilingual READMEs and the local MarkNice workspace guide SHALL describe the workspace editor chrome as tracking the pinned MarkNice editor section, SHALL document Import Word as a browser-session replacement that does not write back to Markion and that requires Copy Markdown or another explicit Markdown save to recover into Markion, and SHALL document Save as PDF as printing the current themed sanitized preview via the browser print dialog, distinct from Markion's native or Pandoc PDF export. Those documents SHALL continue to state that Markdown-file import, PDF import, image import, and sample-document actions are out of this workspace scope.
 

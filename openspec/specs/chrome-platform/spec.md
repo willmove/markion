@@ -180,7 +180,11 @@ The editor SHALL provide a focus mode that dims text outside the current paragra
 - **THEN** the choice is applied and persists across launches
 
 ### Requirement: Find and replace
-The editor SHALL provide a find/replace workflow supporting case-sensitive and regular-expression search, next/previous match navigation, current-match and total counts, replace current, and replace all. The Find / Replace controls SHALL render as a compact floating overlay near the upper-right of the editor workspace, above the editor/preview panes, without consuming layout height or shifting the main workspace. The overlay SHALL provide an explicit close control that hides the overlay, clears active match highlighting and search focus, and preserves the current query and replacement text for a later reopen. The overlay, fields, buttons, borders, hover states, and summary text SHALL use the active theme palette rather than hard-coded light colors.
+The editor SHALL provide a compact floating Find / Replace workflow supporting case-sensitive and regular-expression search, next/previous navigation with wraparound, current/total counts, replace current, and replace all. Find and Replace fields SHALL behave as single-line text editors with caret placement, selection, keyboard editing, clipboard operations, and IME composition. Their editable content SHALL contain only the user-provided query or replacement value: field identity or guidance SHALL be rendered outside the editable value and SHALL NOT be inserted as a fixed prefix or placeholder inside the field.
+
+In Edit, Split Preview, and Visual Edit modes, Find and Replace SHALL operate on canonical Markdown source. In Read mode, Find SHALL operate on user-visible selectable text in the rendered document rather than hidden Markdown syntax, and replacement SHALL be unavailable without changing the document or forcing a view-mode change. All matches that have a visible representation in the active search surface SHALL be highlighted with a subdued theme-aware treatment, the current match SHALL be visually distinct, and navigation SHALL reveal the current match in the visible source, Visual Edit, or Read pane.
+
+The Find / Replace controls SHALL remain a compact floating overlay near the upper-right of the editor workspace, above the editor/preview panes, without consuming layout height or shifting the main workspace. The overlay SHALL provide an explicit close control that hides the overlay, clears active match highlighting and search focus, and preserves the current query and replacement text for a later reopen. The overlay, fields, buttons, disabled states, borders, hover states, match highlights, validation feedback, and summary text SHALL use the active theme palette rather than hard-coded light colors.
 
 #### Scenario: Search with options
 - **WHEN** the user enters a query and toggles case-sensitive or regex
@@ -196,7 +200,7 @@ The editor SHALL provide a find/replace workflow supporting case-sensitive and r
 - **AND** the tab bar, editor pane, preview pane, and status bar keep their existing layout positions
 
 #### Scenario: Closing the overlay clears active highlights
-- **WHEN** the Find / Replace overlay is visible and the user activates its close control
+- **WHEN** the Find / Replace overlay is visible and the user activates its close control or presses Escape
 - **THEN** the overlay is hidden
 - **AND** active search focus is cleared
 - **AND** active match highlighting is cleared
@@ -204,12 +208,92 @@ The editor SHALL provide a find/replace workflow supporting case-sensitive and r
 
 #### Scenario: Find overlay follows active theme
 - **WHEN** the active theme changes
-- **THEN** the Find / Replace overlay surface, input fields, buttons, borders, hover states, and summary text render using the active theme palette
+- **THEN** the Find / Replace overlay surface, input fields, buttons, disabled states, borders, hover states, match highlights, validation feedback, and summary text render using the active theme palette
 - **AND** the overlay does not use hard-coded light-only chrome colors
 
 #### Scenario: Existing Find and Replace behavior is preserved
 - **WHEN** the user invokes existing Find / Replace shortcuts or actions
 - **THEN** query editing, regex and case-sensitive toggles, next/previous navigation, match counts, replace current, and replace all continue to behave as before
+
+#### Scenario: Field values exclude fixed prefixes and placeholders
+- **WHEN** the Find or Replace field is rendered with an empty or non-empty value
+- **THEN** its editable text contains exactly the user-provided value
+- **AND** localized field identity or guidance is presented outside the editable value
+- **AND** no fixed `Find`, `查找`, `Replace`, `替换`, colon, or placeholder text is prepended or inserted into the field value
+
+#### Scenario: Find and Replace fields provide normal single-line editing
+- **WHEN** a Find or Replace field has focus
+- **THEN** pointer placement, Left, Right, Home, End, shifted selection, Select All, Backspace, Delete, Cut, Copy, Paste, and IME composition operate on that field
+- **AND** those commands do not move, select, delete, or insert text in the document
+- **AND** typed line breaks are not inserted into either field or the document
+
+#### Scenario: Search keyboard commands navigate and move focus
+- **WHEN** a search field has focus and the user presses Enter or Shift+Enter
+- **THEN** the editor selects the next or previous match respectively, with wraparound
+- **WHEN** the user presses Tab or Shift+Tab within the overlay
+- **THEN** focus moves through the currently available Find / Replace controls without entering the document
+
+#### Scenario: Search with options initializes a current result
+- **WHEN** the user enters a non-empty valid query or toggles case-sensitive or regular-expression search
+- **THEN** matching is recomputed for the active mode's search domain
+- **AND** the first match at or after the current source caret or visible Read-mode position becomes current, wrapping to the first match when necessary
+- **AND** the overlay shows a current/total count that never reports `0/N` when matches exist
+
+#### Scenario: All matches and the current match are distinguishable
+- **WHEN** a valid query has one or more matches
+- **THEN** every match with a visible representation in the active search surface is highlighted
+- **AND** the current match uses a stronger, theme-aware treatment than the other matches
+- **AND** changing the current match updates the count and visible highlight without changing the query
+
+#### Scenario: Navigate, replace current, and replace all
+- **WHEN** the user steps to next/previous in an editable mode
+- **THEN** the current source-backed match is revealed and selected
+- **WHEN** the user replaces the current match
+- **THEN** the replacement is applied to that exact match and the next surviving match becomes current
+- **WHEN** the user replaces all matches
+- **THEN** all matching source ranges are replaced as one undoable operation and the match state is recomputed
+
+#### Scenario: Read mode searches visible rendered text
+- **WHEN** the active view mode is Read and the user enters a valid query
+- **THEN** Find matches selectable text visible in rendered headings, prose, lists, quotations, code, tables, footnotes, and visible HTML text
+- **AND** it does not match hidden Markdown punctuation, non-visible link destinations, image resource paths, or other source-only syntax
+- **AND** styling boundaries within one rendered textual run do not prevent a visible phrase from matching
+
+#### Scenario: Read mode navigation reveals and highlights the result
+- **WHEN** the user selects a Read-mode match through query initialization, next, or previous
+- **THEN** the virtualized preview scrolls to reveal the owning rendered block
+- **AND** the exact visible text range is highlighted as the current match
+- **AND** no hidden source editor scroll is used as the only navigation feedback
+
+#### Scenario: Replace remains unavailable in Read mode
+- **WHEN** the user invokes Replace while the active view mode is Read
+- **THEN** the Find overlay remains usable in Find-only form
+- **AND** localized guidance outside the editable field states that replacement is unavailable in Read mode
+- **AND** replacement controls cannot mutate the document
+- **AND** the stored replacement value is preserved for a later editable mode
+
+#### Scenario: Changing view mode refreshes the search domain
+- **WHEN** the Find / Replace overlay remains open while the user enters or leaves Read mode
+- **THEN** matches and highlights are recomputed for the new mode's search domain
+- **AND** the query, replacement value, case-sensitive option, regular-expression option, and requested Find/Replace form are preserved
+- **AND** replacement controls become unavailable in Read mode and available again on return to an editable mode
+
+#### Scenario: Invalid regular expression is actionable
+- **WHEN** regular-expression search is enabled and the query is invalid
+- **THEN** the overlay displays localized validation feedback and an invalid field treatment
+- **AND** stale match highlights and the current match are cleared
+- **AND** replace-current and replace-all actions are disabled
+- **AND** the document remains unchanged
+
+#### Scenario: Empty and no-match states clear stale actions
+- **WHEN** the query is empty or a valid query has no matches
+- **THEN** the overlay presents the corresponding localized state rather than a stale current/total count
+- **AND** stale highlights and the current match are cleared
+- **AND** replacement actions that require a match are disabled
+
+#### Scenario: Existing Find and Replace entry points are preserved
+- **WHEN** the user invokes existing Find, Replace, Find Next, or Find Previous menu items, shortcuts, or actions
+- **THEN** the overlay and navigation behavior follow this requirement without changing the configured shortcut bindings
 
 ### Requirement: Narrow-scope preferences with persistence and reset
 The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, sidebar tab, Heading menu depth (H1–H5 default, optional H1–H6), source-editor font size, rendered-document font size, rendered paragraph spacing, Markdown auto-pair, and menu-action shortcut overrides. The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section with `enabled` (default true), `silent_save` (default true), and `delay_secs` (default 5). The Preferences panel SHALL expose `silent_save` and `delay_secs`; `enabled` SHALL remain configurable only via the config file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable through this requirement's historical scope (font-family controls elsewhere do not expand this list).
@@ -533,7 +617,7 @@ The application chrome SHALL render the primary source editor, visual editor, an
 - **THEN** its active-theme background fill, border, padding, scrolling, resizing, drag-and-drop handling, and mode-specific visibility behave as before
 
 ### Requirement: Persistent document context in the status bar
-The status bar SHALL retain its existing document identity, save-state, and transient operation feedback while also presenting a compact persistent context for the active tab. The persistent context SHALL include the active document's character count and word count, the one-based line and column of the active caret whenever an editing surface is present, and the current named Git branch when a repository can be resolved from the active document or workspace. Character count SHALL count Unicode scalar values, including whitespace and line breaks, and word count SHALL count contiguous non-whitespace sequences. Every new user-visible label SHALL use the active interface language. Document metrics SHALL reuse per-document-version derived state, and Git discovery or refresh SHALL NOT perform filesystem or process work on the render or typing path.
+The status bar SHALL retain save-state and transient operation feedback while also presenting a compact persistent context for the active tab. The status-bar feedback region SHALL NOT repeat the Markion brand, the active tab's file name, or the unsaved-changes `*` suffix; those belong to the native window title. The persistent context SHALL include the active document's character count and word count, the one-based line and column of the active caret whenever an editing surface is present, and the current named Git branch when a repository can be resolved from the active document or workspace. Character count SHALL count Unicode scalar values, including whitespace and line breaks, and word count SHALL count contiguous non-whitespace sequences. Every new user-visible label SHALL use the active interface language. Document metrics SHALL reuse per-document-version derived state, and Git discovery or refresh SHALL NOT perform filesystem or process work on the render or typing path.
 
 #### Scenario: Active document metrics are always visible
 - **WHEN** an active tab displays a document in any view mode
@@ -594,6 +678,11 @@ The status bar SHALL retain its existing document identity, save-state, and tran
 - **THEN** the status bar reuses the cached document metrics for that version
 - **AND** caret-only changes do not invalidate Markdown-derived state
 - **AND** Git discovery and refresh do not run synchronously during rendering or text input
+
+#### Scenario: Status feedback omits document identity
+- **WHEN** the active tab has a file name and optional unsaved changes
+- **THEN** the status-bar feedback region does not contain the Markion brand prefix, that file name, or the unsaved-changes `*` suffix
+- **AND** save-state tokens and transient operation messages remain visible in that region
 
 ### Requirement: Help menu external links
 
@@ -1019,3 +1108,109 @@ Document overlay surfaces introduced or repositioned by `anchor-visual-editing-o
 - **WHEN** a document overlay opens in a dark theme or near a viewport edge
 - **THEN** text, borders, backgrounds, and controls remain readable and the overlay stays within the usable viewport
 - **AND** no document row is inserted, resized, or reparsed to accommodate the overlay
+
+### Requirement: Wayland windows request the decorations they can actually get
+On a Wayland session the main window SHALL request client-side decorations, so the decoration mode the platform reports reflects what the compositor applies instead of an unnegotiated default that no compositor honors. On every other backend the window SHALL keep the platform's default decoration request.
+
+#### Scenario: A compositor without the decoration protocol reports client-side decorations
+- **WHEN** the main window opens on a Wayland compositor that does not implement `zxdg_decoration_manager_v1` (GNOME/Mutter, as on Ubuntu 26.04)
+- **THEN** the window reports client-side decorations and the in-window window-control cluster renders
+
+#### Scenario: A compositor that grants server-side decorations keeps its native title bar
+- **WHEN** a Wayland compositor answers the client-side request by granting server-side decorations
+- **THEN** the window reports server-side decorations and the menu bar renders without the control cluster
+
+#### Scenario: Non-Wayland backends keep their default request
+- **WHEN** the main window opens on macOS, Windows, or an X11 session
+- **THEN** the decoration request is the platform default and the native title bar is unchanged
+
+### Requirement: Client-side window controls when the platform requires them
+The in-window menu bar SHALL render minimize, maximize/restore, and close controls at its right end, and SHALL expose its free space as a window drag region, whenever the platform reports client-side decorations. Platforms reporting server-side decorations (macOS, Windows, X11 sessions, Wayland compositors that grant server-side decorations) SHALL render the menu bar unchanged. Each control SHALL be rendered only when the platform reports it as supported, defaulting to rendered when the platform is silent. Minimize SHALL call the platform minimize API and maximize/restore SHALL toggle the platform maximize state; close SHALL follow the same unsaved-changes guard as the native window close. Window dragging SHALL begin only after the pointer moves past a small threshold from the press origin so clicks still complete, and a double-click on the drag region SHALL toggle maximize. All control tooltips SHALL be routed through the localization layer.
+
+#### Scenario: Controls appear when the compositor requires client-side decorations
+- **WHEN** the main window opens on a Wayland compositor that does not provide server-side decorations (GNOME/Mutter, as on Ubuntu 26.04)
+- **THEN** minimize, maximize/restore, and close buttons are visible at the right end of the in-window menu bar
+- **AND** the window can be moved by dragging the menu bar's free space and maximized/restored by double-clicking that space
+
+#### Scenario: Server-side-decorated platforms are unchanged
+- **WHEN** the platform reports server-side decorations (macOS, Windows, an X11 session, or a Wayland compositor that granted them)
+- **THEN** the in-window menu bar renders exactly as before, with no window-control cluster and no drag region
+
+#### Scenario: Unsupported controls are hidden
+- **WHEN** the platform reports a window control as unsupported
+- **THEN** that control is not rendered
+
+#### Scenario: Close honors unsaved changes
+- **WHEN** the user clicks the client-side close button while documents are dirty or a Git operation is running
+- **THEN** the existing unsaved-changes confirmation (or Git cancellation) flow runs, and the window closes only after the user saves or discards
+- **WHEN** no documents are dirty or closing was already allowed
+- **THEN** the window closes immediately with its layout persisted
+
+#### Scenario: Tooltips follow the interface language
+- **WHEN** the pointer hovers a window-control button
+- **THEN** its tooltip renders in the active interface language like every other chrome string
+
+### Requirement: Rounded window silhouette on client-side-decorated sessions
+Where the platform reports client-side decorations, the main window SHALL paint a rounded-rectangle silhouette with the desktop visible through the corner pixels, and SHALL outline that silhouette with a hairline border. The corner radius SHALL be zero when the window is maximized or fullscreen, and each edge the compositor reports as tiled SHALL have its two corners squared. Platforms reporting server-side decorations SHALL render the window chrome unchanged. No painted background or hover surface SHALL extend outside the rounded silhouette.
+
+#### Scenario: Floating window on GNOME Wayland is rounded
+- **WHEN** the main window is floating on a Wayland compositor that requires client-side decorations
+- **THEN** all four corners are rounded at the desktop's window radius and the desktop shows through the corner pixels
+- **AND** a hairline outline follows the rounded silhouette
+
+#### Scenario: Maximized and fullscreen windows are square
+- **WHEN** the window is maximized or fullscreen
+- **THEN** all four corners are square
+
+#### Scenario: Tiled edges are square
+- **WHEN** the compositor reports the window as tiled on one or more edges
+- **THEN** the corners on each tiled edge are square while the remaining corners stay rounded
+
+#### Scenario: Server-side-decorated platforms are unchanged
+- **WHEN** the platform reports server-side decorations (macOS, Windows, an X11 session, or a Wayland compositor that granted them)
+- **THEN** the window chrome renders exactly as before, with square client-painted backgrounds and no outline overlay
+
+#### Scenario: Corner-adjacent controls respect the silhouette
+- **WHEN** the pointer hovers the client-side close button or the first menu button on a rounded window
+- **THEN** the hover background stays inside the rounded silhouette
+
+### Requirement: Native window title shows the active file name
+The editor SHALL present the active tab's file name in the native window title immediately after the Markion brand text that follows the window logo. The caption SHALL be the string `Markion - {tab_title}`, where `{tab_title}` is the same title the document tab strip uses (the path's file name, or `Untitled.md` when the tab has no filesystem path). When the active tab is a document with unsaved changes, the caption SHALL append a space and `*` after the file name. Image tabs SHALL use the image file name and SHALL NOT append a dirty suffix. The editor SHALL update the native window title when the active tab, its title, or its dirty state changes. Applying an unchanged caption SHALL NOT force a redundant platform title update. Computing or applying the window title SHALL NOT reparse Markdown, invalidate per-document-version derived caches, or recompute syntax highlighting.
+
+#### Scenario: Saved document name appears after the brand
+- **WHEN** the active tab is a saved Markdown document named `notes.md` with no unsaved changes
+- **THEN** the native window title is `Markion - notes.md`
+
+#### Scenario: Untitled document uses the tab title
+- **WHEN** the active tab has no filesystem path
+- **THEN** the native window title is `Markion - Untitled.md` when the document is clean
+- **AND** `Markion - Untitled.md *` when the document is dirty
+
+#### Scenario: Unsaved changes mark the title
+- **WHEN** the active document tab has unsaved changes
+- **THEN** the native window title ends with the file name, a space, and `*`
+- **AND** a successful save that clears dirty state removes that suffix
+
+#### Scenario: Image tabs show the file name without a dirty suffix
+- **WHEN** the active tab is a read-only image file named `photo.png`
+- **THEN** the native window title is `Markion - photo.png`
+- **AND** the caption does not include a `*` suffix
+
+#### Scenario: Switching tabs updates the native title
+- **WHEN** the user activates a different tab
+- **THEN** the native window title immediately uses that tab's title and dirty state
+
+#### Scenario: Title updates do not disturb derived caches
+- **WHEN** the window title is applied because the active tab, file name, or dirty flag changed
+- **THEN** preview blocks, outline, stats, line count, syntax highlighting, and cached text handles are not recomputed as a result of the title update
+
+### Requirement: Sidebar toggle shortcut is ergonomic and documented
+The editor SHALL bind the sidebar visibility toggle to Ctrl+Shift+B on Windows/Linux and Cmd+Shift+B on macOS. The Help -> Keyboard Shortcuts reference SHALL document that shortcut consistently with the active platform-specific shortcut table.
+
+#### Scenario: Sidebar toggle uses platform shortcut
+- **WHEN** the user presses Ctrl+Shift+B on Windows/Linux or Cmd+Shift+B on macOS
+- **THEN** the sidebar visibility toggles
+
+#### Scenario: Sidebar shortcut avoids bold conflict
+- **WHEN** the user presses Ctrl+B on Windows/Linux or Cmd+B on macOS
+- **THEN** the editor applies bold formatting instead of toggling the sidebar

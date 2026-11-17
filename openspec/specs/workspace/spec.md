@@ -7,6 +7,8 @@ Covers the file tree panel and the auto-save / crash-recovery subsystem. The fil
 ## Requirements
 
 ### Requirement: File tree panel with filename filtering
+When a new workspace root is first displayed, only its direct entries SHALL be visible, with descendants behind collapsed directory rows. Refresh SHALL preserve expansion state, and filename filtering SHALL expose matching nested paths without permanently changing that state.
+
 The editor SHALL provide a toggleable file tree panel whose workspace root can be established by explicitly choosing File → Open Folder, by opening supported content outside the current workspace (from that content's parent directory), by restoring a previous session's workspace root on launch, or by a CLI folder open intent. The panel SHALL display Markdown files (`.md`/`.markdown`/`.mdown`), a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`, `.asciidoc`), and supported image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.svg`) nested under their containing folders. It SHALL list folders that exist on disk even when they contain no supported files, open Markdown and plain-text files on click as UTF-8 text, open supported image files on click as read-only images, mark the current file, support filename filtering, and support basic create / rename / delete / refresh operations for files and folders. Create File, Create Folder, and Rename SHALL collect a name through an in-app inline name editor: the editor renders inside the panel in place of the renamed row or directly below the parent folder row for create actions, and falls back to the top of the panel when that row is not visible; the editor is also rendered as a labeled prompt under the tab bar when the Files panel is hidden. Editing keys and clicks SHALL act on the name buffer only and SHALL NOT move the document caret or selection. Deleting a folder SHALL remove it recursively, including all of its contents, gated by a second confirmation for non-empty folders. Directories on a hard-coded ignore list (version-control, build-output, dependency/cache, and IDE directories) and hidden directories (whose name begins with `.`) SHALL NOT be listed. Other unsupported files (binaries, source code, and unsupported image formats) SHALL NOT appear in the tree. An explicitly selected workspace root SHALL be preserved while contained files are opened. The panel SHALL NOT scan the working directory on startup while only the in-memory welcome document is open and no session or CLI workspace root is available; instead it SHALL show an empty-state placeholder until a file or folder is opened or a session workspace root is restored. The panel SHALL let the user move a listed file or folder into another listed folder or the workspace root by left-dragging it onto that folder, onto a file inside that folder, or onto the workspace root. File and folder context menus SHALL include Copy Path and Copy Relative Path.
 
 #### Scenario: Workspace scan displays supported files
@@ -119,6 +121,38 @@ The editor SHALL provide a toggleable file tree panel whose workspace root can b
 - **WHEN** the user chooses Show in System File Manager for a file, folder, or workspace
 - **THEN** the editor asks the operating system file manager to reveal that target
 - **AND** failures are surfaced as localized status text without modifying editor state
+
+#### Scenario: Workspace is scanned and displayed as Markdown-only
+- **WHEN** a workspace root is established via File → Open Folder, the File → Open dialog, the sidebar, or Save As
+- **THEN** the file tree scans the applicable root on a background executor, displays only Markdown files nested under the folders that contain them, and renders a bounded number of rows per frame
+- **AND** non-Markdown files and folders that contain no Markdown files are not listed
+
+#### Scenario: New workspace initially shows one level
+- **WHEN** the first successful scan for a newly established workspace contains files and Markdown-bearing folders at multiple depths
+- **THEN** the file tree shows the files and folders directly inside the workspace root
+- **AND** every deeper descendant remains hidden behind its collapsed top-level folder row
+
+#### Scenario: User controls directory expansion
+- **WHEN** the user expands or collapses a visible directory row after the initial tree is shown
+- **THEN** that directory's descendants become visible or hidden accordingly without changing other directory branches
+
+#### Scenario: Same-workspace refresh preserves expansion state
+- **WHEN** the user changes directory expansion state and refreshes the current workspace
+- **THEN** surviving directory paths retain their prior expanded or collapsed state
+- **AND** the one-level initial default is not reapplied
+
+#### Scenario: Filtering searches collapsed descendants
+- **WHEN** the user filters by a filename or relative path that matches a descendant of a collapsed directory
+- **THEN** the matching nested entry is included in the filtered results subject to the bounded row limit
+- **AND** clearing the filter restores the prior collapse state
+
+#### Scenario: Contained documents preserve the selected root
+- **WHEN** a Markdown document inside the current workspace root is opened or focused
+- **THEN** the current workspace root remains unchanged and the document is marked in the tree
+
+#### Scenario: External document rebases the workspace
+- **WHEN** a Markdown document outside the current workspace root is opened through an existing document-opening flow
+- **THEN** the workspace root changes to that document's parent directory and the file tree rescans it
 
 ### Requirement: File tree entries SHALL move by left-drag onto a folder
 The editor SHALL let the user left-drag a listed file or folder in the file tree and drop it onto a listed folder, onto a listed file (treated as that file's parent folder), or onto the workspace root (the workspace-name header or blank space in the Files panel). A successful drop SHALL move the entry on disk into that destination, keep its name, refresh the tree, and remap every open tab whose path was the moved entry or a descendant of a moved folder to the new location through the same remapping pipeline as rename. A left-click that does not start a drag SHALL continue to open a file or toggle a folder. Dropping onto the dragged entry itself, onto a descendant of a dragged folder, or onto the entry's current parent (including a sibling file) SHALL NOT move anything. A destination that already contains an entry with the same name SHALL be refused with localized status. If any open tab whose path would be remapped is dirty, the editor SHALL refuse the move and ask the user to save first. The inline name editor SHALL disable tree-row dragging while it is open. Bounded row rendering, derived Markdown caches, syntax-highlight memoization, and cached text handles SHALL remain unchanged except for the remapped tabs.

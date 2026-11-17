@@ -42,3 +42,17 @@ When Visual Edit owns a non-empty, exactly source-mapped text selection, Markion
 - **WHEN** the user opens, navigates, repositions, or dismisses a selection-aware Visual Edit context menu without confirming an action
 - **THEN** canonical Markdown, document version, exact selection, history, dirty state, and derived-cache identity remain unchanged
 
+#### Scenario: Selection toolbar formats visual text
+- **WHEN** the user selects exactly mapped prose in Visual Edit and invokes Bold, Italic, or Inline Code from the contextual controls
+- **THEN** the corresponding canonical Markdown markers are changed through one semantic command
+- **AND** one Undo restores the prior source and selection
+
+#### Scenario: Table cell selection is format-safe
+- **WHEN** the user selects a non-empty range fully inside one Visual Edit table cell and invokes Bold from the contextual controls
+- **THEN** only that cell’s selected bytes are wrapped
+- **AND** one Undo restores the prior source and selection
+
+#### Scenario: Ambiguous selection stays conservative
+- **WHEN** a selection crosses an ambiguous or source-island boundary, or crosses a GFM table cell boundary
+- **THEN** Markion does not present an unsafe contextual mutation for that range
+- **AND** raw source editing remains available

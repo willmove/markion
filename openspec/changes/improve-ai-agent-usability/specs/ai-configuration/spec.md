@@ -45,6 +45,17 @@ AI settings SHALL offer OpenAI, Anthropic, DeepSeek, Local/Ollama, and custom Op
 - **THEN** the endpoint field is visible in basic setup and the save validation names it if left empty
 - **AND** the protocol is selectable from the supported choices rather than typed
 
+#### Scenario: New cloud preset supplies a starter model
+- **WHEN** the user selects Gemini, xAI, Mistral, Moonshot, Qwen, Zhipu, or OpenRouter on a new draft
+- **THEN** the draft receives that preset's HTTPS endpoint, chat protocol, and starter model id
+- **AND** the user can replace the model id before saving
+
+#### Scenario: Reveal only the typed API key
+- **WHEN** the user types an API key and chooses to show it
+- **THEN** the field shows the typed characters and allows them to be copied
+- **AND** choosing hide returns the field to asterisks
+- **AND** a previously saved key is not loaded into the field
+
 ### Requirement: Connection tests SHALL report usable capabilities and actionable failures
 An explicit connection test SHALL send only a bounded synthetic prompt and, where supported, a harmless tool-capability probe, never user document or workspace content. It SHALL report reachable/authenticated/model-usable states separately from verified tool support. Authentication, missing model, unsupported protocol/tool features, rate limits, timeout, and unreachable local server SHALL have distinct actionable feedback. Unknown or unsupported tool capability SHALL disable Agent mode while preserving available writing/chat. Provider-reported usage SHALL be displayed when present and identified as unavailable otherwise; tests SHALL not claim to be free. Test Connection and Find Models SHALL be usable against the current draft without requiring the AI master switch, because they contact only the configured endpoint with synthetic content; a successful test while AI is disabled SHALL offer an explicit Enable AI action rather than enabling silently.
 

@@ -48,6 +48,52 @@ A whitespace row's passive height SHALL correspond to the amount of blank source
 - **THEN** the row's rendered height reflects the new blank-line count on the next rendered frame
 - **AND** a document whose tail whitespace shrinks back to a single blank line renders that region at a single-line passive height
 
+#### Scenario: Clicking a blank line between headings places the caret without mutation
+- **WHEN** the Visual Edit caret belongs to a rendered heading and the user clicks the blank-line `Whitespace` row between that heading and another heading
+- **THEN** the caret moves onto an existing offset inside that whitespace range (`source_range.start` for a single-newline gap)
+- **AND** the document text, version, dirty state, undo history, and derived Markdown cache identity remain unchanged
+- **AND** the gap row presents an insertion caret
+
+#### Scenario: Clicking a blank line between a heading and a paragraph places the caret without mutation
+- **WHEN** the Visual Edit caret belongs to a rendered block and the user clicks the blank-line `Whitespace` row between a heading and a paragraph
+- **THEN** the caret moves onto an existing offset inside that whitespace range
+- **AND** the document text, version, dirty state, undo history, and derived Markdown cache identity remain unchanged
+- **AND** the gap row becomes the caret-owning typing surface
+
+#### Scenario: Typing after a gap click inserts at the existing newline
+- **WHEN** the user clicks the blank-line row between `## [Unreleased]` and `## [16.1.7]` in a changelog-like document and types text
+- **THEN** the typed bytes insert at the existing separator newline so a paragraph appears between the two headings
+- **AND** the following heading’s first content byte is not consumed
+- **AND** the edit does not insert an extra blank line beyond the newline that was already authored
+
+#### Scenario: Whitespace row not owning the caret stays an empty line
+- **WHEN** a whitespace row does not own the source caret
+- **THEN** a structural separator still occupies paragraph spacing and every additional authored blank line still occupies body line height
+- **AND** the row remains pointer-editable
+- **AND** it does not paint an insertion caret until it owns the caret
+
+#### Scenario: A single inter-block newline is paragraph spacing
+- **WHEN** Visual Edit displays two blocks separated by exactly one newline that belongs to a whitespace row
+- **THEN** that row occupies the rendered paragraph spacing and does not add a body-height blank line
+- **AND** increasing paragraph spacing increases the row's occupied extent
+- **AND** the source text is unchanged
+
+#### Scenario: Newlines beyond the separator stay body lines
+- **WHEN** a whitespace row between two blocks contains more than one newline
+- **THEN** the first newline occupies paragraph spacing
+- **AND** each remaining newline occupies one body paragraph line
+
+#### Scenario: A normal trailing newline does not paint a blank line
+- **WHEN** a block ends with its own line ending at the document end, so the only following whitespace row has an empty source range
+- **THEN** Visual Edit does not paint a body-height blank line for that row
+- **AND** the caret can still be placed at the document end
+- **AND** an additional authored newline after that block occupies one body paragraph line
+
+#### Scenario: Typing into a structural separator moves following content
+- **WHEN** the user types a line of text into a single-newline gap between two blocks
+- **THEN** the new line occupies body line height
+- **AND** rendered content below that gap moves down
+
 ### Requirement: Stable source-mapped visual block identity
 Every derived Visual Edit block SHALL carry an opaque, non-persisted identity that remains stable across document versions only when the block is proven to descend unchanged from the same source block. Identity SHALL be independent from the block's current byte range and SHALL NOT replace canonical source ranges for editing.
 
@@ -82,6 +128,17 @@ Cached per-row layout measurements (such as virtualized-list row heights and scr
 - **WHEN** a document is saved, reopened, recovered, cloned for undo, or replaced wholesale
 - **THEN** visual identities and incremental region caches are rebuilt rather than persisted
 - **AND** Markdown file contents and undo snapshot formats remain unchanged
+
+#### Scenario: In-place same-kind edit preserves identity
+- **WHEN** a localized edit rewrites text inside one visual block without splitting it, merging it, or changing its kind
+- **THEN** that successor retains its prior visual block identity
+- **AND** the virtualized Visual Edit list does not splice that row solely because its source bytes changed
+- **AND** later unchanged blocks still retain their identities
+
+#### Scenario: Split, merge, or kind change receives new identity
+- **WHEN** an edit splits, merges, or changes the kind of a visual block, or ambiguously reparses it
+- **THEN** every affected resulting block receives a new identity
+- **AND** stale row layout, navigation, or widget state is not attached to it
 
 ### Requirement: Pane scroll state with visible scrollbars
 The editor SHALL preserve each tab's source editor, Visual Edit, and rendered preview scroll positions while exposing visible scrollbar controls for those surfaces. Using a scrollbar, mouse wheel, or trackpad SHALL update the same per-tab scroll state for the visible surface without modifying document text or derived Markdown state. Visual Edit SHALL keep its own per-tab virtualized-list scroll state, independent of the rendered preview list, even though both may represent the same document. When the persisted Sync scroll preference is enabled and the active view mode is Split Preview, scrolling either pane SHALL additionally update the other pane's per-tab scroll position so both viewport anchors represent the same source-backed document location, using rendered preview blocks' source ranges and within-block progress instead of matching whole-document scroll fractions. This coupling SHALL NOT merge the two panes' scroll states into a shared scroll: each pane SHALL retain its own scroll handle or list state, driver/follower observations SHALL remain isolated per tab, and a programmatic follower update SHALL NOT be mistaken for new user input. Synchronization SHALL NOT reset the preview list, reparse the document, mutate document text, or invalidate derived Markdown caches. When Sync scroll is disabled, when the active view mode is not Split Preview, or when no current source mapping is available, the two panes SHALL not be coupled. Scrolling Visual Edit, including by dragging its scrollbar, SHALL NOT establish a Split Preview sync-scroll driver.
@@ -140,3 +197,17 @@ Each virtualized pane (Visual Edit and rendered preview) SHALL expose a scroll r
 #### Scenario: Independent scroll resumes when Sync scroll is disabled
 - **WHEN** Sync scroll is disabled or the view mode is not Split Preview
 - **THEN** scrolling one pane does not move the other pane
+
+#### Scenario: Visual Edit end padding lets the last line leave the clip
+- **WHEN** a Visual Edit document has at least one rendered content row and the pane is taller than that row
+- **THEN** the scrollable extent includes a trailing padding band of about half the current Visual Edit viewport
+- **AND** the user can scroll until the last rendered content line sits away from the pane bottom clip
+
+#### Scenario: Visual Edit end padding does not enter the document
+- **WHEN** the Visual Edit list shows its document-end padding band
+- **THEN** `MarkdownDocument.text`, the cached visual-block slice, dirty state, and derived Markdown caches are unchanged by the presence of that padding
+
+#### Scenario: Clicking the end padding places the caret at the document end
+- **WHEN** the user clicks the Visual Edit document-end padding band
+- **THEN** the source caret moves to the document end
+- **AND** the list does not pin a content row to the viewport top unless the resulting caret would sit outside the viewport inset

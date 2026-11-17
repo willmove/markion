@@ -18,7 +18,7 @@ fn tiny_png_bytes() -> Vec<u8> {
         .unwrap()
 }
 
-fn wait_for_image_operations(app: &Entity<MarkionApp>, cx: &mut TestAppContext) {
+pub(super) fn wait_for_image_operations(app: &Entity<MarkionApp>, cx: &mut TestAppContext) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         cx.run_until_parked();
@@ -17376,27 +17376,14 @@ fn p1_visual_slash_pointer_and_block_menu_apply_exact_commands(cx: &mut TestAppC
     });
     cx.run_until_parked();
 
-    let row = cx
-        .debug_bounds("visual-block-row-0")
-        .expect("supported block should expose row context interaction");
-    cx.simulate_event(MouseUpEvent {
-        button: MouseButton::Right,
-        position: row.center(),
-        modifiers: Modifiers::none(),
-        click_count: 1,
-    });
-    cx.run_until_parked();
-    let lists = cx
-        .debug_bounds("visual-block-lists")
-        .expect("compact root menu should expose the Lists submenu");
-    cx.simulate_event(MouseMoveEvent {
-        position: lists.center(),
-        ..Default::default()
-    });
+    let grip = cx
+        .debug_bounds("visual-block-drag-grip-0")
+        .expect("supported block should expose block commands through its grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
     let task = cx
         .debug_bounds("visual-block-transform-9")
-        .expect("task-list transform should be rendered in the Lists submenu");
+        .expect("task-list transform should be directly available");
     cx.simulate_click(task.center(), Modifiers::none());
     cx.run_until_parked();
     app.update(cx, |app, _| {
@@ -17441,15 +17428,10 @@ fn visual_block_menu_root_overlay_outpaints_following_rows(cx: &mut TestAppConte
     cx.run_until_parked();
 
     let start_version = app.update(cx, |app, _| app.active_tab().document.version());
-    let row = cx
-        .debug_bounds("visual-block-row-0")
-        .expect("heading should expose a block context target");
-    cx.simulate_event(MouseUpEvent {
-        button: MouseButton::Right,
-        position: row.center(),
-        modifiers: Modifiers::none(),
-        click_count: 1,
-    });
+    let grip = cx
+        .debug_bounds("visual-block-drag-grip-0")
+        .expect("heading should expose block commands through its grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
 
     let overlay = cx
@@ -17462,20 +17444,12 @@ fn visual_block_menu_root_overlay_outpaints_following_rows(cx: &mut TestAppConte
         overlay.contains(&panel.center()),
         "root overlay should contain the compact root panel"
     );
-    let lists = cx
-        .debug_bounds("visual-block-lists")
-        .expect("root panel should expose Lists");
-    cx.simulate_event(MouseMoveEvent {
-        position: lists.center(),
-        ..Default::default()
-    });
-    cx.run_until_parked();
     let task = cx
         .debug_bounds("visual-block-transform-9")
-        .expect("task-list command should be rendered inside the submenu overlay");
+        .expect("task-list command should be rendered directly in the overlay");
     let overlay = cx
         .debug_bounds("visual-block-menu-overlay")
-        .expect("overlay bounds should expand to include the submenu");
+        .expect("overlay bounds should include the direct control");
     assert!(overlay.contains(&task.center()));
 
     let overlapping_row = [
@@ -17953,8 +17927,8 @@ fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_stal
         ));
     });
     assert!(
-        cx.debug_bounds("visual-selection-format-bold").is_none(),
-        "an unrelated block must not expose actions for the preserved selection"
+        cx.debug_bounds("visual-selection-format-bold").is_some(),
+        "editing actions follow the preserved selection independently of the clicked row"
     );
 
     cx.dispatch_action(ClearFileTreeSearch);
@@ -17970,7 +17944,7 @@ fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_stal
     cx.run_until_parked();
     assert!(
         cx.debug_bounds("visual-image-upload").is_some(),
-        "image target must expose image actions"
+        "image-specific actions coexist with editing the preserved text selection"
     );
     app.update(cx, |app, cx| {
         let menu = app.block_menu.as_ref().expect("image right-click menu");
@@ -18054,7 +18028,7 @@ fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppCont
         "visual-selection-format-italic",
         "visual-selection-format-inline-code",
         "visual-selection-format-link",
-        "visual-block-text-headings",
+        "visual-selection-cut",
     ] {
         assert!(
             cx.debug_bounds(id).is_some(),
@@ -18082,13 +18056,14 @@ fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppCont
         app.active_tab_mut().selected_range = SELECTION;
         let blocks = app.active_tab().document.visual_blocks_shared();
         let target = BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]);
-        app.open_visual_block_menu(target, point(px(80.), px(80.)), cx);
+        app.open_visual_edit_context_menu(target, point(px(80.), px(80.)), cx);
     };
 
     app.update(cx, |app, cx| {
         open_selection_menu(app, cx);
         app.activate_visual_block_menu_item(
             BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic),
+            None,
             cx,
         );
     });
@@ -18106,6 +18081,7 @@ fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppCont
         open_selection_menu(app, cx);
         app.activate_visual_block_menu_item(
             BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode),
+            None,
             cx,
         );
     });
@@ -18127,6 +18103,7 @@ fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppCont
         open_selection_menu(app, cx);
         app.activate_visual_block_menu_item(
             BlockMenuItem::SelectionFormat(SelectionFormatAction::Link),
+            None,
             cx,
         );
         let editor = app
@@ -18157,6 +18134,7 @@ fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppCont
         app.active_tab_mut().selected_range = 1..7;
         app.activate_visual_block_menu_item(
             BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold),
+            None,
             cx,
         );
         assert!(app.block_menu.is_none());
@@ -18234,7 +18212,15 @@ fn visual_selection_context_copy_is_non_mutating(cx: &mut TestAppContext) {
     cx.dispatch_action(ShowVisualBlockContextMenu);
     cx.run_until_parked();
     app.update(cx, |app, cx| {
-        app.select_visual_block_menu_root(0, false, cx)
+        let index = app
+            .block_menu
+            .as_ref()
+            .unwrap()
+            .root_items()
+            .iter()
+            .position(|item| *item == BlockMenuItem::CopySelection)
+            .unwrap();
+        app.select_visual_block_menu_root(index, None, cx);
     });
     cx.dispatch_action(InsertNewline);
     cx.run_until_parked();
@@ -18258,7 +18244,7 @@ fn visual_selection_context_copy_is_non_mutating(cx: &mut TestAppContext) {
         app.open_visual_block_menu(target, point(px(60.), px(100.)), cx);
         app.active_tab_mut().selected_range = 0..0;
         cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
-        app.activate_visual_block_menu_item(BlockMenuItem::CopySelection, cx);
+        app.activate_visual_block_menu_item(BlockMenuItem::CopySelection, None, cx);
         assert!(app.block_menu.is_none());
     });
     let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
@@ -18293,14 +18279,20 @@ fn visual_selection_format_actions_support_keyboard_context_invocation(cx: &mut 
             .as_ref()
             .expect("keyboard selection context menu");
         assert!(menu.selection_format.is_some());
-        assert_eq!(
-            menu.root_selected,
-            BLOCK_MENU_SELECTION_FORMAT_ITEMS.len() + 1
-        );
+        assert_eq!(menu.root_selected, 0);
+        assert!(menu.editing_context.is_some());
     });
     assert!(cx.debug_bounds("visual-selection-format-bold").is_some());
     app.update(cx, |app, cx| {
-        app.select_visual_block_menu_root(1, false, cx)
+        let index = app
+            .block_menu
+            .as_ref()
+            .unwrap()
+            .root_items()
+            .iter()
+            .position(|item| *item == BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold))
+            .unwrap();
+        app.select_visual_block_menu_root(index, None, cx);
     });
     cx.dispatch_action(InsertNewline);
     cx.run_until_parked();
@@ -18311,7 +18303,7 @@ fn visual_selection_format_actions_support_keyboard_context_invocation(cx: &mut 
 }
 
 #[gpui::test]
-fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut TestAppContext) {
+fn visual_block_menu_keyboard_controls_disabled_moves_and_exact_undo(cx: &mut TestAppContext) {
     const SOURCE: &str = "one\n\ntwo\n\nthree";
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -18326,7 +18318,14 @@ fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut Te
     });
     cx.run_until_parked();
 
-    cx.dispatch_action(ShowVisualBlockContextMenu);
+    let open_block_commands = |app: &mut MarkionApp, cx: &mut Context<MarkionApp>| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let target = BlockTarget::from_block(tab.document.version(), &blocks[0]);
+        let caret = tab.visual_caret_bounds.unwrap();
+        app.open_visual_block_menu(target, point(caret.left(), caret.bottom()), cx);
+    };
+    app.update(cx, |app, cx| open_block_commands(app, cx));
     cx.run_until_parked();
     app.update(cx, |app, _| {
         let menu = app.block_menu.as_ref().expect("keyboard block menu");
@@ -18344,11 +18343,11 @@ fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut Te
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(
-            app.block_menu.as_ref().unwrap().submenu,
-            Some(BlockMenuSubmenu::TextAndHeadings)
+            app.block_menu.as_ref().unwrap().root_items()
+                [app.block_menu.as_ref().unwrap().root_selected],
+            BlockMenuItem::Transform(BlockTransform::Heading(1))
         );
     });
-    cx.dispatch_action(Down);
     cx.dispatch_action(InsertNewline);
     cx.run_until_parked();
     app.update(cx, |app, _| {
@@ -18361,9 +18360,17 @@ fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut Te
         assert_eq!(app.active_tab().document.text(), SOURCE)
     });
 
-    cx.dispatch_action(ShowVisualBlockContextMenu);
+    app.update(cx, |app, cx| open_block_commands(app, cx));
     app.update(cx, |app, cx| {
-        app.select_visual_block_menu_root(7, false, cx)
+        let index = app
+            .block_menu
+            .as_ref()
+            .unwrap()
+            .root_items()
+            .iter()
+            .position(|item| *item == BlockMenuItem::MoveUp)
+            .unwrap();
+        app.select_visual_block_menu_root(index, None, cx)
     });
     cx.run_until_parked();
     assert!(
@@ -18376,7 +18383,15 @@ fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut Te
         assert!(app.block_menu.is_some());
     });
     app.update(cx, |app, cx| {
-        app.select_visual_block_menu_root(8, false, cx)
+        let index = app
+            .block_menu
+            .as_ref()
+            .unwrap()
+            .root_items()
+            .iter()
+            .position(|item| *item == BlockMenuItem::MoveDown)
+            .unwrap();
+        app.select_visual_block_menu_root(index, None, cx)
     });
     cx.dispatch_action(InsertNewline);
     cx.run_until_parked();
@@ -18398,16 +18413,16 @@ fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut Te
         cx.notify();
     });
     cx.run_until_parked();
-    cx.dispatch_action(ShowVisualBlockContextMenu);
+    app.update(cx, |app, cx| open_block_commands(app, cx));
     cx.dispatch_action(Right);
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(
-            app.block_menu.as_ref().unwrap().submenu,
-            Some(BlockMenuSubmenu::Lists)
+            app.block_menu.as_ref().unwrap().root_items()
+                [app.block_menu.as_ref().unwrap().root_selected],
+            BlockMenuItem::Transform(BlockTransform::NumberedList)
         );
     });
-    cx.dispatch_action(Down);
     cx.dispatch_action(InsertNewline);
     cx.run_until_parked();
     app.update(cx, |app, _| {
@@ -19429,10 +19444,14 @@ fn visual_image_actions_live_in_the_right_click_menu_without_inline_strip(cx: &m
         click_count: 1,
     });
     cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.open_visual_context_submenu(BlockContextSubmenu::ImageScale, true, cx)
+    });
+    cx.run_until_parked();
     for selector in [
-        "visual-image-width",
-        "visual-image-alignment",
-        "visual-image-edit-source",
+        "visual-image-width-50",
+        "visual-image-align-center",
+        "visual-image-properties",
         "visual-image-replace",
         "visual-image-save-local",
         "visual-image-upload",
@@ -19473,15 +19492,13 @@ fn visual_image_actions_live_in_the_right_click_menu_without_inline_strip(cx: &m
         "remote image right-click should open the image context menu"
     );
 
-    let width = cx.debug_bounds("visual-image-width").unwrap();
-    cx.simulate_event(MouseMoveEvent {
-        position: width.center(),
-        ..Default::default()
+    app.update(cx, |app, cx| {
+        app.open_visual_context_submenu(BlockContextSubmenu::ImageScale, true, cx)
     });
     cx.run_until_parked();
     let width_50 = cx
         .debug_bounds("visual-image-width-50")
-        .expect("width submenu must expose 50%");
+        .expect("width controls must directly expose 50%");
     cx.simulate_click(width_50.center(), Modifiers::none());
     cx.run_until_parked();
     app.update(cx, |app, _| {
@@ -19495,7 +19512,7 @@ fn visual_image_actions_live_in_the_right_click_menu_without_inline_strip(cx: &m
 }
 
 #[gpui::test]
-fn visual_image_source_toggle_expands_collapses_and_edits_exactly(cx: &mut TestAppContext) {
+fn image_source_metadata_remains_available_to_explicit_document_edits(cx: &mut TestAppContext) {
     let source = "![图](old.png \"Caption\")";
     let document = MarkdownDocument::from_text(source);
     let (image_id, payload_range) = document
@@ -19573,9 +19590,9 @@ fn visual_image_source_toggle_expands_collapses_and_edits_exactly(cx: &mut TestA
 }
 
 #[gpui::test]
-fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
-    // A destination that cannot be decoded keeps the payload editor visible
-    // regardless of the toggle state (same forced-expand rule as math).
+fn visual_image_failed_load_keeps_error_presentation_without_source_payload(
+    cx: &mut TestAppContext,
+) {
     let source = "![broken](missing.png)";
     let document = MarkdownDocument::from_text(source);
     let image_id = document
@@ -19593,9 +19610,10 @@ fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
         app
     });
     cx.run_until_parked();
-    // With no image ever decoded, the resolved entry is not Ready; the chrome
-    // keeps the source reachable. The toggle set stays empty — forced expand
-    // is computed from the entry, not the user's expand set.
+    app.update(cx, |app, _| {
+        assert_eq!(app.visual_field_projection_builds.get(), 0)
+    });
+    // Failed images keep the bounded error presentation and context properties.
     app.update(cx, |app, _| {
         let tab = app.active_tab();
         assert!(!tab.is_visual_source_expanded(image_id));
@@ -19900,7 +19918,7 @@ fn visual_data_uri_html_block_backspace_removes_whole_token(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn visual_data_uri_source_toggle_paints_elided_token_and_edits_atomically(cx: &mut TestAppContext) {
+fn visual_data_uri_images_never_mount_a_source_toggle(cx: &mut TestAppContext) {
     let payload = "QUJD".repeat(32);
     let source = format!("![icon](data:image/png;base64,{payload} \"Cap\")");
     let document = MarkdownDocument::from_text(source.clone());
@@ -19939,20 +19957,12 @@ fn visual_data_uri_source_toggle_paints_elided_token_and_edits_atomically(cx: &m
         assert!(!app.active_tab().document.is_dirty());
     });
 
-    // Caret entry into the payload paints the elided projection: verbatim
-    // head and tail, and one size-labeled token instead of the base64 bytes.
     app.update(cx, |app, cx| app.move_to(token_range.start, cx));
     cx.run_until_parked();
     app.update(cx, |app, _| {
-        let (text, _) = app
-            .active_tab()
-            .visual_last_projection
-            .as_ref()
-            .expect("elided payload projection paints with the caret inside");
-        assert!(text.starts_with("![icon](data:image/png;base64,…"));
-        assert!(text.ends_with("… \"Cap\")"));
-        assert!(text.contains("128 B"));
-        assert!(!text.contains(&payload));
+        assert!(app.active_tab().visual_last_projection.is_none());
+        assert_eq!(app.visual_field_projection_builds.get(), 0);
+        assert!(!app.active_tab().selected_range.is_empty());
     });
 
     // A selection covering the token replaces the whole payload in one exact
@@ -20095,20 +20105,19 @@ Trailing paragraph."
         );
     });
 
-    // Expanding mounts the payload editor exactly once per paint, bounded by
-    // the display text rather than the payload length.
+    // Retained old expansion state must not resurrect an image source surface.
     app.update(cx, |app, cx| {
         app.active_tab_mut().toggle_visual_source_expanded(image_id);
         cx.notify();
     });
     cx.run_until_parked();
     app.update(cx, |app, _| {
-        assert!(app.visual_field_projection_builds.get() > before);
+        assert_eq!(app.visual_field_projection_builds.get(), before);
     });
 }
 
 #[gpui::test]
-fn visual_data_uri_backspace_and_delete_remove_whole_token_atomically(cx: &mut TestAppContext) {
+fn selected_visual_data_uri_image_deletes_as_one_unit_and_undo_restores(cx: &mut TestAppContext) {
     let payload = "QUJD".repeat(16);
     let expected_source = format!("![icon](data:image/png;base64,{payload})");
     let document = MarkdownDocument::from_text(expected_source.clone());
@@ -20135,11 +20144,8 @@ fn visual_data_uri_backspace_and_delete_remove_whole_token_atomically(cx: &mut T
     });
     cx.run_until_parked();
     app.update(cx, |app, _| {
-        assert_eq!(
-            app.active_tab().document.text(),
-            "![icon](data:image/png;base64,)"
-        );
-        assert_eq!(app.active_tab().selected_range, token_start..token_start);
+        assert_eq!(app.active_tab().document.text(), "");
+        assert!(app.active_tab().selected_range.is_empty());
         assert!(app.active_tab_mut().apply_undo());
         assert_eq!(app.active_tab().document.text(), expected_source);
     });
@@ -20152,10 +20158,7 @@ fn visual_data_uri_backspace_and_delete_remove_whole_token_atomically(cx: &mut T
     });
     cx.run_until_parked();
     app.update(cx, |app, _| {
-        assert_eq!(
-            app.active_tab().document.text(),
-            "![icon](data:image/png;base64,)"
-        );
+        assert_eq!(app.active_tab().document.text(), "");
     });
 }
 

@@ -1,7 +1,7 @@
 # document-resources Specification
 
 ## Purpose
-TBD - created by archiving change complete-p0-editor-workflows. Update Purpose after archive.
+Keep document images and attachments portable, recoverable, and consistent across editing, rendering, file operations, and synchronization.
 
 ## Requirements
 
