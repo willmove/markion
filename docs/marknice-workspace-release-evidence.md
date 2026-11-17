@@ -29,3 +29,7 @@ The [content-export checklist](../openspec/changes/add-marknice-workspace-conten
 ## v0.5.3 follow-up
 
 The [release preflight](verification/release-v0.5.3-preflight.md) records the maintainer’s release-specific authorization to skip unavailable manual environments. The Codex in-app browser passed the 15-theme compatibility self-test and formatting/export/locale/skin/Word/print checks; actual Markdown copy and HTML/DOCX downloads also passed. See [raw results](verification/marknice-browser-self-test-v0.5.3.json), [screenshot](verification/marknice-browser-self-test-v0.5.3.jpg) and [download checks](verification/marknice-browser-downloads-v0.5.3.json). The interface did not expose an engine/version, and this is not the default-browser or WeChat/Word-client matrix. The remaining rows above stay unverified and are skipped for v0.5.3, without being marked as passed.
+
+## v0.6.0 release-specific scope
+
+On 2026-11-17 the maintainer explicitly authorized skipping unavailable cross-platform manual acceptance for v0.6.0 after all automated/native package, signing and mirror gates pass. The browser/WeChat/Word matrix above remains unverified; this authorization neither fills those rows as passed nor changes the default release gate. See the [v0.6.0 preflight](verification/release-v0.6.0-preflight.md) for the exact scope, recorded Windows source checks and final publication evidence.

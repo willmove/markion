@@ -13,7 +13,7 @@ Markion v0.6.0 makes everyday Markdown editing easier to discover and control. W
 
 **Downloads:** Windows x64 (NSIS/ZIP), macOS arm64/x64 (DMG), Linux x86_64 (DEB/RPM/AppImage); attached after the tag workflow passes.
 
-**Verification:** Windows workspace: 2,216 passed, 5 existing ignored; formatting, Clippy, bundle, example and strict spec checks pass. Native package/signing/mirror results and unavailable manual scope are recorded in the [release evidence](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.0-preflight.md). [OpenSpec review](https://github.com/willmove/markion/blob/main/docs/verification/openspec-archive-review-2026-11-17.md).
+**Verification:** Windows workspace: 2,216 passed, 5 existing ignored; formatting, Clippy, bundle, example and strict spec checks pass. Unavailable cross-platform manual acceptance is explicitly skipped with maintainer authorization, not claimed as passed. Native package/signing/mirror results and unavailable manual scope are recorded in the [release evidence](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.0-preflight.md). [OpenSpec review](https://github.com/willmove/markion/blob/main/docs/verification/openspec-archive-review-2026-11-17.md).
 
 **Full comparison:** https://github.com/willmove/markion/compare/v0.5.3...v0.6.0
 
@@ -34,6 +34,6 @@ Markion v0.6.0 让日常 Markdown 编辑更易上手、操作更顺畅。喜迎A
 
 **下载：** Windows x64（NSIS/ZIP）、macOS arm64/x64（DMG）、Linux x86_64（DEB/RPM/AppImage）；标签流水线通过后附上。
 
-**验证：** Windows workspace 共 2,216 项通过、5 项既有忽略；格式、Clippy、bundle、样例与严格规格检查通过。原生打包、签名、镜像及无法执行的人工项见[发布记录](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.0-preflight.md)；另见 [OpenSpec 审查](https://github.com/willmove/markion/blob/main/docs/verification/openspec-archive-review-2026-11-17.md)。
+**验证：** Windows workspace 共 2,216 项通过、5 项既有忽略；格式、Clippy、bundle、样例与严格规格检查通过。无法执行的跨平台人工验收经维护者授权明确跳过，不视为通过。原生打包、签名、镜像及无法执行的人工项见[发布记录](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.0-preflight.md)；另见 [OpenSpec 审查](https://github.com/willmove/markion/blob/main/docs/verification/openspec-archive-review-2026-11-17.md)。
 
 **完整变更对比：** https://github.com/willmove/markion/compare/v0.5.3...v0.6.0

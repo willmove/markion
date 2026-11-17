@@ -14,12 +14,14 @@
     "passed": 92,
     "failed": 0
   },
-  "manual_matrix": "Incomplete; separate maintainer scope decision required before publication.",
+  "manual_matrix": "Unavailable cross-platform manual acceptance remains unverified and is explicitly skipped for v0.6.0 with maintainer authorization on 2026-11-17; automated release gates remain required.",
   "release_version_regression": {
     "version": "0.6.0",
     "suite_results": 51,
     "passed": 2216,
     "failed": 0,
     "ignored": 5
-  }
+  },
+  "quality_workflow_url": "https://github.com/willmove/markion/actions/runs/44041639336",
+  "quality_workflow_conclusion": "success"
 }

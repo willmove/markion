@@ -26,13 +26,19 @@ Date: 2026-11-17 (Asia/Shanghai). Previous stable tag: `v0.5.3`. Requested relea
 
 The archived [context-menu tasks](../../openspec/changes/archive/2026-11-17-unify-compact-block-context-menu/tasks.md) preserve isolated Windows OS-input verification, source-byte comparisons, menu/tab lifecycle regressions and the intermittent code-background symptom's limits. The [example-library tasks](../../openspec/changes/archive/2026-11-17-bundle-example-document-library/tasks.md) record copied-payload rejection and a debug ZIP extraction fixture; that fixture is not a release installer.
 
-The supported default-browser/WeChat/Word-viewer matrix, macOS/Linux native rich-clipboard and editing/input matrix, Linux CSD live resize, DOCX real-producer corpus and clean previous-version Windows/AppImage updater end-to-end runs have no fresh complete v0.6.0 evidence here. Previous release-specific skips do not establish a pass or automatically authorize skips for this version. Publication is held until the maintainer decides the unavailable scope; all automated native packaging, extracted examples/bundle verification, AppImage smoke, signing, manifests, hashes and OSS reachability remain required.
+The supported default-browser/WeChat/Word-viewer matrix, macOS/Linux native rich-clipboard and editing/input matrix, Linux CSD live resize, DOCX real-producer corpus and clean previous-version Windows/AppImage updater end-to-end runs have no fresh complete v0.6.0 evidence here. Previous release-specific skips do not establish a pass or automatically authorize skips for this version. On 2026-11-17 the maintainer explicitly authorized recording the unavailable cross-platform manual acceptance as unverified/skipped for v0.6.0 and continuing publication after all automated tests, native packaging, signatures and mirror verification pass. This exception applies only to this release: pending matrix rows remain unverified, not passed. Automated native packaging, extracted examples/bundle verification, AppImage smoke, signing, manifests, hashes and OSS reachability remain required.
 
 ## Publication checklist
 
-- [ ] Release-specific manual scope decision recorded.
-- [ ] Reviewed implementation/documentation commit pushed; dedicated `Release Markion v0.6.0` commit and annotated tag created without changing an existing public tag.
+- [x] Release-specific manual scope decision recorded: unavailable manual environments explicitly skipped with maintainer authorization; not claimed as passed.
+- [x] Reviewed implementation/documentation commits pushed; dedicated `Release Markion v0.6.0` commit `402d16e5242bb819ee3a08bbe156262aa96b0570` and annotated tag object `0f3b711237d208fc4412c7560534af62c948cf61` created and pushed without changing an existing public tag.
 - [ ] Four native build jobs, extracted-package verification, AppImage smoke, updater signing, GitHub publication and OSS mirror succeed.
 - [ ] Seven packages, both signatures and `update.json` verified; GitHub/OSS manifest versions, host URLs, signature content and payload hashes match.
 - [ ] Curated bilingual notes include “喜迎APEC，深圳欢迎您”; actual macOS signing/notarization status is recorded.
 - [ ] Stable non-draft metadata and final Git synchronization verified.
+
+## CI and publication tracking
+
+- Candidate main packaging: [44041639382](https://github.com/willmove/markion/actions/runs/44041639382), succeeded on all four native builds and AppImage smoke.
+- Candidate repository quality: [44041639336](https://github.com/willmove/markion/actions/runs/44041639336), succeeded.
+- Authoritative tag publication: [44050240423](https://github.com/willmove/markion/actions/runs/44050240423), started; publication, updater signatures and mirror remain pending until final verification.
