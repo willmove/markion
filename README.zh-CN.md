@@ -58,7 +58,7 @@
   ```
 
   每次通过浏览器下载更新后需重复执行。[首次启动详情](docs/user-guide.md#安装)。
-- **Linux：**为 AppImage 添加执行权限（`chmod +x Markion*.AppImage`）后运行，或安装 DEB/RPM。无 FUSE 时可用 `--appimage-extract-and-run`。
+- **Linux：**为 AppImage 添加执行权限（`chmod +x markion*.AppImage`）后运行，或安装 DEB/RPM。无 FUSE 时可用 `--appimage-extract-and-run`。
 
 打开 Markdown 文件或文件夹即可写作。试用内置样例时，请**先复制整个 examples 文件夹及其中的图片，再开始编辑**。[上手与模板](assets/examples/README.md)。
 

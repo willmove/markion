@@ -65,7 +65,7 @@
   ```
 
   브라우저로 업데이트를 받을 때마다 다시 실행해야 합니다. [첫 실행 안내](docs/user-guide.md#install).
-- **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x Markion*.AppImage`) 실행하거나 DEB/RPM을 설치하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
+- **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x markion*.AppImage`) 실행하거나 DEB/RPM을 설치하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
 
 Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 예제를 수정하기 전에는 **이미지를 포함한 examples 폴더 전체를 먼저 복사하세요**. [시작 안내와 템플릿](assets/examples/README.md).
 

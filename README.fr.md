@@ -58,7 +58,7 @@
   ```
 
   À répéter après chaque mise à jour téléchargée par navigateur. [Premier lancement](docs/user-guide.md#install).
-- **Linux :** rendez l’AppImage exécutable (`chmod +x Markion*.AppImage`), puis lancez-la, ou installez le DEB/RPM. Sans FUSE, utilisez `--appimage-extract-and-run`.
+- **Linux :** rendez l’AppImage exécutable (`chmod +x markion*.AppImage`), puis lancez-la, ou installez le DEB/RPM. Sans FUSE, utilisez `--appimage-extract-and-run`.
 
 Ouvrez un fichier ou dossier Markdown. Avant de modifier les exemples, **copiez tout le dossier examples, images comprises**. [Premiers pas et modèles](assets/examples/README.md).
 

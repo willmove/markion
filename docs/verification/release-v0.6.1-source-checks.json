@@ -35,7 +35,7 @@
   },
   "docs": {
     "files": 12,
-    "local_links_checked": 363,
+    "local_links_checked": 364,
     "errors": []
   },
   "raw_log_sha256": {
@@ -50,6 +50,21 @@
     "single_undo_save_matches_baseline": true,
     "installed_package_acceptance": false
   },
-  "manual_matrix": "Full candidate/final native matrix NOT_RUN/BLOCKED; release-specific exception not yet authorized.",
-  "ci_openspec_parity": "Pinned 1.5.0 cannot validate skip_specs; corrected to published and locally verified 1.13.0. Remote gate pending."
+  "manual_matrix": "V061-NATIVE-SCOPE: explicitly authorized 2026-11-18 by maintainer: 允许本次例外，披露未验证范围并继续发布. Full native/platform/interoperability/previous-version-upgrade matrix remains NOT_RUN/BLOCKED, not PASS; automated release gates remain required.",
+  "ci_openspec_parity": "Corrected pin 1.13.0 verified by successful remote quality job.",
+  "corrected_candidate_commit": "17db038138f77cbbefbeacda71371bcfe410db6a",
+  "quality_workflow_url": "https://github.com/willmove/markion/actions/runs/44122459579",
+  "quality_workflow_conclusion": "success",
+  "committed_ci_checks": {
+    "commit": "17db038138f77cbbefbeacda71371bcfe410db6a",
+    "workspace_suites": 51,
+    "passed": 2238,
+    "failed": 0,
+    "ignored": 5,
+    "strict_openspec_passed": 96,
+    "strict_openspec_failed": 0,
+    "log_sha256": "35fc68f59979874fffa472a7def5fe5803d61c6a69a1a18cd5e81e36976676d8"
+  },
+  "candidate_packaging_workflow_url": "https://github.com/willmove/markion/actions/runs/44122459859",
+  "candidate_packaging_conclusion": "success: four native builds, resources and no-GPU AppImage smoke"
 }

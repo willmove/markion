@@ -26,7 +26,7 @@ Executed on Windows 11 Pro 10.0.26300 x86_64 with PowerShell 7.6.9, Rust/Cargo 1
 
 The initial quality script passed formatting, Clippy, every workspace suite and bundle verification, then failed strict validation on the older `prefer-appimage-update-on-arch` delta. Its MODIFIED requirement omitted five newly archived background-update scenarios. Rebased that active delta on the current requirement while retaining its distribution mapping and all existing scenarios; no application or stable-spec edit was needed. The focused validation and final full strict validation then passed. The initial failure is retained in the hashed quality log; no test failure was hidden or converted to a pass.
 
-CI parity: the old workflow pinned OpenSpec 1.5.0, which rejects pure-doc skip_specs changes supported by local 1.13.0. Reproduced that incompatibility with the exact 1.5.0 CLI; aligned the workflow pin to published 1.13.0. The remote corrected gate must pass before tagging. README AppImage links also now use the actual lowercase `markion_0.6.1_x86_64.AppImage` asset name.
+CI parity: the old workflow pinned OpenSpec 1.5.0, which rejects pure-doc skip_specs changes supported by local 1.13.0. Reproduced that incompatibility with the exact 1.5.0 CLI; aligned the workflow pin to published 1.13.0. The corrected [remote quality run 44122459579](https://github.com/willmove/markion/actions/runs/44122459579) passed before tagging: 51 groups, 2,238 passed / 0 failed / 5 ignored, formatting, Clippy, bundle and all 96 OpenSpec items. README AppImage links and chmod instructions use the actual lowercase `markion_0.6.1_x86_64.AppImage` asset name.
 
 The five ignored tests remain three optional external export-engine integrations and two external-network tests. They are not passing results. Deterministic scheduling, staging integrity, Later/reopen and dirty-install guards are covered by automated tests; a five-hour soak and actual signed upgrades are not.
 
@@ -42,14 +42,18 @@ Used a copied debug executable and resources under a fresh isolated fixture run,
 
 The [maintained acceptance suite](../testing/README.md) requires platform/package variants and actual input/browser/viewer evidence. Unit/GPUI tests and native CI packaging do not establish those results. Previous v0.6.0 exceptions do not apply to this version.
 
+The [native acceptance record](release-v0.6.1/native-acceptance.md) identifies the limited development precheck, environment, binary/resource boundaries and the outstanding matrix.
+
 The full current-candidate/final-package native matrix has not been executed: Windows NSIS/ZIP actual save, IME and table workflows at real DPI variants; macOS arm64/Intel; Linux X11/Wayland DEB/RPM/AppImage interaction and IME; browser/WeChat/Word interoperability and actual DOCX producers; and dedicated clean previous-version Windows/AppImage upgrades. These remain NOT_RUN/BLOCKED, not PASS. Existing change-specific Windows evidence is linked above and is not relabeled as installed-package acceptance.
 
-No v0.6.1 acceptance exception is authorized yet. Publication must wait for applicable acceptance or an explicit scoped maintainer exception with disclosure. All automated source checks, native packaging/resource verification, no-GPU AppImage smoke, updater signing, assets, manifests and OSS verification remain mandatory.
+On 2026-11-18 (Asia/Shanghai), after reviewing the v0.6.1 candidate and the explicit incomplete scope, the maintainer authorized: **“允许本次例外，披露未验证范围并继续发布”** (“Allow this release-specific exception, disclose the unverified scope and continue publication”). Exception `V061-NATIVE-SCOPE` covers the incomplete full Windows installed-package/IME/DPI matrix, macOS/Linux native interaction, supported browser/WeChat/Word and actual-producer interoperability, and previous-version signed Windows/AppImage upgrade/soak/failure variants identified above and in the native report. The Windows development precheck remains a limited precheck; unexecuted cases remain NOT_RUN/BLOCKED, never PASS. The reason is that this run did not execute the exhaustive dedicated native/platform/interoperability/upgrade environments; the maintainer explicitly accepts that limitation for v0.6.1 only. The bilingual release notes disclose the gap. All automated source checks, native packaging/resource verification, no-GPU AppImage smoke, updater signing, assets, manifests and OSS verification remain mandatory.
 
 ## Publication checklist
 
+Candidate packaging on `17db038`: [44122459859](https://github.com/willmove/markion/actions/runs/44122459859) succeeded on all four native builds, extracted-resource verification and the no-GPU AppImage smoke test. Branch-only signing/publication/mirror jobs were correctly skipped. The final freeze commit changes release documentation/evidence only; application source and resources match the verified candidate.
+
 - [x] Source checks and reviewed documentation complete.
-- [ ] Release-specific native acceptance readiness or explicitly authorized exception recorded.
+- [x] Release-specific native acceptance readiness or explicitly authorized exception recorded.
 - [ ] Dedicated Release Markion v0.6.1 commit and annotated tag pushed.
 - [ ] All four native builds, resource verification, AppImage smoke, signing, publication and mirror jobs succeed.
 - [ ] Seven packages, both signatures, channel-specific update.json, versions, hashes and public mirror reachability verified.

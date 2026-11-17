@@ -58,7 +58,7 @@
   ```
 
   ブラウザーから更新版を入手するたびに再実行します。[初回起動の詳細](docs/user-guide.md#install)。
-- **Linux：**AppImageに実行権限を付けて起動（`chmod +x Markion*.AppImage`）、またはDEB/RPMをインストールします。FUSEがない場合は`--appimage-extract-and-run`を使えます。
+- **Linux：**AppImageに実行権限を付けて起動（`chmod +x markion*.AppImage`）、またはDEB/RPMをインストールします。FUSEがない場合は`--appimage-extract-and-run`を使えます。
 
 Markdownファイルかフォルダーを開くだけで始められます。サンプルを編集する前に、**画像を含むexamplesフォルダー全体をコピーしてください**。[入門とテンプレート](assets/examples/README.md)。
 

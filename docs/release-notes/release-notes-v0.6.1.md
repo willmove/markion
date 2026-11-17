@@ -13,7 +13,7 @@ This patch makes writing more comfortable with Korean UI, adjustable spacing, ba
 
 **Downloads:** Windows x64 (NSIS/ZIP), macOS arm64/x64 (DMG), Linux x86_64 (DEB/RPM/AppImage); see attached assets.
 
-**Verification:** Candidate checks and native publication verification are tracked in the [preflight record](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.1-preflight.md). Full native browser/WeChat/Word, real IME and signed previous-version upgrade acceptance remain unverified; these are not passing results.
+**Verification:** Candidate checks and native publication verification are tracked in the [preflight record](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.1-preflight.md). Full installed-package/DPI, macOS/Linux interaction, browser/WeChat/Word, real IME and previous-version signed-upgrade acceptance remain unverified under an explicit v0.6.1 maintainer exception; these are not passing results.
 
 **Full comparison:** [v0.6.0...v0.6.1](https://github.com/willmove/markion/compare/v0.6.0...v0.6.1).
 
@@ -34,6 +34,6 @@ This patch makes writing more comfortable with Korean UI, adjustable spacing, ba
 
 **下载：**Windows x64（NSIS/ZIP）、macOS arm64/x64（DMG）、Linux x86_64（DEB/RPM/AppImage），见附件。
 
-**验证：**候选检查与原生发布验证见[发布前记录](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.1-preflight.md)。完整浏览器/微信/Word、真实输入法及上一版签名升级验收仍未验证，不能视作通过。
+**验证：**候选检查与原生发布验证见[发布前记录](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.1-preflight.md)。完整安装包/DPI、macOS/Linux 交互、浏览器/微信/Word、真实输入法及上一版签名升级验收，按维护者针对 v0.6.1 的明确例外授权保留为未验证，不能视作通过。
 
 **完整对比：**[v0.6.0...v0.6.1](https://github.com/willmove/markion/compare/v0.6.0...v0.6.1)。
