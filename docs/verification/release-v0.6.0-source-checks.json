@@ -23,5 +23,15 @@
     "ignored": 5
   },
   "quality_workflow_url": "https://github.com/willmove/markion/actions/runs/44041639336",
-  "quality_workflow_conclusion": "success"
+  "quality_workflow_conclusion": "success",
+  "committed_ci_checks": {
+    "quality_workflow_url": "https://github.com/willmove/markion/actions/runs/44041639336",
+    "workspace_suites": 51,
+    "passed": 2216,
+    "failed": 0,
+    "ignored": 5,
+    "strict_openspec_passed": 91,
+    "strict_openspec_failed": 0
+  },
+  "local_spec_inventory_note": "The 92-item local check included a concurrently prepared acceptance documentation change, excluded from the committed release candidate; CI verified all 91 committed items."
 }

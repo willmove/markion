@@ -1,0 +1,203 @@
+{
+  "version": "0.6.0",
+  "tag": "v0.6.0",
+  "release_url": "https://github.com/willmove/markion/releases/tag/v0.6.0",
+  "published_at": "2026-11-17T09:08:32Z",
+  "release_commit": "402d16e5242bb819ee3a08bbe156262aa96b0570",
+  "annotated_tag_object": "0f3b711237d208fc4412c7560534af62c948cf61",
+  "workflow_url": "https://github.com/willmove/markion/actions/runs/44050240423",
+  "workflow_attempt": 1,
+  "jobs": [
+    {
+      "id": 133925930421,
+      "name": "Build & package (ubuntu-22.04)",
+      "conclusion": "success"
+    },
+    {
+      "id": 133925930720,
+      "name": "Build & package (windows-latest)",
+      "conclusion": "success"
+    },
+    {
+      "id": 133925930799,
+      "name": "Build & package (macos-latest)",
+      "conclusion": "success"
+    },
+    {
+      "id": 133925930832,
+      "name": "Build & package (macos-latest)",
+      "conclusion": "success"
+    },
+    {
+      "id": 133933499001,
+      "name": "AppImage smoke test (no GPU, no Vulkan driver)",
+      "conclusion": "success"
+    },
+    {
+      "id": 133933499229,
+      "name": "Sign updater installers and build metadata",
+      "conclusion": "success"
+    },
+    {
+      "id": 133934431018,
+      "name": "Publish GitHub Release",
+      "conclusion": "success"
+    },
+    {
+      "id": 133934431064,
+      "name": "Mirror installers to Aliyun OSS",
+      "conclusion": "success"
+    }
+  ],
+  "assets": [
+    {
+      "name": "markion_0.6.0_x64-setup.exe",
+      "size": 23097512,
+      "digest": "sha256:bafa7aae5020d2f76934392ddcc703374c0d1964528847ceb36ee0351c5fccf8"
+    },
+    {
+      "name": "markion_0.6.0_x64-portable.zip",
+      "size": 31966696,
+      "digest": "sha256:d1c026464e7c2a470ede43597f5c43d03f8e85de60f25c91a2883208e89d32cd"
+    },
+    {
+      "name": "Markion_0.6.0_aarch64.dmg",
+      "size": 28370572,
+      "digest": "sha256:b5575ac156c2a6a7cdf0044c3b1fc6e82269a419fa38255bd2310177c523edc2"
+    },
+    {
+      "name": "Markion_0.6.0_x64.dmg",
+      "size": 30130909,
+      "digest": "sha256:e74859f514b0e4bf5a13bb802d6a5c78f9d852a0130b098cbf8c3a7e87070ffc"
+    },
+    {
+      "name": "markion_0.6.0_amd64.deb",
+      "size": 34079750,
+      "digest": "sha256:2bca380309516a155eda6fc62cd3a81ee167ecd659a0e78cb8f58b60e8c6a60e"
+    },
+    {
+      "name": "markion_0.6.0_x86_64.rpm",
+      "size": 33918076,
+      "digest": "sha256:fc5d995f4ab7dfdab671d01c09a771b60e74a348b2d417e0965d220bca8c126a"
+    },
+    {
+      "name": "markion_0.6.0_x86_64.AppImage",
+      "size": 54916288,
+      "digest": "sha256:dee6304253ab94a66cf0e5788d478e75b1419b30fb9e7bbb7adc6d5c0474f0f2"
+    },
+    {
+      "name": "markion_0.6.0_x64-setup.exe.sig",
+      "size": 428,
+      "digest": "sha256:fb33e5b93fa9a949c2b273f9aa34b7ed7909fbae943cfe7c9b45d414572819f8"
+    },
+    {
+      "name": "markion_0.6.0_x86_64.AppImage.sig",
+      "size": 432,
+      "digest": "sha256:2481c7417e839df5f9304180726b0846183475a54a852ce9170bc2a4f8b6d0a1"
+    },
+    {
+      "name": "update.json",
+      "size": 1347,
+      "digest": "sha256:bdca0d502cc8287e2c5dfec394fbf4fc83a2d82549491032da07910abf472a74"
+    }
+  ],
+  "mirror_objects": [
+    {
+      "name": "markion_0.6.0_x64-setup.exe",
+      "status": 200,
+      "bytes": 23097512
+    },
+    {
+      "name": "markion_0.6.0_x64-portable.zip",
+      "status": 200,
+      "bytes": 31966696
+    },
+    {
+      "name": "Markion_0.6.0_aarch64.dmg",
+      "status": 200,
+      "bytes": 28370572
+    },
+    {
+      "name": "Markion_0.6.0_x64.dmg",
+      "status": 200,
+      "bytes": 30130909
+    },
+    {
+      "name": "markion_0.6.0_amd64.deb",
+      "status": 200,
+      "bytes": 34079750
+    },
+    {
+      "name": "markion_0.6.0_x86_64.rpm",
+      "status": 200,
+      "bytes": 33918076
+    },
+    {
+      "name": "markion_0.6.0_x86_64.AppImage",
+      "status": 200,
+      "bytes": 54916288
+    },
+    {
+      "name": "markion_0.6.0_x64-setup.exe.sig",
+      "status": 200,
+      "bytes": 428
+    },
+    {
+      "name": "markion_0.6.0_x86_64.AppImage.sig",
+      "status": 200,
+      "bytes": 432
+    },
+    {
+      "name": "update.json",
+      "status": 200,
+      "bytes": 1361
+    },
+    {
+      "name": "packager.toml",
+      "status": 200,
+      "bytes": 8555
+    },
+    {
+      "name": "manifest.json",
+      "status": 200,
+      "bytes": 648
+    },
+    {
+      "name": "sha256sums.txt",
+      "status": 200,
+      "bytes": 648
+    }
+  ],
+  "mirror_payload_sha256": {
+    "markion_0.6.0_x64-setup.exe": "bafa7aae5020d2f76934392ddcc703374c0d1964528847ceb36ee0351c5fccf8",
+    "markion_0.6.0_x64-portable.zip": "d1c026464e7c2a470ede43597f5c43d03f8e85de60f25c91a2883208e89d32cd",
+    "Markion_0.6.0_aarch64.dmg": "b5575ac156c2a6a7cdf0044c3b1fc6e82269a419fa38255bd2310177c523edc2",
+    "Markion_0.6.0_x64.dmg": "e74859f514b0e4bf5a13bb802d6a5c78f9d852a0130b098cbf8c3a7e87070ffc",
+    "markion_0.6.0_amd64.deb": "2bca380309516a155eda6fc62cd3a81ee167ecd659a0e78cb8f58b60e8c6a60e",
+    "markion_0.6.0_x86_64.rpm": "fc5d995f4ab7dfdab671d01c09a771b60e74a348b2d417e0965d220bca8c126a",
+    "markion_0.6.0_x86_64.AppImage": "dee6304253ab94a66cf0e5788d478e75b1419b30fb9e7bbb7adc6d5c0474f0f2"
+  },
+  "channel_manifests_match_except_urls": true,
+  "signatures_match_all_channels": true,
+  "verified_at_utc": "2026-11-17T09:10:46.323735+00:00",
+  "release_metadata": {
+    "name": "Markion v0.6.0",
+    "draft": false,
+    "prerelease": false
+  },
+  "quality_workflow_url": "https://github.com/willmove/markion/actions/runs/44041639336",
+  "quality_workflow_conclusion": "success",
+  "quality_checks": {
+    "workspace_suites": 51,
+    "passed": 2216,
+    "failed": 0,
+    "ignored": 5,
+    "strict_openspec_passed": 91,
+    "strict_openspec_failed": 0
+  },
+  "macos_signing": {
+    "aarch64": "adhoc; notarize: false",
+    "x86_64": "adhoc; notarize: false"
+  },
+  "manual_checks": "Unavailable cross-platform native/default-browser/WeChat/Word/corpus/previous-version updater acceptance is unverified and skipped with explicit maintainer authorization for v0.6.0; no manual pass is inferred from CI."
+}

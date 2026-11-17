@@ -4,11 +4,11 @@ Updated / 更新：2026-11-17。This snapshot describes repository implementatio
 
 ## Release state / 发布状态
 
-- v0.6.0 candidate / 发布候选：紧凑上下文菜单、表格与图片属性、斜杠/emoji 补全、独立右侧大纲及离线样例库；Windows workspace **2,216 passed / 5 ignored / 0 failed**。打包、发布与人工范围结论见 [v0.6.0 preflight](verification/release-v0.6.0-preflight.md)。
+- v0.6.0 published / 已发布：紧凑上下文菜单、表格与图片属性、斜杠/emoji 补全、独立右侧大纲及离线样例库；Windows workspace **2,216 passed / 5 ignored / 0 failed**。四个平台打包、AppImage 冒烟、签名、发布、镜像及哈希验证均完成；未验证人工项按维护者授权明确跳过，见 [v0.6.0 preflight](verification/release-v0.6.0-preflight.md)。
 
-- Latest verified public stable tag / 当前公开稳定版本：[`v0.5.3`](https://github.com/willmove/markion/releases/tag/v0.5.3).
-- Published comparison / 本次完整对比：[`v0.5.2...v0.5.3`](https://github.com/willmove/markion/compare/v0.5.2...v0.5.3).
-- Current preflight: **2136 passed / 5 ignored / 0 failed**, bundle verification and build/lint/spec checks pass; the tag packaging/signing/publication/mirror workflow and Windows repository quality gate passed. 本次全量回归、标签构建/签名/发布/镜像及 Windows 仓库质量检查已通过；缺少环境的人工项按维护者授权记录为跳过；详见 [v0.5.3 preflight](verification/release-v0.5.3-preflight.md)。
+- Latest verified public stable tag / 当前公开稳定版本：[`v0.6.0`](https://github.com/willmove/markion/releases/tag/v0.6.0).
+- Published comparison / 本次完整对比：[`v0.5.3...v0.6.0`](https://github.com/willmove/markion/compare/v0.5.3...v0.6.0).
+- Previous v0.5.3 preflight / 上一版本记录: **2136 passed / 5 ignored / 0 failed**, bundle verification and build/lint/spec checks pass; the tag packaging/signing/publication/mirror workflow and Windows repository quality gate passed. 本次全量回归、标签构建/签名/发布/镜像及 Windows 仓库质量检查已通过；缺少环境的人工项按维护者授权记录为跳过；详见 [v0.5.3 preflight](verification/release-v0.5.3-preflight.md)。
 - Follow the [release process](release-process.md). A prepared version or successful build alone does not establish publication: native packages, updater signatures and manifests, the AppImage smoke test, OSS mirror, release notes, and required manual evidence must be verified. 准备版本号或构建成功不等于发布完成；安装包、签名、元数据、冒烟测试、镜像与人工验证均须核实。
 
 ## Implemented progress / 已实现进展
