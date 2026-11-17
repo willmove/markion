@@ -18,9 +18,9 @@ Date: 2026-11-17 (Asia/Shanghai). Previous stable tag: `v0.5.3`. Requested relea
 | `cargo clippy --workspace` | Passed with existing warnings; warnings are not represented as clean lint output |
 | Pinned MarkNice `verify-bundle` | Passed: 23 files, 3,140,387 bytes |
 | `pwsh.exe -File scripts/verify-examples.ps1` | Passed: 18 Markdown files, index coverage and local references |
-| OpenSpec strict validation | Passed after archival/reconciliation; final check rerun before commit |
-| Version metadata / `cargo check --workspace` | Pending synchronized 0.6.0 metadata verification |
-| Release-version workspace regression | Pending after version synchronization |
+| OpenSpec strict validation | Passed: 92 items, 0 failures after the final 25 archives and retained-delta reconciliation |
+| Version metadata / `cargo check --workspace` | Passed: all 10 workspace packages, root/workspace/packager and lockfile resolve to 0.6.0; no third-party lock versions changed |
+| Release-version workspace regression | Passed after 0.6.0 synchronization: 2,216 passed, 0 failed, 5 existing ignored; 51 result groups |
 
 ## Native evidence and manual boundaries
 

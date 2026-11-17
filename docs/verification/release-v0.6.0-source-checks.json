@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-17",
+  "platform": "Windows",
+  "candidate_commit": "2b59f148c2e57b9c6b68a5fe7150458fea87d15f",
+  "command": "cargo test --workspace",
+  "suite_results": 51,
+  "passed": 2216,
+  "failed": 0,
+  "ignored": 5,
+  "version_check": "10 workspace packages resolve to 0.6.0; cargo check --workspace passed",
+  "format": "passed",
+  "clippy": "passed with existing warnings",
+  "strict_openspec": {
+    "passed": 92,
+    "failed": 0
+  },
+  "manual_matrix": "Incomplete; separate maintainer scope decision required before publication.",
+  "release_version_regression": {
+    "version": "0.6.0",
+    "suite_results": 51,
+    "passed": 2216,
+    "failed": 0,
+    "ignored": 5
+  }
+}
