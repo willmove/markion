@@ -2,6 +2,8 @@
 
 This runbook is the canonical procedure for publishing a stable Markion release to GitHub. It records the process verified by the v0.1.5 release. A release is complete only after the tag workflow succeeds, all installers are attached, curated release notes are present, and the repository is synchronized with GitHub.
 
+The maintained [release acceptance suite](testing/README.md) is the shared entry point for human and Codex native verification. Its [human guide](testing/human-runbook.md), [Codex guide](testing/codex-runbook.md), fixtures, detailed cases and record templates replace reconstructing a release checklist from historical reports. Delivering the suite does not establish that any release passed it.
+
 ## 1. Defaults and prerequisites
 
 - Publish from `main` with a clean worktree and a local branch synchronized with `origin/main`.
@@ -10,6 +12,7 @@ This runbook is the canonical procedure for publishing a stable Markion release 
 - Write concise final release notes bilingually by default — English first, followed by the corresponding Simplified Chinese version — using the compact template in section 7 unless another language arrangement is requested.
 - Preserve public tags. Never delete, force-move, or recreate a published tag without explicit authorization.
 - Required tools: stable Rust and Cargo, Git, GitHub CLI (`gh`), OpenSpec CLI, and an authenticated GitHub account with permission to push and publish Releases.
+- Native acceptance material and documentation checks additionally use Python 3.10+ (standard library only); Windows execution uses PowerShell 7 (`pwsh.exe`). Browser, Office, input-method and platform prerequisites are listed in the acceptance matrix.
 
 ### Updater signing (Windows NSIS + Linux AppImage)
 
@@ -127,12 +130,21 @@ Run the complete workspace suite and inspect the release-only diff:
 cargo test --workspace
 cargo run -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
 pwsh -File scripts/verify-examples.ps1
+python docs/testing/fixtures/prepare.py check
 git diff --check
 git status --short --branch
 git diff -- Cargo.toml Cargo.lock packager.toml
 ```
 
 Expected release-only changes are the synchronized version fields. Stop before tagging if tests fail, metadata versions disagree, the diff includes unintended edits, or the target tag/Release collides.
+
+### 4.1 Candidate native acceptance
+
+Before tagging, execute the applicable P0/P1 cases and platform/package variants in [docs/testing](testing/README.md), using candidate packages from the branch packaging workflow where available. Create a fresh isolated run with the [fixture utility](testing/fixtures/README.md) and copy the [release report](testing/templates/release-report.md) and [per-variant results](testing/templates/results.csv). Record the candidate commit, dirty-source diff identity when applicable, package/executable/resource hashes, exact environment and external-tool versions, actual observations, complete-file comparisons, and evidence paths. A development-binary check remains a labeled precheck rather than installed-package acceptance.
+
+Expand each case's cancellation, failure, mode, input-method and platform variants into separate result rows. Keep automated/GPUI/callback-replay evidence separate from OS input, actual browser clipboard, and Word-viewer results. Preserve failed attempts and ignored tests. Missing platforms or unsupported automation gestures remain BLOCKED/SKIP/NOT_RUN, never PASS. Required incomplete rows block ordinary readiness; a maintainer may explicitly authorize a scoped exception for this release with its reason and disclosure, without relabeling the result or inheriting a prior release's exception. P0 failures must be fixed and retested.
+
+Link the report and retained evidence from `docs/verification/release-vX.Y.Z-preflight.md`. Existing [MarkNice browser/WeChat/Word evidence requirements](marknice-workspace-release-evidence.md) remain required, and [DOCX producer qualification](docx-import-compatibility.md) must not be claimed from synthetic fixtures. Signed previous-version upgrade checks that require final tagged metadata remain explicitly pending until step 8; do not change production update endpoints just to manufacture a candidate test.
 
 ## 5. Commit, tag, and push
 
@@ -173,6 +185,8 @@ collection before upload. Every example document and image must match the
 checkout; missing or altered files fail package verification. Complete the manual
 browser and WeChat matrix in `docs/marknice-workspace-release-evidence.md`; a
 release with pending rows is not ready to publish.
+
+After tag artifacts exist, run [P01/P02/P06/P07](testing/cases/platform-release.md) against the actual final packages and link them to the candidate record. Recheck core save, actual IME and table input on the installed final build; a changed binary/resource identity requires the affected cases to be rerun. The current workflow publishes automatically: these final native checks are required before reporting completion, not a claim that CI already pauses for human approval.
 
 If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed. If only `mirror-oss` failed after the GitHub assets were published, fix the cause on `main`, then run `gh workflow run release.yml --ref main -f mirror_tag=vX.Y.Z`; monitor that repair run and verify the public mirror before continuing.
 
@@ -262,5 +276,6 @@ Confirm that:
 - From a previous-version Linux AppImage (launch it so the AppImage runtime is active), the updater accepts the signature, replaces the `.AppImage` in place, relaunches the new version, and also refuses to begin while any document is dirty. A `.deb`-installed Linux build keeps the browser-download flow.
 - Local `main`, `origin/main`, the release commit, and the annotated tag resolve to the intended release state.
 - The local worktree is clean.
+- The [native acceptance report](testing/templates/release-report.md) identifies both candidate and final tagged artifacts, records actual final-package smoke and previous-version upgrade results, and preserves all outstanding failures, missing environments and any explicitly authorized release-specific exceptions. Historical evidence or a green build does not fill pending native rows.
 
 Only after every check passes should the release be reported as complete, with links to the Release and tag workflow.

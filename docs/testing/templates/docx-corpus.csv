@@ -1,0 +1,2 @@
+sample_id,relative_path,producer,producer_version,os,creation_steps,provenance_or_license,source_sha256,expected_text_path,expected_structure,expected_assets_and_hashes,expected_diagnostics,result,evidence
+DOCX-001,,,,,,,,,,,,NOT_RUN,

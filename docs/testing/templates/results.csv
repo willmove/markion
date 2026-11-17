@@ -1,0 +1,63 @@
+case_id,title,priority,variant,environment_id,artifact_sha256,attempt,method,result,expected,actual,evidence,defect,exception,reason
+D01,新建、保存与另存为,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,完整 UTF-8 内容符合独立预期；原文件不受副本后续编辑影响；成功保存后路径、标题和 dirty 指示正确。,,,,,已有文件／未命名；Source／Visual；LF／CRLF。
+D02,保存取消、覆盖确认与不可写错误,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,取消不改路径或旧文件；失败保留 dirty 文本和先前路径，有可理解反馈；确认覆盖只写指定目标。,,,,,保存／另存为；未命名／已命名；只读文件／不可写目录。
+D03,自动保存设置与多标签写入,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,关闭时不自动保存正文；开启时各文件内容与对应标签一致；状态反馈正确，无旧内容回写或跨标签覆盖。,,,,,两个文件；快速连续编辑／等待后编辑；正常／D04 外部冲突。
+D04,外部修改、删除与冲突选择,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,普通保存不静默覆盖 EXTERNAL；Reload 使用磁盘正文，Overwrite 仅在明确选择后写当前文本，Save a Copy 保留外部文件；纯 metadata 改动无假冲突。,,,,,修改／删除／只改时间；手动／自动保存；每个选择独立。
+D05,脏文档离开保护,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,未保存内容不被静默替换；取消保持原标签／内容，放弃是显式选择；保存失败不能当作成功离开。,,,,,命名／未命名；欢迎／普通／图片标签；打开当前标签偏好开／关。
+D06,标签休眠后的历史与选区,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,内容、选区、滚动与各自历史不串标签；缓存休眠不产生编辑；A 的 Undo 不改变 B。,,,,,Visual／Source／Split；两个长文件和一个图片标签混合。
+D07,强制中断后的文档恢复,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,恢复未保存正文且标为 dirty；不覆盖 EXTERNAL-NEW；原路径上下文清楚；成功保存或显式丢弃后对应旧快照退休。,,,,,命名／未命名；磁盘未变／外部变化／路径已删除。
+D08,恢复管理器逐项处理与再次中断,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,坏格式项显示不可读且 Restore All 不删除它；未选择项保留；恢复后再次中断仍能找回；已有同路径干净 session 标签不重复。,,,,,单项／全部；可读／不可读；立即再中断；同路径 session 已恢复。
+D09,UTF-8、行尾与 EOF 保真,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,纯切换不修改源；改动局限于目标字节，LF／CRLF 和无末尾换行保持；中文、emoji、组合字符没有拆坏。,,,,,三种行尾；Source／Visual 修改；文件首／中／末。
+D10,纯文本与数据文件,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,数据文件使用源码／代码字体及适用高亮，无 Markdown 预览大纲；纯文本不被格式化；dirty、保存和扩展名正确；Markdown 模式恢复。,,,,,四种文件；重启 session；系统拖入；无效 JSON 仍可编辑。
+E01,四模式往返与只读边界,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,非编辑切换不改正文；历史和选区保留；Read 不修改源；Split 两栏及同步滚动没有错误定位。,,,,,长文档／短文档；同步滚动开／关；各模式重启恢复。
+E02,键鼠选择与导航,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,选词、段落、整篇范围准确，无隐藏语法边界误删；光标与选择可见；Undo 恢复。,,,,,Source／Visual；正向／反向选区；窄窗口折行；macOS Option 词键。
+E03,自动配对与即时输入规则,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,列表前缀不被配对破坏；普通 URL 按当前规则转换；受限字段和组合输入不误转换；每次语义动作可撤销。,,,,,Source／Visual；配对开／关；有／无选区。
+E04,空结构与连续 Enter／Backspace,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,光标与新增空行可见；合法缩进保留完整子树；退出列表不吞后续块；引用拆分保持顺序；独立动作一次撤销。,,,,,无序／有序／任务／引用；空标题；LF／CRLF；EOF。
+E05,真实 IME 组合、停顿与撤销,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,候选窗随光标；提交为完整中文，一次 Undo 恢复组合前文本而非拼音；取消不残留；无 UTF-8 崩溃或跳屏。,,,,,Source／Visual；段落／代码／表格；Windows Pinyin；Linux IBus/Fcitx 中韩文；macOS 系统 IME。
+E06,真实剪贴板与富文本粘贴,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,纯文本原样，富文本转换到受支持 Markdown；只作用选区／光标；外部接收的文本／HTML 正确，整次粘贴可撤销。,,,,,Windows CF_HTML／macOS public.html／Linux X11、Wayland；prose／单元格；无 HTML clipboard。
+E07,多块、列表子树与重排分隔,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,子项和嵌套代码完整跟随；独立段落／引用不合并；无自／后代落点破坏；鼠标、键盘和菜单语义一致。,,,,,多块／完整子树；LF／CRLF／无 EOF 换行；正反向拖动；Shift+click。
+E08,选区格式与捕获目标,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,只改变精确范围；链接取消不编辑；旧目标失效，不能改其他块／标签；跨单元格不猜测格式化范围。,,,,,Source／Visual；普通／跨块选区；选区和右键块不同。
+E09,斜杠面板及开关,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,命令只替换合法查询；不误触 URL；取消不执行命令；禁用后字面输入保留，emoji／块菜单不被禁用。,,,,,行首／空白后；Source／Visual；窄窗口、明暗主题。
+E10,emoji 补全完整可达,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,候选立即显示且末项可达；面板贴近光标、不被裁切；插入正确 shortcode／显示 glyph，源文本可完整恢复。,,,,,Source／Visual；文档底部／窄窗口；明暗主题。
+E11,紧凑菜单、空段落插入与提示块,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,转换与插入不混淆；精确使用点击空行，不跳到整个空白区末尾；邻块不改；新提示块光标进入正文；H6 不出现在此菜单。,,,,,指针／键盘菜单／grip；有无其他选区；LF／CRLF；五种 callout。
+E12,菜单生命周期、子菜单与焦点,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,飞出菜单可达且不越界；外部点击和文档转场关闭旧菜单，无崩溃；字段输入不触发正文快捷键；取消无正文更改。,,,,,菜单根／二级；各转场独立；明暗主题；最小支持窗口。
+E13,查找替换与过期搜索,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,匹配范围／数量正确；非法正则有反馈不崩溃；Read 只查可见 label，不改源，回编辑后替换状态可恢复；旧查询结果不落到新文档。,,,,,Source／Visual／Split／Read；大小写开关；正则捕获替换；密集单行。
+R01,表格光标、空格与列导航,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,光标可见，上下保持逻辑列、不停在 Markdown delimiter；空单元格点击不插入文本，跨表格不串归属。,,,,,三列／不齐行；Source 行尾 LF／CRLF；窄窗口折行。
+R02,表格换行、遍历与末格加行,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,Shift+Enter 为单元格内硬换行，不拆成新表；普通 Enter／Tab 导航正常；末格只加一行；每次编辑可一次撤销，周边字节不变。,,,,,空格／选区替换；中文/emoji；表头／末格；literal <br> 在代码中不当硬换行。
+R03,矩形、行列选择与矩阵剪贴板,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,只改变选区内单元格；矩阵方向和内容正确；清空保留结构；清空／Undo 视口稳定，矩阵粘贴作为一次编辑撤销。,,,,,矩形／整行／整列；反向选区；空与不足列；外部 Excel/WPS/LibreOffice 记录版本。
+R04,完整行列工具与列宽,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,操作右键目标；另一个表和周边源字节保持；禁用项不执行；持久列宽／对齐重开保持，结构动作一次撤销。,,,,,记录实际菜单完整目录；7 个行／10 个列命令如仍适用逐项建行；首／中／末／表头。
+R05,代码正文、语言与折叠,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,保留围栏、缩进和正文；未闭合围栏仍可编辑；折叠不改源，进入正文会展开；Copy 位置和背景受栏宽约束。,,,,,围栏／缩进／未闭合；明暗主题；行号／换行开关；小窗口。
+R06,公式与异步图表,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,Ready/Pending/Error 均可理解且不丢源；定界符保留；旧任务不把旧图贴到新文档；错误不冻结 UI。,,,,,正确／错误；重复相同／不同源；CJK/emoji 组合输入；Source/Visual/Split/Read。
+R07,前言、TOC、脚注、锚点和 HTML,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,纯显示／跳转不改源；标题定位准确；脚注预览有来源；已支持实体/HTML 显示正确，未知或畸形保守保留；不把 GFM pipe table 当合并表格。,,,,,四模式；不匹配锚点／脚注；正确／畸形 YAML；稳定行内开关。
+R08,图片对象、属性与源保真,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,只改目标 occurrence；属性取消不写源；引用不能误改所有引用；失效资源有反馈不冻结；当前图片对象不因 hover/选中暴露大段隐藏源码。,,,,,block／inline／reference／HTML img／畸形多行；明暗／HiDPI；合法控件与保守回退分开。
+W01,文件树层级、筛选与隐藏,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,逐级展开且空目录可见；滚动条／滚轮可达；清空筛选恢复；hidden 偏好即时生效，始终排除噪声目录仍隐藏；大树不冻结。,,,,,隐藏开/关；窗口缩窄；侧栏拖宽；重启。
+W02,文件创建、改名、移动、复制和删除,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,操作仅在目标；同名不覆盖；取消不删；完整复制且使用可用名称，Duplicate 复制磁盘内容而非未保存缓冲区；打开标签与路径按操作一致，dirty 内容不静默丢失。,,,,,文件／含子目录文件夹；中文/空格；目的权限失败；侧栏隐藏下标签改名入口。
+W03,外部文件变化与旧监听,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,树正确更新且不重置无关展开/滚动；dirty 缓冲区保留；远程删除的原文可恢复且自动保存不悄悄重建旧路径；旧监听不污染新根。,,,,,本地外部变化／G03 pull 删除和重命名；隐藏目录变化。
+W04,打开入口与当前标签偏好,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,安全复用当前标签或开新标签符合偏好；脏文档保留；重复路径聚焦唯一已有标签；数据/图片类型正确，失败有反馈。,,,,,欢迎／干净／dirty／图片当前标签；单/多文件；新标签显式入口。
+W05,标签溢出与长名称,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,所有标签可达；激活项自动露出；关闭和 dirty 标记不被截掉；新建按钮固定；去掉溢出后滚动位置合法。,,,,,最小窗口／放大；dirty 长标题；鼠标／触控板（可用时）。
+W06,只读图片标签,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,图片适配显示、无编辑 dirty；不可用命令禁用或安全无效；旧菜单不渲染错误类型；其他标签内容和模式正常。,,,,,PNG／可用 JPEG/SVG 额外样本；损坏图片；长路径。
+X01,内置导出逐格式检查,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,按格式已支持语义检查；文件非空且可打开，无意外缺页/缺字；HTML 静态公式/图表可显示；取消不落半成品，原文不变。,,,,,字体/纸张/方向/页边距；图片策略；长文多页；PNG/JPEG snapshot。
+X02,Pandoc 与工具失败,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,实际执行工具且产物正确；错误/回退行为有反馈，不伪报成功；不损原文；内置和外部引擎结果各自标注。,,,,,工具存在／缺失；合法／缺字体；内置与 Pandoc 分开。
+X03,真实 Office 来源导入资格,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,每个真实来源分别有结果；插入/move-to 保留、删除/move-from 省略；不支持内容显式诊断；未有真实样本就不声称兼容资格。,,,,,三类 producer，Markion/MarkNice 导出再导入另列；小/图多/近限制。
+X04,导入取消、目标与资源发布,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,源 DOCX/原标签不变；不覆盖已有目标；资源完整后才出现 Markdown；取消不遗留可误认成功的半文档；无需外部 converter。,,,,,合成有效／坏 ZIP／真实有损 corpus；每个取消点；保存阶段完成边界单列。
+X05,MarkNice 正常流程和查看器,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,Copy MD 等于当前 textarea；浏览器操作不写回原 Markdown；微信/Word 格式可用；PDF 不含工具栏/手机框，实际落盘。,,,,,每个支持默认浏览器/平台；Word 与第二查看器分别记录；15 主题自测是补充。
+X06,MarkNice 权限、会话与资源失败,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,错误/限制明确；不泄露工作区外路径；大图有可见回退；纯本地 runtime 不依赖 CDN；远程图片不被承诺离线；原文完整。,,,,,Windows/macOS/X11/Wayland 默认浏览器；HTML/Word/PDF 独立。
+X07,图片资源策略、路径与取消,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,策略只在显式插入/操作触发；开/渲染/保存不自动传输；取消不遗留资源；相对URL可移植；失效传输不写错新目标，恢复入口可找回。,,,,,文件/剪贴板图片/远程下载；重复资源；引用同 URL 的两个 occurrence。
+X08,外部上传与失败恢复,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,仅接受一个合法HTTP(S) URL；失败/过期不写错源；恢复保留可恢复信息；Undo/Redo 不重复传输；Windows 无多余控制台。,,,,,HTTP/Core/command；成功/失败/超时；真实服务缺失 BLOCKED；无需真实云密钥。
+G01,同步配置与本地 remote,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,默认路线和提示符合实际目录；取消不改仓库；不把日常仓库或真实账号带入测试；已有安全 origin 可用。,,,,,专用笔记仓库／普通／空／混合；取消／确认；无 Git 可执行程序。
+G02,双端同步与暂存区所有权,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,双方预期修改完整；无关已暂存内容按受支持同步路径被安全保护/拒绝，不悄悄混入提交；同步状态与实际 ahead/behind 一致。,,,,,仅本地／仅远端／双方不同文件；已暂存／未暂存；自动保存进行中。
+G03,冲突、远程删除和重命名,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,冲突明确且双方内容可恢复；合并/取消不丢工作；干净重命名可准确映射，远程删除不被自动保存复活；dirty 不静默覆盖。,,,,,文本冲突／修改删除／重命名；干净／dirty 打开标签；每个解决选择。
+G04,中断与陈旧 checkpoint,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,不会重复生成内容快照/提交；未解决工作保留；外部新内容不被覆盖；已完成 checkpoint 不永久锁住编辑；未知投递状态需要核对不盲重放。,,,,,解决中／本地操作中／投递未知；继续／取消／外部变化。
+G05,局部版本、历史比较与恢复,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,提交只含审阅路径并保留暂存区所有权；比较不改文件；恢复为当前文档未保存编辑且可撤销，不直接改其他文件或执行 checkout。,,,,,干净／dirty 当前文档；历史文件已删/重命名；分页/切仓库过期结果。
+A01,无密钥配置与工具能力,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,测试不附带笔记；草稿保存/启用顺序清楚，能力随配置失效/重验；持久配置保留，session-only 对话和授权不自动恢复。,,,,,自定义/本地；服务未启动；text-only／tools；取消设置草稿。
+A02,输入隔离、流式与停止,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,输入/快捷键留在 composer，不改文档；组合 Enter 不误发；停止保留不完整结果且不可 Apply；关闭面板不谎报任务已停止。,,,,,实际IMEs／英文；长多行；窄面板；会话切换保留草稿。
+A03,显式上下文、预算与来源,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,仅显式上下文进入请求；使用dirty缓冲区；超限阻止当前请求、不静默截断；来源只对应真实附件/读取，不能把模型编造路径当验证链接。,,,,,选区/文档/文件；CJK字节；历史预算；原文件被移动/替换。
+A04,写作审阅与失效目标,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,审阅前无源改动；只应用捕获目标，inactive不转投当前标签；已改或关闭目标拒绝；独立一次Undo恢复；Read无法映射选区只分析。,,,,,全部12写作预设至少可达；翻译语言/语气必填；Source/Visual/Read。
+A05,授权、文件提案与恢复,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,未批准不写盘；依赖检查正确；Apply只改审阅范围；恢复不覆盖新内容；完成项不重放；恢复记录独立于对话、AI开关，授权不随历史恢复。,,,,,无授权/撤销；dirty move Save First；collision/部分失败/中断（无法可靠造出写BLOCKED）。
+P01,逐包安装、启动与用户数据保留,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,每格式可用、架构正确，打包资源可找到；不会借仓库回退掩盖缺包；升级不丢文档/配置；如未公证按实际说明反馈，不宣称已公证。,,,,,README矩阵每包；Linux兼容发行版；有/无系统Vulkan；macOS arm64和真实Intel。
+P02,离线样例库与安装资源,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,实际安装资源完整可离线使用；复制后可编辑，安装原件哈希不变；入口缺资源时报可理解反馈而不崩溃。,,,,,每包；只读安装目录；AppImage临时挂载；中文复制路径。
+P03,偏好、语言、主题与真实缩放,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,设置即时并正确持久化；重置有明确范围，不删除文档/恢复记录；无截断到无法操作，快捷键反馈正确；不改变源。,,,,,明/暗 × 代表长短语言 × 100/150/200%或macOS实际档位；小窗口/重启。
+P04,窗口边角、首帧与输入可见性,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,按钮/边角命中正确；内容不被阴影边框遮住；光标与前文始终可见，无第一次缺caret或交替隐藏；拖动不与菜单混淆。,,,,,Windows/macOS/X11/Wayland；窗口/最大化/fullscreen；typewriter开/关；HiDPI。
+P05,真实连续输入与内存观察,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,保存无丢重键；交互无新冻结/视口错误；记录全部样本、P50/P95/max和回落趋势；不把模型benchmark当键盘到GPU延迟。,,,,,四大小；密集单行/全局引用/图多另列；无编译并行负载；同机旧版对照。
+P06,真实上一版本升级与失败回退,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,只有明确用户动作才下载安装；dirty拒绝；未验证payload不执行；失败现安装仍可用；macOS/DEB/RPM走正确手动下载，不声称自替换。,,,,,Windows/AppImage成功；每种失败；macOS/DEB/RPM/不带公钥构建fallback。
+P07,最终标签包与公开元数据,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,程序/资源身份有链路；候选结果不冒充最终包；构建变化重跑相关项；required失败/未验无授权例外不能报告完成；签名及发布门禁保留。,,,,,GitHub/OSS；所有平台包；候选/最终构建映射；缺环境必须披露。
