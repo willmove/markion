@@ -38,10 +38,12 @@ pub enum ContextMenuMsg {
     CalloutWarning,
     CalloutCaution,
     FormatBlock,
+    AddDividerBelow,
+    AddTableBelow,
 }
 
 pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static str {
-    let labels: &[&str; 22] = match language {
+    let labels: &[&str; 24] = match language {
         Language::Ko => &[
             "문단",
             "제목",
@@ -65,6 +67,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "경고 콜아웃",
             "주의 콜아웃",
             "블록 서식 지정",
+            "{0} 아래에 구분선 삽입",
+            "{0} 아래에 표 삽입",
         ],
         Language::En => &[
             "Paragraph",
@@ -89,6 +93,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Warning Callout",
             "Caution Callout",
             "Format Block",
+            "Insert Divider Below {0}",
+            "Insert Table Below {0}",
         ],
         Language::ZhHans => &[
             "段落",
@@ -113,6 +119,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "高亮块 · 警告",
             "高亮块 · 注意",
             "设置格式",
+            "在{0}下方插入分隔线",
+            "在{0}下方插入表格",
         ],
         Language::ZhHant => &[
             "段落",
@@ -137,6 +145,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "高亮區塊 · 警告",
             "高亮區塊 · 注意",
             "設定格式",
+            "在{0}下方插入分隔線",
+            "在{0}下方插入表格",
         ],
         Language::Ja => &[
             "段落",
@@ -161,6 +171,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "警告ブロック",
             "注意ブロック",
             "書式設定",
+            "{0}の下に区切り線を挿入",
+            "{0}の下に表を挿入",
         ],
         Language::Fr => &[
             "Paragraphe",
@@ -185,6 +197,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Encadré d’avertissement",
             "Encadré de prudence",
             "Mise en forme",
+            "Insérer un séparateur sous : {0}",
+            "Insérer un tableau sous : {0}",
         ],
         Language::De => &[
             "Absatz",
@@ -209,6 +223,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Warnungsblock",
             "Vorsichtsblock",
             "Block formatieren",
+            "Trennlinie unter {0} einfügen",
+            "Tabelle unter {0} einfügen",
         ],
         Language::Es => &[
             "Párrafo",
@@ -233,6 +249,8 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Bloque de advertencia",
             "Bloque de precaución",
             "Dar formato",
+            "Insertar separador debajo de {0}",
+            "Insertar tabla debajo de {0}",
         ],
     };
     labels[message as usize]
@@ -9477,6 +9495,8 @@ mod tests {
             ContextMenuMsg::CalloutWarning,
             ContextMenuMsg::CalloutCaution,
             ContextMenuMsg::FormatBlock,
+            ContextMenuMsg::AddDividerBelow,
+            ContextMenuMsg::AddTableBelow,
         ] {
             let korean = context_menu_t(Language::Ko, message);
             assert!(!korean.is_empty());

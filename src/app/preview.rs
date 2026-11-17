@@ -5477,7 +5477,11 @@ fn block_menu_panel(
                     } else if state.editing_context.is_some() {
                         t(language, Msg::MenuEdit).to_string()
                     } else {
-                        p1_t(language, P1Msg::SlashCommands).to_string()
+                        format!(
+                            "{} · {}",
+                            p1_t(language, P1Msg::SlashCommands),
+                            block_menu_context_label(language, state.context)
+                        )
                     }
                 },
                 |page| {
@@ -5642,6 +5646,8 @@ pub(super) fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
         BlockMenuItem::CutBlock => "visual-block-cut",
         BlockMenuItem::Paste => "visual-block-paste",
         BlockMenuItem::AddBelow => "visual-block-add-below",
+        BlockMenuItem::AddDividerBelow => "visual-block-add-divider-below",
+        BlockMenuItem::AddTableBelow => "visual-block-add-table-below",
         BlockMenuItem::CopySelection => "visual-selection-copy",
         BlockMenuItem::CutSelection => "visual-selection-cut",
         BlockMenuItem::DeleteSelection => "visual-selection-delete",
@@ -5729,6 +5735,8 @@ fn block_menu_item_label(
         BlockMenuItem::CutBlock => scoped(ContextMenuMsg::Cut),
         BlockMenuItem::Paste => t(language, Msg::ItemPaste).to_string(),
         BlockMenuItem::AddBelow => scoped(ContextMenuMsg::AddBelow),
+        BlockMenuItem::AddDividerBelow => scoped(ContextMenuMsg::AddDividerBelow),
+        BlockMenuItem::AddTableBelow => scoped(ContextMenuMsg::AddTableBelow),
         BlockMenuItem::CopySelection => t(language, Msg::ItemCopy).to_string(),
         BlockMenuItem::CutSelection => t(language, Msg::ItemCut).to_string(),
         BlockMenuItem::DeleteSelection => t(language, Msg::DialogButtonDelete).to_string(),
@@ -5818,6 +5826,8 @@ fn block_menu_item_icon(item: BlockMenuItem) -> crate::ui::icon::Icon {
         BlockMenuItem::MoveUp => Icon::Send,
         BlockMenuItem::MoveDown => Icon::ArrowDown,
         BlockMenuItem::AddBelow => Icon::Plus,
+        BlockMenuItem::AddDividerBelow => Icon::Minus,
+        BlockMenuItem::AddTableBelow => Icon::Table,
         BlockMenuItem::TableRow(_)
         | BlockMenuItem::TableColumn(_)
         | BlockMenuItem::Submenu(
@@ -5885,7 +5895,8 @@ fn block_menu_item_button(
         palette.text
     };
     let content = match item {
-        BlockMenuItem::Transform(BlockTransform::Heading(level)) => {
+        BlockMenuItem::Transform(BlockTransform::Heading(level))
+        | BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Heading(level))) => {
             div().child(format!("H{level}")).into_any_element()
         }
         BlockMenuItem::ImageWidth(width) => div()

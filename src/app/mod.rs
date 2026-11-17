@@ -1669,8 +1669,11 @@ enum SelectionFormatAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockMenuGroup {
     Clipboard,
+    BlockClipboard,
     Selection,
     Transforms,
+    InsertBlocks,
+    InsertCallouts,
     Insertion,
     Operations,
     TableRows,
@@ -1688,6 +1691,8 @@ enum BlockMenuItem {
     CutBlock,
     Paste,
     AddBelow,
+    AddDividerBelow,
+    AddTableBelow,
     SelectionFormat(SelectionFormatAction),
     Insert(SlashPaletteCommand),
     InsertCallout(AlertKind),
@@ -1770,14 +1775,14 @@ impl BlockMenuState {
                 items.extend([
                     BlockMenuItem::Transform(BlockTransform::Quote),
                     BlockMenuItem::Transform(BlockTransform::CodeBlock),
-                    BlockMenuItem::Transform(BlockTransform::Divider),
-                    BlockMenuItem::Transform(BlockTransform::Table),
                     BlockMenuItem::CopyBlock,
                     BlockMenuItem::CutBlock,
                     BlockMenuItem::Duplicate,
                     BlockMenuItem::MoveUp,
                     BlockMenuItem::MoveDown,
                     BlockMenuItem::AddBelow,
+                    BlockMenuItem::AddDividerBelow,
+                    BlockMenuItem::AddTableBelow,
                     BlockMenuItem::Delete,
                 ]);
             }
@@ -1849,14 +1854,15 @@ impl BlockMenuState {
             items.extend([
                 BlockMenuItem::Transform(BlockTransform::Quote),
                 BlockMenuItem::Transform(BlockTransform::CodeBlock),
-                BlockMenuItem::Transform(BlockTransform::Divider),
-                BlockMenuItem::Transform(BlockTransform::Table),
                 BlockMenuItem::Insert(SlashPaletteCommand::Link),
                 BlockMenuItem::Insert(SlashPaletteCommand::Formula),
                 BlockMenuItem::Insert(SlashPaletteCommand::Image),
             ]);
         }
         items.extend(BLOCK_MENU_OPERATIONS);
+        if !self.is_image {
+            items.extend([BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]);
+        }
         items.push(BlockMenuItem::Delete);
         items
     }
@@ -1937,11 +1943,19 @@ impl BlockMenuState {
     }
 
     fn sections_for(
+        &self,
         items: Vec<BlockMenuItem>,
     ) -> Vec<(BlockMenuGroup, Vec<(usize, BlockMenuItem)>)> {
         let mut sections: Vec<(BlockMenuGroup, Vec<(usize, BlockMenuItem)>)> = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
-            let group = item.group();
+            let group = match item {
+                BlockMenuItem::CopyBlock | BlockMenuItem::CutBlock
+                    if self.is_image || (self.is_table && self.editing_context.is_some()) =>
+                {
+                    BlockMenuGroup::Operations
+                }
+                _ => item.group(),
+            };
             if sections.last().is_none_or(|(last, _)| *last != group) {
                 sections.push((group, Vec::new()));
             }
@@ -1955,7 +1969,7 @@ impl BlockMenuState {
         page: Option<BlockContextSubmenu>,
     ) -> Vec<(bool, Vec<(usize, BlockMenuItem)>)> {
         let items = page.map_or_else(|| self.root_items(), |page| self.submenu_items(page));
-        Self::sections_for(items)
+        self.sections_for(items)
             .into_iter()
             .enumerate()
             .flat_map(|(section, (_, items))| {
@@ -1999,10 +2013,14 @@ impl BlockMenuItem {
             | Self::Paste
             | Self::DeleteSelection
             | Self::SelectAll => BlockMenuGroup::Clipboard,
+            Self::CopyBlock | Self::CutBlock => BlockMenuGroup::BlockClipboard,
             Self::SelectionFormat(_) => BlockMenuGroup::Selection,
+            Self::Insert(SlashPaletteCommand::Block(command)) if command != SlashCommand::Table => {
+                BlockMenuGroup::InsertBlocks
+            }
+            Self::InsertCallout(_) => BlockMenuGroup::InsertCallouts,
             Self::Transform(BlockTransform::Table)
             | Self::Insert(_)
-            | Self::InsertCallout(_)
             | Self::ImageProperties
             | Self::ImageReplace
             | Self::ImageSaveLocal
@@ -2022,8 +2040,11 @@ impl BlockMenuItem {
         matches!(
             self.group(),
             BlockMenuGroup::Clipboard
+                | BlockMenuGroup::BlockClipboard
                 | BlockMenuGroup::Selection
                 | BlockMenuGroup::Transforms
+                | BlockMenuGroup::InsertBlocks
+                | BlockMenuGroup::InsertCallouts
                 | BlockMenuGroup::Operations
         )
     }
@@ -2060,7 +2081,9 @@ impl BlockMenuPresentation {
             BlockMenuItem::Submenu(_) => true,
             BlockMenuItem::Paste => self.can_paste,
             BlockMenuItem::Insert(SlashPaletteCommand::Block(_))
-            | BlockMenuItem::InsertCallout(_) => self.can_insert_block,
+            | BlockMenuItem::InsertCallout(_)
+            | BlockMenuItem::AddDividerBelow
+            | BlockMenuItem::AddTableBelow => self.can_insert_block,
             BlockMenuItem::Insert(_) => self.can_insert_inline,
             BlockMenuItem::MoveUp => self.can_move_up,
             BlockMenuItem::MoveDown => self.can_move_down,

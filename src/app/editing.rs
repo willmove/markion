@@ -1684,7 +1684,9 @@ impl MarkionApp {
         match item {
             BlockMenuItem::Submenu(page) => self.open_visual_context_submenu(page, true, cx),
             BlockMenuItem::Insert(SlashPaletteCommand::Block(_))
-            | BlockMenuItem::InsertCallout(_) => {
+            | BlockMenuItem::InsertCallout(_)
+            | BlockMenuItem::AddDividerBelow
+            | BlockMenuItem::AddTableBelow => {
                 let tab = self.active_tab();
                 let blocks = tab.document.visual_blocks_shared();
                 let empty_offset = self
@@ -1692,7 +1694,15 @@ impl MarkionApp {
                     .as_ref()
                     .and_then(|menu| menu.empty_paragraph_offset);
                 let edit = match item {
-                    BlockMenuItem::Insert(SlashPaletteCommand::Block(command)) => {
+                    BlockMenuItem::Insert(SlashPaletteCommand::Block(_))
+                    | BlockMenuItem::AddDividerBelow
+                    | BlockMenuItem::AddTableBelow => {
+                        let command = match item {
+                            BlockMenuItem::AddDividerBelow => SlashCommand::Divider,
+                            BlockMenuItem::AddTableBelow => SlashCommand::Table,
+                            BlockMenuItem::Insert(SlashPaletteCommand::Block(command)) => command,
+                            _ => unreachable!(),
+                        };
                         if let Some(offset) = empty_offset {
                             markion::block_edit::insert_block_at_empty_paragraph(
                                 tab.document.text(),

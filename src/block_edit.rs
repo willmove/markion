@@ -571,6 +571,11 @@ pub fn transform_block(
         return Err(BlockEditError::Unsupported);
     }
     let body = block_body(source, block)?;
+    if matches!(transform, BlockTransform::Divider | BlockTransform::Table)
+        && !body.trim().is_empty()
+    {
+        return Err(BlockEditError::Unsupported);
+    }
     let authored = source
         .get(block.source_range.clone())
         .ok_or(BlockEditError::Ambiguous)?;
@@ -693,7 +698,15 @@ pub fn insert_block_below(
     command: SlashCommand,
 ) -> Result<BlockEdit, BlockEditError> {
     let (template, caret) = slash_template(command, preferred_line_ending(source));
-    insert_template_below(source, current_version, blocks, target, &template, caret)
+    insert_template_below(
+        source,
+        current_version,
+        blocks,
+        target,
+        &template,
+        caret,
+        command == SlashCommand::Divider,
+    )
 }
 
 pub fn insert_callout_below(
@@ -705,7 +718,15 @@ pub fn insert_callout_below(
 ) -> Result<BlockEdit, BlockEditError> {
     let template = callout_template(source, kind);
     let caret = template.len();
-    insert_template_below(source, current_version, blocks, target, &template, caret)
+    insert_template_below(
+        source,
+        current_version,
+        blocks,
+        target,
+        &template,
+        caret,
+        false,
+    )
 }
 
 fn callout_template(source: &str, kind: crate::AlertKind) -> String {
@@ -770,6 +791,7 @@ pub fn insert_block_at_empty_paragraph(
         offset,
         &template,
         caret,
+        command == SlashCommand::Divider,
     )
 }
 
@@ -791,6 +813,7 @@ pub fn insert_callout_at_empty_paragraph(
         offset,
         &template,
         caret,
+        false,
     )
 }
 
@@ -802,6 +825,7 @@ fn insert_template_at_empty_paragraph(
     offset: usize,
     template: &str,
     caret: usize,
+    continuation_paragraph: bool,
 ) -> Result<BlockEdit, BlockEditError> {
     let (_, block) = validate_block_target(current_version, blocks, target)?;
     let range = empty_paragraph_range(source, block, offset).ok_or(BlockEditError::Unsupported)?;
@@ -833,13 +857,21 @@ fn insert_template_at_empty_paragraph(
         .take_while(|ch| matches!(ch, '\r' | '\n'))
         .filter(|ch| *ch == '\n')
         .count();
-    let minimum = if after.trim().is_empty() { 1usize } else { 2 };
+    let minimum = if after.trim().is_empty() { 1usize } else { 2 }
+        * if continuation_paragraph { 2 } else { 1 };
     let replacement = format!(
         "{}{template}{}",
         ending.repeat(padding),
         ending.repeat(minimum.saturating_sub(leading))
     );
-    let position = range.start + padding * ending.len() + caret;
+    let position = range.start
+        + padding * ending.len()
+        + caret
+        + if continuation_paragraph {
+            2 * ending.len()
+        } else {
+            0
+        };
     Ok(BlockEdit {
         document_version: current_version,
         range,
@@ -855,6 +887,7 @@ fn insert_template_below(
     target: &BlockTarget,
     template: &str,
     caret: usize,
+    continuation_paragraph: bool,
 ) -> Result<BlockEdit, BlockEditError> {
     let mut edit = add_paragraph_below(source, current_version, blocks, target)?;
     if !template.is_empty() {
@@ -863,14 +896,20 @@ fn insert_template_below(
         edit.replacement.push_str(template);
         // Isolate the next block, including pipe-less prose after a GFM table
         // and paragraphs following a list/quote. Never rewrite existing bytes.
-        edit.replacement.push_str(
-            &preferred_line_ending(source).repeat(if edit.range.end < source.len() {
-                2
+        let ending = preferred_line_ending(source);
+        let separators = if edit.range.end < source.len() { 2 } else { 1 };
+        edit.replacement
+            .push_str(&ending.repeat(separators * if continuation_paragraph { 2 } else { 1 }));
+        // Keep divider typing off its marker and before any following block.
+        let position = edit.range.start
+            + offset
+            + caret
+            + if continuation_paragraph {
+                2 * ending.len()
             } else {
-                1
-            }),
-        );
-        edit.selection_after = edit.range.start + offset + caret..edit.range.start + offset + caret;
+                0
+            };
+        edit.selection_after = position..position;
     }
     Ok(edit)
 }
@@ -1271,6 +1310,7 @@ mod tests {
                 "- parent\n  - child",
                 "> quote\n> continuation",
                 "```rust\nlet x = 1;\n```",
+                "<!-- markion-cols:30,70 -->\n| 名称 | 内容 |\n| :--- | ---: |\n| 中文🙂 | **keep** |",
             ] {
                 for terminal in [false, true] {
                     let source = format!(
@@ -1692,12 +1732,10 @@ mod tests {
             BlockTransform::TaskList,
             BlockTransform::Quote,
             BlockTransform::CodeBlock,
-            BlockTransform::Divider,
-            BlockTransform::Table,
         ] {
             let edit =
                 transform_block(doc.text(), doc.version(), &blocks, &target, transform).unwrap();
-            if matches!(transform, BlockTransform::CodeBlock | BlockTransform::Table) {
+            if transform == BlockTransform::CodeBlock {
                 assert!(edit.replacement.contains("\r\n"));
             }
         }
@@ -1715,6 +1753,127 @@ mod tests {
         let mut transformed = spaced.text().to_string();
         transformed.replace_range(edit.range, &edit.replacement);
         assert_eq!(transformed, "- [ ]   文本  \n\nnext");
+    }
+
+    #[test]
+    fn template_transformations_reject_nonempty_content() {
+        for source in [
+            "中文 **keep**🙂",
+            "## Heading",
+            "```rust\nlet keep = 1;\n```",
+            "<!-- markion-cols:30,70 -->\n| A | B |\n| :--- | ---: |\n| keep | 中文🙂 |",
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let (blocks, target) = target_for(&doc, 0);
+            for transform in [BlockTransform::Divider, BlockTransform::Table] {
+                assert_eq!(
+                    transform_block(source, doc.version(), &blocks, &target, transform),
+                    Err(BlockEditError::Unsupported),
+                    "{transform:?}: {source:?}"
+                );
+            }
+        }
+        let doc = MarkdownDocument::from_text(" ");
+        let (blocks, target) = target_for(&doc, 0);
+        for transform in [BlockTransform::Divider, BlockTransform::Table] {
+            assert!(
+                transform_block(doc.text(), doc.version(), &blocks, &target, transform).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn inserted_dividers_own_a_blank_continuation_before_neighbors() {
+        for ending in ["\n", "\r\n"] {
+            for raw in [
+                "<!-- markion-cols:30,70 -->\n| A | B |\n| :--- | ---: |\n| 中文🙂 | **keep** |",
+                "<!-- markion-cols:30,70 -->\n| A | B |\n| :--- | ---: |\n| 中文🙂 | **keep** |\n\nnext",
+                "paragraph\n\nnext",
+                "```rust\nlet keep = 1;\n```\n\nnext",
+                "",
+                "before\n\nnext",
+                "before\n\n\n\nnext",
+                "before\n",
+            ] {
+                let source = raw.replace('\n', ending);
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let actual_ending = preferred_line_ending(&source);
+                let blank_offset = if raw.starts_with("before") {
+                    Some("before\n".replace('\n', ending).len())
+                } else if source.is_empty() {
+                    Some(0)
+                } else {
+                    None
+                };
+                let block = blocks
+                    .iter()
+                    .find(|block| {
+                        blank_offset.map_or(block.source_range.start == 0, |offset| {
+                            empty_paragraph_range(&source, block, offset).is_some()
+                        })
+                    })
+                    .unwrap();
+                let target = BlockTarget::from_block(doc.version(), block);
+                let edit = if let Some(offset) = blank_offset {
+                    insert_block_at_empty_paragraph(
+                        &source,
+                        doc.version(),
+                        &blocks,
+                        &target,
+                        offset,
+                        SlashCommand::Divider,
+                    )
+                } else {
+                    insert_block_below(
+                        &source,
+                        doc.version(),
+                        &blocks,
+                        &target,
+                        SlashCommand::Divider,
+                    )
+                }
+                .unwrap();
+                let mut result = source.clone();
+                result.replace_range(edit.range.clone(), &edit.replacement);
+                assert_eq!(&result[..edit.range.start], &source[..edit.range.start]);
+                assert!(result.ends_with(&source[edit.range.end..]));
+                let caret = edit.selection_after.start;
+                assert!(
+                    result[..caret].ends_with(&format!("---{actual_ending}{actual_ending}")),
+                    "{result:?} at {caret}"
+                );
+                assert!(caret == result.len() || result[caret..].starts_with(actual_ending));
+                // Typing belongs to its own paragraph, never the rule or the following block.
+                result.insert_str(caret, "continued 中文🙂");
+                let parsed = MarkdownDocument::from_text(&result);
+                let parsed_blocks = parsed.visual_blocks_shared();
+                assert_eq!(
+                    parsed_blocks
+                        .iter()
+                        .filter(|block| matches!(block.kind, VisualBlockKind::Rule))
+                        .count(),
+                    1
+                );
+                for text in ["continued 中文🙂", "next"] {
+                    if text == "next" && !raw.contains("next") {
+                        continue;
+                    }
+                    assert!(
+                        parsed_blocks.iter().any(|block| matches!(
+                            block.kind,
+                            VisualBlockKind::Paragraph
+                        ) && result[block.source_range.clone()]
+                            .trim()
+                            == text),
+                        "{text} merged: {result:?}"
+                    );
+                }
+                if ending == "\r\n" && source.contains(ending) {
+                    assert!(!result.replace(ending, "").contains('\n'));
+                }
+            }
+        }
     }
 
     #[test]

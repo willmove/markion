@@ -64,7 +64,7 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
         assert_eq!(projection.text, "Next heading");
     });
     let panel = cx.debug_bounds("visual-block-menu-panel").unwrap();
-    for index in (0..14).filter(|index| *index != 6) {
+    for index in (0..12).filter(|index| *index != 6) {
         let id = test_debug_selector(format!("visual-block-transform-{index}"));
         let bounds = cx
             .debug_bounds(id)
@@ -73,11 +73,20 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
             panel.contains(&bounds.center()),
             "{id} must be inside the popup"
         );
-        if index != 13 {
-            assert_eq!(bounds.size, size(px(36.), px(30.)));
-        }
+        assert_eq!(bounds.size, size(px(36.), px(30.)));
     }
     assert!(cx.debug_bounds("visual-block-transform-6").is_none());
+    assert!(cx.debug_bounds("visual-block-transform-12").is_none());
+    assert!(cx.debug_bounds("visual-block-transform-13").is_none());
+    for id in [
+        "visual-block-add-divider-below",
+        "visual-block-add-table-below",
+    ] {
+        let bounds = cx.debug_bounds(id).unwrap();
+        assert_eq!(bounds.size, size(px(36.), px(30.)));
+        assert!(panel.contains(&bounds.center()));
+        assert!(bounds.top() >= cx.debug_bounds("visual-block-add-below").unwrap().top());
+    }
     let heading = cx.debug_bounds("visual-block-transform-2").unwrap();
     cx.simulate_click(heading.center(), Modifiers::none());
     cx.run_until_parked();
@@ -249,6 +258,213 @@ fn block_grip_copy_cut_add_below_and_undo_preserve_next_heading(cx: &mut TestApp
 
 fn target_end(source: &str) -> usize {
     source.find("###").unwrap()
+}
+
+#[gpui::test]
+fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for ending in ["\n", "\r\n"] {
+        for terminal in [false, true] {
+            for action in [BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow] {
+                app.update_in(cx, |app, window, cx| {
+                    let table = "<!-- markion-cols:30,70 -->\n| 名称 | 内容 |\n| :--- | ---: |\n| 中文🙂 | **keep** |".replace('\n', ending);
+                    let source = format!("before{ending}{ending}{table}{}", if terminal { String::new() } else { format!("{ending}{ending}after") });
+                    app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                    app.view_mode = ViewMode::VisualEdit;
+                    let doc = &app.active_tab().document;
+                    let blocks = doc.visual_blocks_shared();
+                    let target = BlockTarget::from_block(doc.version(), blocks.iter().find(|b| matches!(b.kind, VisualBlockKind::Table { .. })).unwrap());
+                    let version = doc.version();
+                    let dirty = doc.is_dirty();
+                    app.open_visual_block_grip_menu(target, point(px(30.), px(40.)), cx);
+                    let selected = app.active_tab().selected_range.clone();
+                    let structured = app.active_tab().structured_selection.clone();
+                    let menu = app.block_menu.as_ref().unwrap();
+                    let root = menu.root_items();
+                    let below = root.iter().position(|i| *i == BlockMenuItem::AddBelow).unwrap();
+                    assert_eq!(&root[below + 1..below + 3], &[BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]);
+                    for removed in [BlockTransform::Divider, BlockTransform::Table] {
+                        assert!(!root.contains(&BlockMenuItem::Transform(removed)));
+                        app.activate_visual_block_menu_item(BlockMenuItem::Transform(removed), Some(window), cx);
+                    }
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert_eq!(app.active_tab().document.version(), version);
+                    assert_eq!(app.active_tab().document.is_dirty(), dirty);
+                    assert_eq!(app.active_tab().selected_range, selected);
+                    assert_eq!(app.active_tab().structured_selection, structured);
+                    assert!(Arc::ptr_eq(&blocks, &app.active_tab().document.visual_blocks_shared()));
+                    app.activate_visual_block_menu_item(action, Some(window), cx);
+                    assert!(app.block_menu.is_none());
+                    let tab = app.active_tab();
+                    let inserted = tab.document.text().to_string();
+                    let caret = tab.selected_range.clone();
+                    assert!(inserted.starts_with(&format!("before{ending}{ending}{table}")), "{action:?}: {inserted:?}");
+                    assert!(terminal || inserted.ends_with("after"));
+                    assert_eq!(inserted.matches("markion-cols:30,70").count(), 1);
+                    assert_eq!(tab.document.version(), version + 1);
+                    assert_eq!(tab.undo_stack.len(), 1);
+                    assert!(caret.is_empty());
+                    let expected_tables = if action == BlockMenuItem::AddTableBelow { 2 } else { 1 };
+                    assert_eq!(tab.document.visual_blocks_shared().iter().filter(|b| matches!(b.kind, VisualBlockKind::Table { .. })).count(), expected_tables);
+                    if action == BlockMenuItem::AddDividerBelow {
+                        assert!(inserted[..caret.start].ends_with(&format!("---{ending}{ending}")));
+                        app.replace_text_in_range(None, "continued 中文🙂", window, cx);
+                        let tab = app.active_tab();
+                        for paragraph in ["continued 中文🙂", "after"] {
+                            if paragraph == "after" && terminal { continue; }
+                            assert!(tab.document.visual_blocks_shared().iter().any(|b| matches!(b.kind, VisualBlockKind::Paragraph) && tab.document.text()[b.source_range.clone()].trim() == paragraph));
+                        }
+                        app.undo(&Undo, window, cx);
+                        assert_eq!(app.active_tab().document.text(), inserted);
+                    }
+                    app.undo(&Undo, window, cx);
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert_eq!(app.active_tab().selected_range, selected);
+                    let tab = app.active_tab();
+                    let Some(markion::selection::SelectionState::Blocks(restored)) = &tab.structured_selection else { panic!("Undo must restore the whole-table selection"); };
+                    assert_eq!(restored.range(&tab.document).unwrap(), selected);
+                    app.redo(&Redo, window, cx);
+                    assert_eq!(app.active_tab().document.text(), inserted);
+                    assert_eq!(app.active_tab().selected_range, caret);
+                    app.undo(&Undo, window, cx);
+                    let doc = &app.active_tab().document;
+                    let target = BlockTarget::from_block(doc.version(), doc.visual_blocks_shared().iter().find(|b| matches!(b.kind, VisualBlockKind::Table { .. })).unwrap());
+                    app.open_visual_block_grip_menu(target, point(px(30.), px(40.)), cx);
+                    app.block_menu.as_mut().unwrap().target.document_version += 1;
+                    let cache = app.active_tab().document.visual_blocks_shared();
+                    app.activate_visual_block_menu_item(action, Some(window), cx);
+                    assert!(app.block_menu.is_none());
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert_eq!(app.active_tab().selected_range, selected);
+                    assert!(app.active_tab().undo_stack.is_empty());
+                    assert!(Arc::ptr_eq(&cache, &app.active_tab().document.visual_blocks_shared()));
+                });
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn block_grip_insert_below_buttons_support_pointer_and_small_viewport_keyboard(
+    cx: &mut TestAppContext,
+) {
+    const SOURCE: &str = "before\n\n| A | B |\n| --- | --- |\n| 中文🙂 | keep |\n\nafter";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app.outline_visible = false;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    for (width, height, theme, keyboard) in [
+        (1180., 900., AppTheme::Paper, false),
+        (340., 280., AppTheme::Ink, true),
+    ] {
+        cx.simulate_resize(size(px(width), px(height)));
+        for action in [BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow] {
+            app.update(cx, |app, cx| {
+                app.theme = theme;
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+                cx.notify();
+                if keyboard {
+                    let doc = &app.active_tab().document;
+                    let target = BlockTarget::from_block(
+                        doc.version(),
+                        doc.visual_blocks_shared()
+                            .iter()
+                            .find(|b| matches!(b.kind, VisualBlockKind::Table { .. }))
+                            .unwrap(),
+                    );
+                    app.open_visual_block_grip_menu(
+                        target,
+                        point(px(width - 10.), px(height - 10.)),
+                        cx,
+                    );
+                }
+            });
+            cx.run_until_parked();
+            if !keyboard {
+                let index = app.read_with(cx, |app, _| {
+                    app.active_tab()
+                        .document
+                        .visual_blocks_shared()
+                        .iter()
+                        .position(|b| matches!(b.kind, VisualBlockKind::Table { .. }))
+                        .unwrap()
+                });
+                let grip = cx
+                    .debug_bounds(test_debug_selector(format!(
+                        "visual-block-drag-grip-{index}"
+                    )))
+                    .unwrap();
+                cx.simulate_click(grip.center(), Modifiers::none());
+                cx.run_until_parked();
+            }
+            let selected = app.read_with(cx, |app, _| app.active_tab().selected_range.clone());
+            app.read_with(cx, |app, _| {
+                assert!(
+                    app.block_menu.as_ref().is_some_and(|menu| menu.from_grip),
+                    "menu for {action:?}, keyboard={keyboard}"
+                );
+            });
+            if keyboard {
+                for _ in 0..40 {
+                    let reached = app.read_with(cx, |app, _| {
+                        let menu = app.block_menu.as_ref().unwrap();
+                        menu.root_items()[menu.root_selected] == action
+                    });
+                    if reached {
+                        break;
+                    }
+                    cx.dispatch_action(Down);
+                    cx.run_until_parked();
+                }
+                app.read_with(cx, |app, _| {
+                    let menu = app.block_menu.as_ref().unwrap();
+                    assert_eq!(menu.root_items()[menu.root_selected], action);
+                });
+            }
+            let button = cx
+                .debug_bounds(super::preview::block_menu_item_element_id(action))
+                .unwrap();
+            let panel = cx.debug_bounds("visual-block-menu-panel").unwrap();
+            assert!(panel.contains(&button.center()));
+            assert_eq!(button.size, size(px(36.), px(30.)));
+            assert!(cx.debug_bounds("visual-block-transform-12").is_none());
+            assert!(cx.debug_bounds("visual-block-transform-13").is_none());
+            if keyboard {
+                cx.dispatch_action(InsertNewline);
+            } else {
+                cx.simulate_click(button.center(), Modifiers::none());
+            }
+            cx.run_until_parked();
+            app.update_in(cx, |app, window, cx| {
+                assert!(app.block_menu.is_none());
+                assert!(
+                    app.active_tab()
+                        .document
+                        .text()
+                        .starts_with("before\n\n| A | B |\n| --- | --- |\n| 中文🙂 | keep |")
+                );
+                assert_eq!(
+                    app.active_tab().undo_stack.len(),
+                    1,
+                    "{action:?}, keyboard={keyboard}, status={}, source={:?}",
+                    app.status,
+                    app.active_tab().document.text()
+                );
+                app.undo(&Undo, window, cx);
+                assert_eq!(app.active_tab().document.text(), SOURCE);
+                assert_eq!(app.active_tab().selected_range, selected);
+            });
+        }
+    }
 }
 
 #[gpui::test]

@@ -651,7 +651,7 @@ fn context_top_level_block_controls_and_bottom_insertion_are_reachable(cx: &mut 
     });
     for (width, height, theme) in [(1180., 800., AppTheme::Paper), (340., 280., AppTheme::Ink)] {
         cx.simulate_resize(size(px(width), px(height)));
-        let cache = app.update(cx, |app, cx| {
+        let (version, dirty, cache) = app.update(cx, |app, cx| {
             app.theme = theme;
             app.active_tab_mut().selected_range = 0..2;
             app.open_visual_edit_context_menu(
@@ -702,10 +702,24 @@ fn context_top_level_block_controls_and_bottom_insertion_are_reachable(cx: &mut 
                     .iter()
                     .any(|item| matches!(item, BlockMenuItem::Transform(_)))
             );
-            app.active_tab().document.visual_blocks_shared()
+            let document = &app.active_tab().document;
+            (
+                document.version(),
+                document.is_dirty(),
+                document.visual_blocks_shared(),
+            )
         });
         cx.run_until_parked();
         if width > 600. {
+            let below = cx.debug_bounds("visual-block-add-below").unwrap();
+            for id in [
+                "visual-block-add-divider-below",
+                "visual-block-add-table-below",
+            ] {
+                let button = cx.debug_bounds(id).unwrap();
+                assert_eq!(button.top(), below.top(), "{id}");
+                assert_eq!(button.size, below.size, "{id}");
+            }
             let transform = cx
                 .debug_bounds(block_menu_item_element_id(BlockMenuItem::Transform(
                     BlockTransform::Text,
@@ -719,6 +733,62 @@ fn context_top_level_block_controls_and_bottom_insertion_are_reachable(cx: &mut 
             app.open_visual_context_submenu(BlockContextSubmenu::Insertion, true, cx);
         });
         cx.run_until_parked();
+        if width > 600. {
+            let root_button = cx.debug_bounds("visual-block-transform-0").unwrap();
+            let child = cx.debug_bounds("visual-context-flyout").unwrap();
+            let compact_rows: &[&[&str]] = &[
+                &[
+                    "visual-block-insert-paragraph",
+                    "visual-block-insert-h1",
+                    "visual-block-insert-h2",
+                    "visual-block-insert-h3",
+                    "visual-block-insert-h4",
+                    "visual-block-insert-h5",
+                ],
+                &[
+                    "visual-block-insert-bulleted-list",
+                    "visual-block-insert-numbered-list",
+                    "visual-block-insert-task-list",
+                    "visual-block-insert-quote",
+                    "visual-block-insert-code-block",
+                    "visual-block-insert-divider",
+                ],
+                &[
+                    "visual-block-insert-note",
+                    "visual-block-insert-tip",
+                    "visual-block-insert-important",
+                    "visual-block-insert-warning",
+                    "visual-block-insert-caution",
+                ],
+            ];
+            let mut previous_row_bottom = child.top();
+            for row in compact_rows {
+                let first = cx.debug_bounds(row[0]).unwrap();
+                assert!(first.top() >= previous_row_bottom);
+                let mut previous = None;
+                for id in *row {
+                    let button = cx.debug_bounds(id).unwrap();
+                    assert_eq!(button.size, root_button.size, "{id}");
+                    assert_eq!(button.top(), first.top(), "{id}");
+                    assert!(child.contains(&button.center()), "{id}");
+                    if let Some(previous_right) = previous {
+                        assert_eq!(button.left() - previous_right, px(2.), "{id}");
+                    }
+                    previous = Some(button.right());
+                }
+                previous_row_bottom = first.bottom();
+            }
+            for id in [
+                "visual-block-insert-table",
+                "visual-block-insert-link",
+                "visual-block-insert-formula",
+                "visual-block-insert-image",
+            ] {
+                let button = cx.debug_bounds(id).unwrap();
+                assert!(button.size.width > root_button.size.width * 2., "{id}");
+                assert!(child.contains(&button.center()), "{id}");
+            }
+        }
         for _ in 0..21 {
             cx.dispatch_action(Down);
             cx.run_until_parked();
@@ -736,13 +806,28 @@ fn context_top_level_block_controls_and_bottom_insertion_are_reachable(cx: &mut 
         app.update(cx, |app, _| {
             assert_eq!(app.active_tab().selected_range, 0..2);
             assert_eq!(app.active_tab().document.text(), "one\n\ntwo");
+            assert_eq!(app.active_tab().document.version(), version);
+            assert_eq!(app.active_tab().document.is_dirty(), dirty);
             assert!(app.active_tab().undo_stack.is_empty());
             assert!(Arc::ptr_eq(
                 &cache,
                 &app.active_tab().document.visual_blocks_shared()
             ));
         });
-        cx.dispatch_action(ClearFileTreeSearch);
+        let h2 = cx.debug_bounds("visual-block-insert-h2").unwrap();
+        let child = cx.debug_bounds("visual-context-flyout").unwrap();
+        assert!(child.contains(&h2.center()));
+        cx.simulate_click(h2.center(), Modifiers::none());
+        cx.run_until_parked();
+        app.update_in(cx, |app, window, cx| {
+            assert!(app.block_menu.is_none());
+            assert_eq!(app.active_tab().document.text(), "one\n\ntwo\n\n## \n");
+            assert_eq!(app.active_tab().undo_stack.len(), 1);
+            assert_eq!(app.active_tab().selected_range, 13..13);
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().document.text(), "one\n\ntwo");
+            assert_eq!(app.active_tab().selected_range, 0..2);
+        });
         cx.run_until_parked();
     }
 }
@@ -757,6 +842,7 @@ fn context_insert_blocks_preserve_clicked_content_selection_and_atomic_undo(
         .filter(|command| *command != SlashCommand::Heading(6))
         .map(|command| BlockMenuItem::Insert(SlashPaletteCommand::Block(command)))
         .collect();
+    actions.extend([BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]);
     actions.extend(
         [
             AlertKind::Note,
@@ -788,15 +874,13 @@ fn context_insert_blocks_preserve_clicked_content_selection_and_atomic_undo(
                     assert!(app.active_tab().document.visual_blocks_shared().iter().any(|block| matches!(block.kind, VisualBlockKind::CalloutTitle { kind: actual, .. } if actual == kind)));
                 }
                 let inserted = text.to_string();
-                if action != BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Divider)) {
-                    let caret = app.active_tab().selected_range.start;
-                    let mut typed = inserted.clone();
-                    typed.insert_str(caret, "新内容🙂");
-                    app.replace_text_in_range(None, "新内容🙂", window, cx);
-                    assert_eq!(app.active_tab().document.text(), typed, "typing after {action:?}");
-                    app.undo(&Undo, window, cx);
-                    assert_eq!(app.active_tab().document.text(), inserted);
-                }
+                let caret = app.active_tab().selected_range.start;
+                let mut typed = inserted.clone();
+                typed.insert_str(caret, "新内容🙂");
+                app.replace_text_in_range(None, "新内容🙂", window, cx);
+                assert_eq!(app.active_tab().document.text(), typed, "typing after {action:?}");
+                app.undo(&Undo, window, cx);
+                assert_eq!(app.active_tab().document.text(), inserted);
                 app.undo(&Undo, window, cx);
                 assert_eq!(app.active_tab().document.text(), source);
                 assert_eq!(app.active_tab().selected_range, 0..6);
@@ -1624,8 +1708,8 @@ fn combined_context_keeps_clicked_block_commands_and_selection_formats(cx: &mut 
                 BlockMenuItem::Transform(BlockTransform::Heading(5)),
                 BlockMenuItem::Transform(BlockTransform::BulletedList),
                 BlockMenuItem::Transform(BlockTransform::CodeBlock),
-                BlockMenuItem::Transform(BlockTransform::Divider),
-                BlockMenuItem::Transform(BlockTransform::Table),
+                BlockMenuItem::AddDividerBelow,
+                BlockMenuItem::AddTableBelow,
                 BlockMenuItem::Insert(SlashPaletteCommand::Formula),
                 BlockMenuItem::MoveUp,
                 BlockMenuItem::MoveDown,
