@@ -82,6 +82,7 @@ use markion::{
     tf, title_from_path, transform_block, url_auto_link_action, validate_block_target,
     workspace_relative_path,
 };
+use markion::{DEFAULT_LINE_SPACING, MAX_LINE_SPACING, MIN_LINE_SPACING, normalize_line_spacing};
 use markion_git_sync::{
     BackgroundFetchScheduler, ConflictClaim, GitOperationRegistry, PolicyStore, ReadEpoch,
     WriteAdmission,
@@ -2265,6 +2266,7 @@ pub(super) struct DocumentTypographyMetrics {
     pub(super) preview_row_line_height: f32,
     pub(super) paragraph_line_height: f32,
     pub(super) paragraph_spacing: f32,
+    pub(super) line_spacing_scale: f32,
     pub(super) list_line_height: f32,
     pub(super) quote_font_size: f32,
     pub(super) quote_line_height: f32,
@@ -2302,28 +2304,47 @@ impl DocumentTypographyMetrics {
         paragraph_spacing: u16,
         code_font_size: Option<u16>,
     ) -> Self {
+        Self::new_with_line_spacing(
+            editor_font_size,
+            rendered_font_size,
+            paragraph_spacing,
+            code_font_size,
+            DEFAULT_LINE_SPACING,
+        )
+    }
+
+    pub(super) fn new_with_line_spacing(
+        editor_font_size: u16,
+        rendered_font_size: u16,
+        paragraph_spacing: u16,
+        code_font_size: Option<u16>,
+        line_spacing: u16,
+    ) -> Self {
         let editor_font_size = normalize_editor_font_size(editor_font_size as i64) as f32;
         let rendered_font_size = normalize_rendered_font_size(rendered_font_size as i64) as f32;
         let paragraph_spacing = normalize_paragraph_spacing(paragraph_spacing as i64) as f32;
+        let line_spacing_scale = f32::from(normalize_line_spacing(line_spacing as i64)) / 100.;
         let rendered_scale = rendered_font_size / DEFAULT_RENDERED_FONT_SIZE as f32;
         let code_font_size = match code_font_size {
             Some(size) => normalize_code_font_size(size as i64) as f32,
             None => 12. * rendered_scale,
         };
-        let code_line_height = code_font_size * (19. / 12.);
+        let code_line_height = code_font_size * (19. / 12.) * line_spacing_scale;
         Self {
             editor_font_size,
             editor_line_height: editor_font_size
-                * (EDITOR_LINE_HEIGHT / DEFAULT_EDITOR_FONT_SIZE as f32),
+                * (EDITOR_LINE_HEIGHT / DEFAULT_EDITOR_FONT_SIZE as f32)
+                * line_spacing_scale,
             rendered_font_size,
-            preview_row_line_height: PREVIEW_LINE_HEIGHT * rendered_scale,
-            paragraph_line_height: 24. * rendered_scale,
+            preview_row_line_height: PREVIEW_LINE_HEIGHT * rendered_scale * line_spacing_scale,
+            paragraph_line_height: 24. * rendered_scale * line_spacing_scale,
             paragraph_spacing,
-            list_line_height: 22. * rendered_scale,
+            line_spacing_scale,
+            list_line_height: 22. * rendered_scale * line_spacing_scale,
             quote_font_size: 16. * rendered_scale,
-            quote_line_height: 23. * rendered_scale,
+            quote_line_height: 23. * rendered_scale * line_spacing_scale,
             source_island_font_size: 13. * rendered_scale,
-            source_island_line_height: 21. * rendered_scale,
+            source_island_line_height: 21. * rendered_scale * line_spacing_scale,
             code_font_size,
             code_line_height,
             small_font_size: 11. * rendered_scale,
@@ -2341,6 +2362,10 @@ impl DocumentTypographyMetrics {
             _ => 16.,
         };
         default * (self.rendered_font_size / DEFAULT_RENDERED_FONT_SIZE as f32)
+    }
+
+    pub(super) fn text_line_height(self, font_size: f32) -> f32 {
+        font_size * std::f32::consts::GOLDEN_RATIO * self.line_spacing_scale
     }
 
     pub(super) fn math_font_size(self, style: MathLayoutStyle) -> f32 {
@@ -2405,11 +2430,12 @@ pub(super) fn code_slot_font(family: &SharedString) -> Font {
 
 impl MarkionApp {
     pub(super) fn typography_metrics(&self) -> DocumentTypographyMetrics {
-        DocumentTypographyMetrics::new_with_code_font_size(
+        DocumentTypographyMetrics::new_with_line_spacing(
             self.editor_font_size,
             self.rendered_font_size,
             self.paragraph_spacing,
             self.code_font_size,
+            self.line_spacing,
         )
     }
 
@@ -3072,6 +3098,7 @@ struct MarkionApp {
     editor_font_size: u16,
     rendered_font_size: u16,
     paragraph_spacing: u16,
+    line_spacing: u16,
     /// Explicit font-family preferences. `None` follows the active theme's
     /// `[fonts]` entry, then the built-in default.
     editor_font_family: Option<String>,

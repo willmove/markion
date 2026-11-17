@@ -11,6 +11,44 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestC
 // under `-D warnings`.
 use markion::{FileTreeFileKind, ThemeFonts, inline_image_at};
 
+#[gpui::test]
+fn korean_language_switch_persists_without_changing_the_document(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.preferences_path = preferences_path.clone();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "# Original title\n\n한국어 원문과 English content.\n",
+        ))];
+        app.push_undo_snapshot();
+        app.active_tab_mut().document.insert(0, "Pending edit\n\n");
+        let before = (
+            app.active_tab().document.text().to_owned(),
+            app.active_tab().document.version(),
+            app.active_tab().is_dirty(),
+            app.active_tab().undo_stack.len(),
+        );
+        let preview = app.active_tab().document.preview_blocks_shared();
+        app.apply_language(Language::Ko, cx);
+        assert_eq!(app.language, Language::Ko);
+        assert_eq!(app.status, "언어를 설정했습니다");
+        assert_eq!(app.active_tab().document.text(), before.0);
+        assert_eq!(app.active_tab().document.version(), before.1);
+        assert_eq!(app.active_tab().is_dirty(), before.2);
+        assert_eq!(app.active_tab().undo_stack.len(), before.3);
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.active_tab().document.preview_blocks_shared()
+        ));
+        assert_eq!(t(app.language, Msg::MenuFile), "파일");
+        assert_eq!(t(app.language, Msg::PrefPanelTabGeneral), "일반");
+    });
+    let saved = load_app_preferences(&preferences_path).unwrap();
+    assert_eq!(saved.language, "ko");
+    assert_eq!(Language::from_code(&saved.language), Language::Ko);
+}
+
 fn tiny_png_bytes() -> Vec<u8> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     STANDARD
@@ -309,6 +347,7 @@ fn publishing_action_and_statuses_are_localized_for_every_language() {
         Language::Fr,
         Language::De,
         Language::Es,
+        Language::Ko,
     ] {
         for message in [
             Msg::ItemPublishWechat,
@@ -329,6 +368,7 @@ fn publishing_action_and_statuses_are_localized_for_every_language() {
         Language::Fr,
         Language::De,
         Language::Es,
+        Language::Ko,
     ] {
         for message in [
             Msg::ItemOrganizeLocalImages,
@@ -956,6 +996,7 @@ fn structural_format_shortcuts_are_localized_in_every_catalog_variant() {
         Language::Fr,
         Language::De,
         Language::Es,
+        Language::Ko,
         Language::ZhHans,
         Language::ZhHant,
     ] {
@@ -1026,6 +1067,7 @@ fn paragraph_shortcut_is_localized_in_every_catalog_variant() {
         Language::Fr,
         Language::De,
         Language::Es,
+        Language::Ko,
         Language::ZhHans,
         Language::ZhHant,
     ] {
@@ -4248,9 +4290,13 @@ fn global_shortcut_clear_restores_defaults_and_exits_capture(cx: &mut TestAppCon
 fn reset_preferences_clears_stable_visual_inline_without_touching_document(
     cx: &mut TestAppContext,
 ) {
+    let config_dir = tempfile::tempdir().unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
     let (text, version) = app.update(cx, |app, _| {
+        app.preferences_path = config_dir.path().join("config.toml");
         app.stable_visual_inline = true;
+        app.paragraph_spacing = 96;
+        app.line_spacing = 150;
         let tab = app.active_tab();
         (tab.document.text().to_string(), tab.document.version())
     });
@@ -4268,6 +4314,8 @@ fn reset_preferences_clears_stable_visual_inline_without_touching_document(
 
     app.update(cx, |app, _| {
         assert!(!app.stable_visual_inline);
+        assert_eq!(app.paragraph_spacing, markion::DEFAULT_PARAGRAPH_SPACING);
+        assert_eq!(app.line_spacing, DEFAULT_LINE_SPACING);
         assert_eq!(app.active_tab().document.text(), text);
         assert_eq!(app.active_tab().document.version(), version);
     });
@@ -5997,6 +6045,7 @@ fn kenhuang_markdown_tutorial_url_follows_interface_language() {
         Language::Fr,
         Language::De,
         Language::Es,
+        Language::Ko,
     ] {
         assert_eq!(
             kenhuang_markdown_tutorial_url(language),
@@ -15131,6 +15180,54 @@ fn document_typography_metrics_preserve_defaults_and_scale_boundaries() {
 }
 
 #[test]
+fn line_spacing_scales_document_geometry_without_changing_fonts_or_paragraph_gaps() {
+    let baseline = DocumentTypographyMetrics::new_with_code_font_size(14, 14, 96, Some(18));
+    let at_default = DocumentTypographyMetrics::new_with_line_spacing(14, 14, 96, Some(18), 100);
+    assert_eq!(
+        baseline, at_default,
+        "older config must keep exactly the same layout"
+    );
+    for (percent, scale) in [(75, 0.75), (150, 1.5), (300, 3.)] {
+        let metrics =
+            DocumentTypographyMetrics::new_with_line_spacing(14, 14, 96, Some(18), percent);
+        for (actual, normal) in [
+            (metrics.editor_line_height, baseline.editor_line_height),
+            (
+                metrics.preview_row_line_height,
+                baseline.preview_row_line_height,
+            ),
+            (
+                metrics.paragraph_line_height,
+                baseline.paragraph_line_height,
+            ),
+            (metrics.list_line_height, baseline.list_line_height),
+            (metrics.quote_line_height, baseline.quote_line_height),
+            (
+                metrics.source_island_line_height,
+                baseline.source_island_line_height,
+            ),
+            (metrics.code_line_height, baseline.code_line_height),
+            (
+                metrics.text_line_height(metrics.heading_font_size(1)),
+                baseline.text_line_height(baseline.heading_font_size(1)),
+            ),
+            (
+                metrics.text_line_height(metrics.table_font_size),
+                baseline.text_line_height(baseline.table_font_size),
+            ),
+        ] {
+            assert!((actual - normal * scale).abs() < 0.001);
+        }
+        assert_eq!(metrics.editor_font_size, baseline.editor_font_size);
+        assert_eq!(metrics.rendered_font_size, baseline.rendered_font_size);
+        assert_eq!(metrics.code_font_size, 18.);
+        assert_eq!(metrics.paragraph_spacing, 96.);
+        assert!(metrics.editor_line_height >= metrics.editor_font_size);
+        assert!(metrics.quote_line_height >= metrics.quote_font_size);
+    }
+}
+
+#[test]
 fn typography_preference_steps_stop_at_bounds() {
     assert_eq!(
         preference_step_value(15, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, 1),
@@ -15272,6 +15369,55 @@ fn typography_changes_preserve_document_caches_and_list_positions(cx: &mut TestA
     assert!(written.contains("editor_font_size = 24"));
     assert!(written.contains("rendered_font_size = 20"));
     assert!(written.contains("paragraph_spacing = 18"));
+
+    app.update(cx, |app, cx| {
+        app.set_line_spacing(150, cx);
+        app.set_paragraph_spacing(96, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(
+            &tab.document.preview_blocks_shared(),
+            &preview_cache
+        ));
+        assert_eq!(app.highlight_cache.borrow().len(), highlight_count);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert_eq!(tab.selected_range, selection);
+        assert!(tab.display_text_cache.borrow().is_some());
+        assert_eq!(tab.preview_list.logical_scroll_top().item_ix, 40);
+        assert_eq!(tab.visual_list.logical_scroll_top().item_ix, 40);
+        assert!((f32::from(tab.line_height) - 57.6).abs() < 1.);
+    });
+    let saved = load_app_preferences(&preferences_path).unwrap();
+    assert_eq!(saved.line_spacing, 150);
+    assert_eq!(saved.paragraph_spacing, 96);
+}
+
+#[gpui::test]
+fn source_line_spacing_reflows_caret_and_vertical_hit_testing(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = dir.path().join("config.toml");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "first\nsecond\nthird",
+        ))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| app.set_line_spacing(200, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let first = tab.source_content_y_for_offset(0).unwrap();
+        let second = tab.source_content_y_for_offset(6).unwrap();
+        assert!((second - first - 44.8).abs() < 1.);
+        assert_eq!(tab.source_offset_for_content_y(second + 20.), Some(6));
+        assert_eq!(tab.document.text(), "first\nsecond\nthird");
+    });
 }
 
 #[gpui::test]

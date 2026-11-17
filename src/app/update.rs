@@ -741,6 +741,7 @@ mod tests {
             Language::Fr,
             Language::De,
             Language::Es,
+            Language::Ko,
         ] {
             let detail = tf(language, Msg::DialogUpdateAvailableDetail, &["9.9.9"]);
             assert!(detail.contains("9.9.9"), "missing version in {language:?}");

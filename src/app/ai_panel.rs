@@ -6189,6 +6189,7 @@ mod tests {
                 Language::Fr,
                 Language::De,
                 Language::Es,
+                Language::Ko,
             ] {
                 for theme in AppTheme::ALL {
                     cx.simulate_resize(size(px(560.), px(420.)));

@@ -2271,12 +2271,6 @@ fn inline_math_baseline_margin(
     inline_math_baseline_margin_from_metrics(line_height, font_ascent, font_descent, math_descent)
 }
 
-/// GPUI's default text line-height when a block does not set one explicitly
-/// (`relative(phi)` ≈ 1.618 × font size).
-fn default_text_line_height(font_size: f32) -> f32 {
-    font_size * std::f32::consts::GOLDEN_RATIO
-}
-
 fn visual_inline_text_metrics(
     block: &VisualBlock,
     typography: DocumentTypographyMetrics,
@@ -2287,7 +2281,7 @@ fn visual_inline_text_metrics(
     match &block.kind {
         VisualBlockKind::Heading { level } => {
             let size = typography.heading_font_size((*level).into());
-            (size, default_text_line_height(size))
+            (size, typography.text_line_height(size))
         }
         VisualBlockKind::BlockQuote => (typography.quote_font_size, typography.quote_line_height),
         VisualBlockKind::ListItem { .. } => {
@@ -4650,7 +4644,7 @@ fn visual_block_content_view(
                 .mt_2()
                 .mb_2()
                 .text_size(size)
-                .line_height(px(default_text_line_height(heading_size)))
+                .line_height(px(typography.text_line_height(heading_size)))
                 .font_weight(FontWeight::BOLD)
                 .child(visual_text_with_math_element(
                     block,
@@ -6153,7 +6147,7 @@ fn visual_editor_field_element(
         let typography = app.typography_metrics();
         let metrics = (
             typography.table_font_size,
-            default_text_line_height(typography.table_font_size),
+            typography.text_line_height(typography.table_font_size),
         );
         let mut lines = vec![Vec::new()];
         let mut index = field.source_range.start;
@@ -7675,7 +7669,7 @@ pub(super) fn visual_table_view(
                                 },
                                 (
                                     typography.table_font_size,
-                                    default_text_line_height(typography.table_font_size),
+                                    typography.text_line_height(typography.table_font_size),
                                 ),
                                 cx,
                             )
@@ -8218,7 +8212,7 @@ fn html_table_grid_view(
                                     PreviewTextRunId::HtmlText,
                                     (
                                         typography.table_font_size,
-                                        default_text_line_height(typography.table_font_size),
+                                        typography.text_line_height(typography.table_font_size),
                                     ),
                                     cx,
                                 ))
@@ -8575,7 +8569,7 @@ pub(super) fn preview_block_view(
                 .mt_2()
                 .mb_2()
                 .text_size(size)
-                .line_height(px(default_text_line_height(heading_size)))
+                .line_height(px(typography.text_line_height(heading_size)))
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(rich_text_with_math_element(
                     app,
@@ -8585,7 +8579,7 @@ pub(super) fn preview_block_view(
                     PreviewTextRunId::Body,
                     display_scale,
                     heading_size,
-                    default_text_line_height(heading_size),
+                    typography.text_line_height(heading_size),
                     document_dir,
                     cx,
                 ))
@@ -9131,7 +9125,7 @@ pub(super) fn preview_block_view(
                                 },
                                 (
                                     typography.table_font_size,
-                                    default_text_line_height(typography.table_font_size),
+                                    typography.text_line_height(typography.table_font_size),
                                 ),
                                 cx,
                             ))

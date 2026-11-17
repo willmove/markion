@@ -103,7 +103,17 @@ pub const DEFAULT_PARAGRAPH_SPACING: u16 = 12;
 /// Smallest supported rendered paragraph gap in logical pixels.
 pub const MIN_PARAGRAPH_SPACING: u16 = 0;
 /// Largest supported rendered paragraph gap in logical pixels.
-pub const MAX_PARAGRAPH_SPACING: u16 = 32;
+pub const MAX_PARAGRAPH_SPACING: u16 = 128;
+
+/// Document line heights as a percentage of the existing typography.
+pub const DEFAULT_LINE_SPACING: u16 = 100;
+pub const MIN_LINE_SPACING: u16 = 75;
+pub const MAX_LINE_SPACING: u16 = 300;
+
+/// Clamps the document line-spacing percentage before narrowing to `u16`.
+pub fn normalize_line_spacing(value: i64) -> u16 {
+    value.clamp(MIN_LINE_SPACING as i64, MAX_LINE_SPACING as i64) as u16
+}
 
 /// Default fenced-code font size in logical pixels (the historical value at
 /// the 14px reading default; used only when no explicit size is stored).
@@ -439,6 +449,8 @@ pub struct AppPreferences {
     pub rendered_font_size: u16,
     /// Bottom gap after rendered paragraph blocks in logical pixels.
     pub paragraph_spacing: u16,
+    /// Line-height percentage relative to the default document typography.
+    pub line_spacing: u16,
     /// Explicit font family for the Markdown source editor surface. `None`
     /// follows the active theme's `[fonts]` editor entry, then the built-in
     /// default (`.SystemUIFont`).
@@ -534,6 +546,7 @@ impl Default for AppPreferences {
             editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
             rendered_font_size: DEFAULT_RENDERED_FONT_SIZE,
             paragraph_spacing: DEFAULT_PARAGRAPH_SPACING,
+            line_spacing: DEFAULT_LINE_SPACING,
             editor_font_family: None,
             rendered_font_family: None,
             code_font_family: None,

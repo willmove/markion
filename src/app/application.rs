@@ -247,11 +247,12 @@ impl MarkionApp {
         let editor_split_ratio = session.layout.normalized_split_ratio();
         let sidebar_width = session.layout.normalized_sidebar_width();
         let outline_width = session.layout.normalized_outline_width();
-        let typography = DocumentTypographyMetrics::new_with_code_font_size(
+        let typography = DocumentTypographyMetrics::new_with_line_spacing(
             preferences.editor_font_size,
             preferences.rendered_font_size,
             preferences.paragraph_spacing,
             preferences.code_font_size,
+            preferences.line_spacing,
         );
         let mut initial_tab = EditorTab::new(document);
         initial_tab.line_height = px(typography.editor_line_height);
@@ -291,7 +292,7 @@ impl MarkionApp {
             about_dialog_open: false,
             markdown_reference_open: false,
             markdown_reference_scroll: ScrollHandle::new(),
-            status: t(Language::default(), Msg::StatusReady).into(),
+            status: t(language, Msg::StatusReady).into(),
             applied_window_title: None,
             publishing_service: None,
             docx_import: docx_import::DocxImportCoordinator::default(),
@@ -342,6 +343,7 @@ impl MarkionApp {
             editor_font_size: preferences.editor_font_size,
             rendered_font_size: preferences.rendered_font_size,
             paragraph_spacing: preferences.paragraph_spacing,
+            line_spacing: preferences.line_spacing,
             editor_font_family: preferences.editor_font_family,
             rendered_font_family: preferences.rendered_font_family,
             code_font_family: preferences.code_font_family,
@@ -2405,6 +2407,7 @@ impl MarkionApp {
             editor_font_size: self.editor_font_size,
             rendered_font_size: self.rendered_font_size,
             paragraph_spacing: self.paragraph_spacing,
+            line_spacing: self.line_spacing,
             editor_font_family: self.editor_font_family.clone(),
             rendered_font_family: self.rendered_font_family.clone(),
             code_font_family: self.code_font_family.clone(),

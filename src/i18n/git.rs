@@ -190,6 +190,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Sauvegarde et synchronisation",
             "Sicherung und Synchronisierung",
             "Copia y sincronización",
+            "백업 및 동기화",
         ],
         GitMsg::StateOff => [
             "Backup and sync is off",
@@ -199,6 +200,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "La sauvegarde et la synchronisation sont désactivées",
             "Sicherung und Synchronisierung sind aus",
             "La copia y sincronización están desactivadas",
+            "백업 및 동기화가 꺼져 있습니다",
         ],
         GitMsg::StateRunning => [
             "Syncing {0}",
@@ -208,6 +210,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Synchronisation{0}",
             "Synchronisierung läuft{0}",
             "Sincronizando{0}",
+            "동기화 중 {0}",
         ],
         GitMsg::StatePending => [
             "{0} local item(s) waiting to sync",
@@ -217,6 +220,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "{0} élément(s) local(aux) en attente",
             "{0} lokale Elemente warten auf Synchronisierung",
             "{0} elemento(s) local(es) por sincronizar",
+            "로컬 항목 {0}개가 동기화 대기 중입니다",
         ],
         GitMsg::StateIncoming => [
             "{0} update(s) available",
@@ -226,6 +230,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "{0} mise(s) à jour disponible(s)",
             "{0} Aktualisierungen verfügbar",
             "Hay {0} actualización(es)",
+            "업데이트 {0}개 사용 가능",
         ],
         GitMsg::StatePendingBoth => [
             "{0} local item(s), {1} incoming update(s)",
@@ -235,6 +240,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "{0} élément(s) local(aux), {1} mise(s) à jour entrante(s)",
             "{0} lokale Elemente, {1} eingehende Aktualisierungen",
             "{0} elemento(s) local(es), {1} actualización(es) entrante(s)",
+            "로컬 항목 {0}개, 받아올 업데이트 {1}개",
         ],
         GitMsg::StateSynchronized => [
             "Everything is synchronized",
@@ -244,6 +250,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Tout est synchronisé",
             "Alles ist synchronisiert",
             "Todo está sincronizado",
+            "모든 항목이 동기화되었습니다",
         ],
         GitMsg::StateOffline => [
             "Saved on this computer; sync will retry when online",
@@ -253,6 +260,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistré sur cet ordinateur ; nouvel essai en ligne",
             "Auf diesem Computer gespeichert; online wird erneut versucht",
             "Guardado en este equipo; se reintentará al conectarse",
+            "이 컴퓨터에 저장되었습니다. 온라인 상태가 되면 동기화를 다시 시도합니다",
         ],
         GitMsg::StateAuthentication => [
             "Reconnect to continue syncing",
@@ -262,6 +270,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Reconnectez-vous pour continuer la synchronisation",
             "Zum Fortsetzen der Synchronisierung neu verbinden",
             "Vuelve a conectar para continuar la sincronización",
+            "동기화를 계속하려면 다시 연결하세요",
         ],
         GitMsg::StateConflict => [
             "Choose which note changes to keep",
@@ -271,6 +280,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Choisissez les modifications de note à conserver",
             "Wählen Sie die beizubehaltenden Notizänderungen",
             "Elige qué cambios de la nota conservar",
+            "보관할 노트 변경 사항을 선택하세요",
         ],
         GitMsg::StateUncertain => [
             "Checking whether the last upload completed",
@@ -280,6 +290,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérification du dernier envoi",
             "Abschluss der letzten Übertragung wird geprüft",
             "Comprobando si terminó el último envío",
+            "마지막 업로드가 완료되었는지 확인 중",
         ],
         GitMsg::StateAttention => [
             "Sync needs your attention",
@@ -289,6 +300,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "La synchronisation nécessite votre attention",
             "Synchronisierung erfordert Ihre Aufmerksamkeit",
             "La sincronización requiere tu atención",
+            "동기화 확인이 필요합니다",
         ],
         GitMsg::StateUnknown => [
             "The sync location has not been checked",
@@ -298,6 +310,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "L’emplacement de synchronisation n’a pas été vérifié",
             "Das Synchronisierungsziel wurde noch nicht geprüft",
             "Aún no se ha comprobado la ubicación de sincronización",
+            "동기화 위치를 아직 확인하지 않았습니다",
         ],
         GitMsg::TurnOn => [
             "Turn on backup and sync",
@@ -307,6 +320,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Activer la sauvegarde et la synchronisation",
             "Sicherung und Synchronisierung einschalten",
             "Activar copia y sincronización",
+            "백업 및 동기화 켜기",
         ],
         GitMsg::ViewProgress => [
             "View progress",
@@ -316,6 +330,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Voir la progression",
             "Fortschritt anzeigen",
             "Ver progreso",
+            "진행 상황 보기",
         ],
         GitMsg::ViewStatus => [
             "View status",
@@ -325,6 +340,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Voir l’état",
             "Status anzeigen",
             "Ver estado",
+            "상태 보기",
         ],
         GitMsg::Reconnect => [
             "Reconnect",
@@ -334,6 +350,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Reconnecter",
             "Neu verbinden",
             "Volver a conectar",
+            "다시 연결",
         ],
         GitMsg::CheckStatus => [
             "Check status",
@@ -343,6 +360,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérifier l’état",
             "Status prüfen",
             "Comprobar estado",
+            "상태 확인",
         ],
         GitMsg::Review => [
             "Review",
@@ -352,6 +370,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Examiner",
             "Prüfen",
             "Revisar",
+            "검토",
         ],
         GitMsg::SyncLocation => [
             "Sync location",
@@ -361,6 +380,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Emplacement de synchronisation",
             "Synchronisierungsziel",
             "Ubicación de sincronización",
+            "동기화 위치",
         ],
         GitMsg::LastConfirmed => [
             "Last confirmed {0} seconds ago",
@@ -370,6 +390,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Dernière confirmation il y a {0} s",
             "Zuletzt vor {0} Sekunden bestätigt",
             "Última confirmación hace {0} s",
+            "{0}초 전에 마지막으로 확인됨",
         ],
         GitMsg::LocalItems => [
             "Local items: {0}",
@@ -379,6 +400,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Éléments locaux : {0}",
             "Lokale Elemente: {0}",
             "Elementos locales: {0}",
+            "로컬 항목: {0}",
         ],
         GitMsg::IncomingItems => [
             "Incoming updates: {0}",
@@ -388,6 +410,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Mises à jour entrantes : {0}",
             "Eingehende Aktualisierungen: {0}",
             "Actualizaciones entrantes: {0}",
+            "받아올 업데이트: {0}",
         ],
         GitMsg::AdvancedGitDetails => [
             "Advanced Git details",
@@ -397,6 +420,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Détails Git avancés",
             "Erweiterte Git-Details",
             "Detalles avanzados de Git",
+            "Git 고급 세부 정보",
         ],
         GitMsg::HideAdvancedGitDetails => [
             "Hide advanced Git details",
@@ -406,6 +430,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Masquer les détails Git avancés",
             "Erweiterte Git-Details ausblenden",
             "Ocultar detalles avanzados de Git",
+            "Git 고급 세부 정보 숨기기",
         ],
         GitMsg::AdvancedGitTools => [
             "Advanced Git Tools",
@@ -415,6 +440,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Outils Git avancés",
             "Erweiterte Git-Werkzeuge",
             "Herramientas avanzadas de Git",
+            "Git 고급 도구",
         ],
         GitMsg::SyncAddress => [
             "Sync address",
@@ -424,6 +450,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Adresse de synchronisation",
             "Synchronisierungsadresse",
             "Dirección de sincronización",
+            "동기화 주소",
         ],
         GitMsg::SyncAddressOptional => [
             "Sync address (optional if already connected)",
@@ -433,6 +460,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Adresse de synchronisation (facultative si déjà connecté)",
             "Synchronisierungsadresse (bei bestehender Verbindung optional)",
             "Dirección de sincronización (opcional si ya está conectado)",
+            "동기화 주소 (이미 연결된 경우 선택 사항)",
         ],
         GitMsg::SyncAddressHelp => [
             "Paste the HTTPS or SSH address supplied by your sync provider. You may need an account and permission to use it.",
@@ -442,6 +470,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Collez l’adresse HTTPS ou SSH fournie par votre service. Un compte et une autorisation peuvent être nécessaires.",
             "Fügen Sie die HTTPS- oder SSH-Adresse Ihres Anbieters ein. Konto und Berechtigung können erforderlich sein.",
             "Pega la dirección HTTPS o SSH de tu proveedor. Puede que necesites una cuenta y permiso de acceso.",
+            "동기화 서비스에서 제공한 HTTPS 또는 SSH 주소를 붙여넣으세요. 계정과 사용 권한이 필요할 수 있습니다.",
         ],
         GitMsg::SyncMirrorsChangesHelp => [
             "Sync sends supported note edits and deletions to the sync location. Use Version History to recover earlier content; this is not an immutable archive.",
@@ -451,6 +480,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "La synchronisation répercute les modifications et suppressions de notes prises en charge. Utilisez l’historique des versions pour récupérer un ancien contenu ; ce n’est pas une archive immuable.",
             "Die Synchronisierung überträgt unterstützte Notizänderungen und Löschungen. Frühere Inhalte lassen sich über den Versionsverlauf wiederherstellen; dies ist kein unveränderliches Archiv.",
             "La sincronización transmite las ediciones y eliminaciones de notas compatibles. Use el historial de versiones para recuperar contenido anterior; no es un archivo inmutable.",
+            "지원되는 노트의 편집과 삭제를 동기화 위치로 전송합니다. 이전 내용은 버전 기록에서 복구하세요. 변경 불가능한 보관소는 아닙니다.",
         ],
         GitMsg::AdvancedRepositorySetup => [
             "Advanced repository setup",
@@ -460,6 +490,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Configuration avancée du dépôt",
             "Erweiterte Repository-Einrichtung",
             "Configuración avanzada del repositorio",
+            "고급 저장소 설정",
         ],
         GitMsg::NotesFolder => [
             "Notes folder",
@@ -469,6 +500,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Dossier de notes",
             "Notizordner",
             "Carpeta de notas",
+            "노트 폴더",
         ],
         GitMsg::RepositoryFolder => [
             "Repository folder",
@@ -478,6 +510,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Dossier du dépôt",
             "Repository-Ordner",
             "Carpeta del repositorio",
+            "저장소 폴더",
         ],
         GitMsg::GlobalBackgroundCheck => [
             "Background checks for workspaces",
@@ -487,6 +520,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérification des espaces en arrière-plan",
             "Arbeitsbereiche im Hintergrund prüfen",
             "Comprobaciones en segundo plano",
+            "작업 공간 백그라운드 확인",
         ],
         GitMsg::WorkspaceBackgroundCheck => [
             "Background checks for this workspace",
@@ -496,6 +530,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérification de cet espace en arrière-plan",
             "Diesen Arbeitsbereich im Hintergrund prüfen",
             "Comprobaciones para este espacio",
+            "이 작업 공간 백그라운드 확인",
         ],
         GitMsg::BackgroundCheckHelp => [
             "Background checking only looks for updates. It never uploads notes or applies changes.",
@@ -505,6 +540,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "La vérification en arrière-plan recherche seulement les mises à jour ; elle n’envoie ni n’applique rien.",
             "Die Hintergrundprüfung sucht nur nach Updates; sie lädt nichts hoch und wendet nichts an.",
             "La comprobación en segundo plano solo busca actualizaciones; no sube ni aplica cambios.",
+            "백그라운드 확인은 업데이트 유무만 확인합니다. 노트를 업로드하거나 변경 사항을 적용하지 않습니다.",
         ],
         GitMsg::AdvancedGitSettings => [
             "Advanced Git settings",
@@ -514,6 +550,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Paramètres Git avancés",
             "Erweiterte Git-Einstellungen",
             "Ajustes avanzados de Git",
+            "Git 고급 설정",
         ],
         GitMsg::HideAdvancedGitSettings => [
             "Hide advanced Git settings",
@@ -523,6 +560,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Masquer les paramètres Git avancés",
             "Erweiterte Git-Einstellungen ausblenden",
             "Ocultar ajustes avanzados de Git",
+            "Git 고급 설정 숨기기",
         ],
         GitMsg::SyncActivity => [
             "Sync activity",
@@ -532,6 +570,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Activité de synchronisation",
             "Synchronisierungsaktivität",
             "Actividad de sincronización",
+            "동기화 활동",
         ],
         GitMsg::VersionHistory => [
             "Version history",
@@ -541,6 +580,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Historique des versions",
             "Versionsverlauf",
             "Historial de versiones",
+            "버전 기록",
         ],
         GitMsg::GitUnavailable => [
             "Git is missing or too old (2.39 or later required)",
@@ -550,6 +590,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Git absent ou trop ancien (2.39 minimum)",
             "Git fehlt oder ist zu alt (mindestens 2.39)",
             "Git no disponible o antiguo (requiere 2.39)",
+            "Git이 없거나 너무 오래되었습니다 (2.39 이상 필요)",
         ],
         GitMsg::Preparing => [
             "Preparing snapshot",
@@ -559,6 +600,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Préparation du snapshot",
             "Snapshot vorbereiten",
             "Preparando instantánea",
+            "스냅샷 준비 중",
         ],
         GitMsg::Staging => [
             "Staging snapshot",
@@ -568,6 +610,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Indexation du snapshot",
             "Snapshot bereitstellen",
             "Preparando índice",
+            "스냅샷 스테이징 중",
         ],
         GitMsg::Integrating => [
             "Integrating updates",
@@ -577,6 +620,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Intégration des mises à jour",
             "Updates integrieren",
             "Integrando actualizaciones",
+            "업데이트 통합 중",
         ],
         GitMsg::Verifying => [
             "Verifying delivery",
@@ -586,6 +630,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérification de la livraison",
             "Übertragung prüfen",
             "Verificando envío",
+            "전송 완료 확인 중",
         ],
         GitMsg::Enabled => [
             "Enabled",
@@ -595,6 +640,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Activé",
             "Aktiviert",
             "Activado",
+            "사용",
         ],
         GitMsg::Disabled => [
             "Disabled",
@@ -604,6 +650,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Désactivé",
             "Deaktiviert",
             "Desactivado",
+            "사용 안 함",
         ],
         GitMsg::Attachments => [
             "Attachment issues",
@@ -613,6 +660,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Problèmes de pièces jointes",
             "Anhangprobleme",
             "Problemas con adjuntos",
+            "첨부 파일 문제",
         ],
         GitMsg::Repair => [
             "Open note to repair reference",
@@ -622,6 +670,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ouvrir la note pour corriger le lien",
             "Notiz öffnen und Verweis korrigieren",
             "Abrir nota para corregir enlace",
+            "노트를 열어 참조 수정",
         ],
         GitMsg::Include => [
             "Edit attachment scope",
@@ -631,6 +680,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modifier le périmètre des pièces jointes",
             "Anhangumfang bearbeiten",
             "Editar ámbito de adjuntos",
+            "첨부 파일 범위 편집",
         ],
         GitMsg::LocalRecovery => [
             "Recognize completed local operation",
@@ -640,6 +690,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Reconnaître l’opération locale terminée",
             "Abgeschlossenen lokalen Vorgang bestätigen",
             "Confirmar operación local completada",
+            "완료된 로컬 작업 확인",
         ],
         GitMsg::UnstageOwned => [
             "Unstage snapshot; keep files",
@@ -649,6 +700,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Désindexer le snapshot, garder les fichiers",
             "Snapshot aus Index nehmen, Dateien behalten",
             "Quitar instantánea del índice, conservar archivos",
+            "스냅샷 스테이징 취소, 파일 유지",
         ],
         GitMsg::ExternalRecovery => [
             "Inspect externally; recovery copies are retained",
@@ -658,6 +710,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérifier avec un outil externe ; copies conservées",
             "Extern prüfen; Wiederherstellungskopien bleiben erhalten",
             "Revisar externamente; copias conservadas",
+            "외부에서 확인, 복구 사본 유지",
         ],
         GitMsg::UnsavedResult => [
             "Save the result before changing source choices",
@@ -667,6 +720,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistrer le résultat avant de changer la source",
             "Ergebnis vor Änderung der Quellauswahl speichern",
             "Guarde el resultado antes de cambiar de origen",
+            "원본 선택을 바꾸기 전에 결과를 저장하세요",
         ],
         GitMsg::CreateVersion => [
             "Create local version",
@@ -676,6 +730,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Créer une version locale",
             "Lokale Version erstellen",
             "Crear versión local",
+            "로컬 버전 만들기",
         ],
         GitMsg::CreateVersionCount => [
             "Create version ({0} files)",
@@ -685,6 +740,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Créer la version ({0} fichiers)",
             "Version erstellen ({0} Dateien)",
             "Crear versión ({0} archivos)",
+            "버전 만들기 (파일 {0}개)",
         ],
         GitMsg::SelectAllChanges => [
             "Select all",
@@ -694,6 +750,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Tout sélectionner",
             "Alle auswählen",
             "Seleccionar todo",
+            "모두 선택",
         ],
         GitMsg::ClearSelection => [
             "Clear selection",
@@ -703,6 +760,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Effacer la sélection",
             "Auswahl leeren",
             "Borrar selección",
+            "선택 해제",
         ],
         GitMsg::VersionInputRequired => [
             "Select at least one file and enter a commit message.",
@@ -712,6 +770,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Sélectionnez au moins un fichier et saisissez un message de commit.",
             "Mindestens eine Datei und eine Commit-Nachricht angeben.",
             "Seleccione al menos un archivo y escriba un mensaje de commit.",
+            "파일을 하나 이상 선택하고 커밋 메시지를 입력하세요.",
         ],
         GitMsg::VersionDraftStale => [
             "Repository content changed; refresh and review the version again.",
@@ -721,6 +780,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Le dépôt a changé ; actualisez et vérifiez à nouveau la version.",
             "Repository wurde geändert; aktualisieren und Version erneut prüfen.",
             "El repositorio cambió; actualice y revise de nuevo la versión.",
+            "저장소 내용이 변경되었습니다. 새로 고친 뒤 버전을 다시 검토하세요.",
         ],
         GitMsg::FileHistory => [
             "File history",
@@ -730,6 +790,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Historique du fichier",
             "Dateiverlauf",
             "Historial del archivo",
+            "파일 기록",
         ],
         GitMsg::FileHistoryUnavailable => [
             "Open a repository file to view its history.",
@@ -739,6 +800,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ouvrez un fichier du dépôt pour afficher son historique.",
             "Eine Repository-Datei öffnen, um ihren Verlauf anzuzeigen.",
             "Abra un archivo del repositorio para ver su historial.",
+            "기록을 보려면 저장소의 파일을 여세요.",
         ],
         GitMsg::CompareCurrent => [
             "Compare with current",
@@ -748,6 +810,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Comparer avec la version actuelle",
             "Mit aktueller Version vergleichen",
             "Comparar con la actual",
+            "현재 버전과 비교",
         ],
         GitMsg::RestoreEditor => [
             "Restore in editor",
@@ -757,6 +820,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Restaurer dans l’éditeur",
             "Im Editor wiederherstellen",
             "Restaurar en el editor",
+            "편집기에서 복원",
         ],
         GitMsg::RestoreConfirm => [
             "This file has unsaved edits. Replace the editor buffer with the selected version? You can undo the replacement.",
@@ -766,6 +830,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ce fichier contient des modifications non enregistrées. Remplacer le contenu de l’éditeur par la version sélectionnée ? Cette action peut être annulée.",
             "Diese Datei enthält ungespeicherte Änderungen. Editorinhalt durch die gewählte Version ersetzen? Die Änderung kann rückgängig gemacht werden.",
             "Este archivo tiene cambios sin guardar. ¿Reemplazar el contenido del editor por la versión elegida? Puede deshacer el cambio.",
+            "이 파일에 저장하지 않은 편집 내용이 있습니다. 선택한 버전으로 편집기 내용을 바꿀까요? 실행 취소할 수 있습니다.",
         ],
         GitMsg::RestoreSuccess => [
             "Historical version restored as an unsaved edit.",
@@ -775,6 +840,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Version historique restaurée comme modification non enregistrée.",
             "Historische Version als ungespeicherte Änderung wiederhergestellt.",
             "Versión histórica restaurada como cambio sin guardar.",
+            "이전 버전을 저장하지 않은 편집 내용으로 복원했습니다.",
         ],
         GitMsg::BinaryContent => [
             "Binary content cannot be shown or restored in the text editor.",
@@ -784,6 +850,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Le contenu binaire ne peut pas être affiché ni restauré dans l’éditeur de texte.",
             "Binärinhalt kann im Texteditor weder angezeigt noch wiederhergestellt werden.",
             "El contenido binario no se puede mostrar ni restaurar en el editor de texto.",
+            "바이너리 내용은 텍스트 편집기에서 표시하거나 복원할 수 없습니다.",
         ],
         GitMsg::TrackedRoots => [
             "Tracked roots (; separated)",
@@ -793,6 +860,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Racines suivies (séparées par ;)",
             "Verfolgte Ordner (; getrennt)",
             "Raíces seguidas (separadas por ;)",
+            "추적 중인 루트 폴더 (;로 구분)",
         ],
         GitMsg::NewRoots => [
             "New note/image roots (; separated)",
@@ -802,6 +870,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Racines des nouveaux fichiers (; séparées)",
             "Ordner für neue Notizen/Bilder (; getrennt)",
             "Raíces de notas/imágenes nuevas (; separadas)",
+            "새 노트/이미지 루트 폴더 (;로 구분)",
         ],
         GitMsg::Message => [
             "Commit message template ({date}, {time}, {files}, {count})",
@@ -811,6 +880,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modèle du message ({date}, {time}, {files}, {count})",
             "Commit-Vorlage ({date}, {time}, {files}, {count})",
             "Plantilla del mensaje ({date}, {time}, {files}, {count})",
+            "커밋 메시지 템플릿 ({date}, {time}, {files}, {count})",
         ],
         GitMsg::Name => [
             "Author name",
@@ -820,6 +890,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Nom de l’auteur",
             "Name des Autors",
             "Nombre del autor",
+            "작성자 이름",
         ],
         GitMsg::Email => [
             "Author email",
@@ -829,6 +900,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "E-mail de l’auteur",
             "E-Mail des Autors",
             "Correo del autor",
+            "작성자 이메일",
         ],
         GitMsg::SaveSettings => [
             "Save settings",
@@ -838,6 +910,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistrer les paramètres",
             "Einstellungen speichern",
             "Guardar ajustes",
+            "설정 저장",
         ],
         GitMsg::InvalidScope => [
             "Use repository-relative folders; parent traversal is not allowed.",
@@ -847,6 +920,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Utilisez des dossiers relatifs au dépôt, sans chemin parent.",
             "Repository-relative Ordner ohne übergeordnete Pfade verwenden.",
             "Use carpetas relativas al repositorio, sin rutas superiores.",
+            "저장소 기준 상대 폴더를 사용하세요. 상위 경로 이동은 허용하지 않습니다.",
         ],
         GitMsg::EditResult => [
             "Edit combined version",
@@ -856,6 +930,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modifier la version combinée",
             "Kombinierte Version bearbeiten",
             "Editar la versión combinada",
+            "통합 버전 편집",
         ],
         GitMsg::Details => [
             "Sync",
@@ -865,6 +940,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Synchronisation",
             "Synchronisierung",
             "Sincronización",
+            "동기화",
         ],
         GitMsg::Refresh => [
             "Refresh",
@@ -874,6 +950,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Actualiser",
             "Aktualisieren",
             "Actualizar",
+            "새로 고침",
         ],
         GitMsg::Changes => [
             "Changes",
@@ -883,6 +960,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modifications",
             "Änderungen",
             "Cambios",
+            "변경 사항",
         ],
         GitMsg::Recent => [
             "Recent history",
@@ -892,6 +970,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Historique récent",
             "Letzter Verlauf",
             "Historial reciente",
+            "최근 기록",
         ],
         GitMsg::Outgoing => [
             "Outgoing commits",
@@ -901,6 +980,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Commits sortants",
             "Ausgehende Commits",
             "Commits salientes",
+            "보낼 커밋",
         ],
         GitMsg::Commit => [
             "Commit locally",
@@ -910,6 +990,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Commit local",
             "Lokal committen",
             "Commit local",
+            "로컬 커밋",
         ],
         GitMsg::Fetch => [
             "Check remote",
@@ -919,6 +1000,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérifier le distant",
             "Remote prüfen",
             "Comprobar remoto",
+            "원격 확인",
         ],
         GitMsg::Pull => [
             "Pull updates",
@@ -928,6 +1010,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Récupérer les mises à jour",
             "Updates abrufen",
             "Obtener actualizaciones",
+            "업데이트 가져오기",
         ],
         GitMsg::Push => [
             "Push commits",
@@ -937,6 +1020,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Pousser les commits",
             "Commits übertragen",
             "Enviar commits",
+            "커밋 푸시",
         ],
         GitMsg::Confirm => [
             "Confirm",
@@ -946,6 +1030,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Confirmer",
             "Bestätigen",
             "Confirmar",
+            "확인",
         ],
         GitMsg::Cancel => [
             "Cancel",
@@ -955,6 +1040,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Annuler",
             "Abbrechen",
             "Cancelar",
+            "취소",
         ],
         GitMsg::Disconnect => [
             "Disconnect sync",
@@ -964,6 +1050,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Déconnecter",
             "Synchronisierung trennen",
             "Desconectar",
+            "동기화 연결 해제",
         ],
         GitMsg::Settings => [
             "Connection settings",
@@ -973,6 +1060,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Paramètres de connexion",
             "Verbindungseinstellungen",
             "Ajustes de conexión",
+            "연결 설정",
         ],
         GitMsg::Unknown => [
             "Remote state unknown",
@@ -982,6 +1070,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "État distant inconnu",
             "Remote-Status unbekannt",
             "Estado remoto desconocido",
+            "원격 상태 알 수 없음",
         ],
         GitMsg::Layers => [
             "Unsaved: {0} · Git changes: {1}",
@@ -991,6 +1080,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non enregistrés : {0} · Modifications Git : {1}",
             "Ungespeichert: {0} · Git-Änderungen: {1}",
             "Sin guardar: {0} · Cambios Git: {1}",
+            "미저장: {0} · Git 변경: {1}",
         ],
         GitMsg::Relation => [
             "Outgoing: {0} · Incoming: {1}",
@@ -1000,6 +1090,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Sortants : {0} · Entrants : {1}",
             "Ausgehend: {0} · Eingehend: {1}",
             "Salientes: {0} · Entrantes: {1}",
+            "보낼 항목: {0} · 받을 항목: {1}",
         ],
         GitMsg::Checked => [
             "Remote checked {0}s ago",
@@ -1009,6 +1100,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Distant vérifié il y a {0} s",
             "Remote vor {0} s geprüft",
             "Remoto comprobado hace {0} s",
+            "{0}초 전에 원격 확인됨",
         ],
         GitMsg::Committed => [
             "Saved in local history; ready to push",
@@ -1018,6 +1110,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistré localement, prêt à pousser",
             "Lokal gespeichert, bereit zur Übertragung",
             "Guardado localmente, listo para enviar",
+            "로컬 기록에 저장되었습니다. 푸시할 수 있습니다",
         ],
         GitMsg::Awaiting => [
             "Local version kept; waiting to upload: {0}",
@@ -1027,6 +1120,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Version locale conservée, en attente d’envoi : {0}",
             "Lokale Version erhalten, Upload ausstehend: {0}",
             "Versión local conservada; envío pendiente: {0}",
+            "로컬 버전을 보관했습니다. 업로드 대기 중: {0}",
         ],
         GitMsg::Uncertain => [
             "Upload result unknown; verify before retrying: {0}",
@@ -1036,6 +1130,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Résultat d’envoi inconnu, vérifier avant de réessayer : {0}",
             "Upload-Ergebnis unbekannt, vor Wiederholung prüfen: {0}",
             "Resultado de envío desconocido; verificar antes de reintentar: {0}",
+            "업로드 결과를 알 수 없습니다. 재시도 전에 확인하세요: {0}",
         ],
         GitMsg::NewEdits => [
             "Captured changes synchronized; newer edits remain",
@@ -1045,6 +1140,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modifications synchronisées, nouvelles éditions en attente",
             "Änderungen synchronisiert, neuere Bearbeitungen vorhanden",
             "Cambios sincronizados; quedan ediciones nuevas",
+            "캡처된 변경 사항은 동기화되었습니다. 더 최근의 편집 내용은 남아 있습니다",
         ],
         GitMsg::Empty => [
             "No changes",
@@ -1054,6 +1150,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Aucune modification",
             "Keine Änderungen",
             "Sin cambios",
+            "변경 사항 없음",
         ],
         GitMsg::Previous => [
             "Previous page",
@@ -1063,6 +1160,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Page précédente",
             "Vorherige Seite",
             "Página anterior",
+            "이전 페이지",
         ],
         GitMsg::Next => [
             "Next page",
@@ -1072,6 +1170,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Page suivante",
             "Nächste Seite",
             "Página siguiente",
+            "다음 페이지",
         ],
         GitMsg::Close => [
             "Close",
@@ -1081,6 +1180,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Fermer",
             "Schließen",
             "Cerrar",
+            "닫기",
         ],
         GitMsg::Copy => [
             "Save a copy",
@@ -1090,6 +1190,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistrer une copie",
             "Kopie speichern",
             "Guardar copia",
+            "복사본 저장",
         ],
         GitMsg::Staged => [
             "Staged changes",
@@ -1099,6 +1200,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modifications indexées",
             "Vorgemerkte Änderungen",
             "Cambios preparados",
+            "스테이징된 변경 사항",
         ],
         GitMsg::Unstaged => [
             "Working files",
@@ -1108,6 +1210,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Fichiers de travail",
             "Arbeitsdateien",
             "Archivos de trabajo",
+            "작업 파일",
         ],
         GitMsg::Limited => [
             "Preview unavailable or too large; inspect externally",
@@ -1117,6 +1220,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Aperçu indisponible ou trop volumineux, consulter en externe",
             "Vorschau nicht verfügbar oder zu groß; extern prüfen",
             "Vista previa no disponible o demasiado grande; revisar externamente",
+            "미리보기를 사용할 수 없거나 너무 큽니다. 외부에서 확인하세요",
         ],
         GitMsg::External => [
             "Open repository folder",
@@ -1126,6 +1230,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ouvrir le dossier du dépôt",
             "Repository-Ordner öffnen",
             "Abrir carpeta del repositorio",
+            "저장소 폴더 열기",
         ],
         GitMsg::Attention => [
             "Requires review",
@@ -1135,6 +1240,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vérification requise",
             "Prüfung erforderlich",
             "Requiere revisión",
+            "검토 필요",
         ],
         GitMsg::Scope => [
             "Commit scope: {0}",
@@ -1144,6 +1250,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Portée du commit : {0}",
             "Commit-Bereich: {0}",
             "Alcance del commit: {0}",
+            "커밋 범위: {0}",
         ],
         GitMsg::WholeHistory => [
             "Integration affects the whole repository. Push transfers required branch history.",
@@ -1153,6 +1260,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "L’intégration affecte tout le dépôt. L’envoi transfère l’historique nécessaire.",
             "Integration betrifft das ganze Repository. Push überträgt den nötigen Branch-Verlauf.",
             "La integración afecta a todo el repositorio. El envío transfiere el historial necesario.",
+            "통합은 저장소 전체에 영향을 줍니다. 푸시는 필요한 브랜치 기록을 전송합니다.",
         ],
         GitMsg::Busy => [
             "Operation running; wait or cancel before continuing",
@@ -1162,6 +1270,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Opération en cours, attendre ou annuler",
             "Vorgang läuft; warten oder abbrechen",
             "Operación en curso; espere o cancele",
+            "작업이 실행 중입니다. 기다리거나 취소한 뒤 계속하세요",
         ],
         GitMsg::Recovery => [
             "Pending recovery",
@@ -1171,6 +1280,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Récupération en attente",
             "Ausstehende Wiederherstellung",
             "Recuperación pendiente",
+            "복구 대기 중",
         ],
         GitMsg::Executable => [
             "Git executable",
@@ -1180,6 +1290,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Exécutable Git",
             "Git-Programm",
             "Ejecutable Git",
+            "Git 실행 파일",
         ],
         GitMsg::Default => [
             "Use system Git",
@@ -1189,6 +1300,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Utiliser Git système",
             "System-Git verwenden",
             "Usar Git del sistema",
+            "시스템 Git 사용",
         ],
         GitMsg::Result => [
             "Merge result",
@@ -1198,6 +1310,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Résultat de fusion",
             "Merge-Ergebnis",
             "Resultado de fusión",
+            "병합 결과",
         ],
         GitMsg::Base => [
             "Base version",
@@ -1207,6 +1320,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Version de base",
             "Basisversion",
             "Versión base",
+            "기준 버전",
         ],
         GitMsg::Draft => [
             "Save draft",
@@ -1216,6 +1330,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistrer le brouillon",
             "Entwurf speichern",
             "Guardar borrador",
+            "초안 저장",
         ],
         GitMsg::Resolved => [
             "Use this version",
@@ -1225,6 +1340,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Utiliser cette version",
             "Diese Version verwenden",
             "Usar esta versión",
+            "이 버전 사용",
         ],
         GitMsg::CombinedVersion => [
             "Combined version",
@@ -1234,6 +1350,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Version combinée",
             "Kombinierte Version",
             "Versión combinada",
+            "통합 버전",
         ],
         GitMsg::KeepBoth => [
             "Keep both",
@@ -1243,6 +1360,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Conserver les deux",
             "Beide behalten",
             "Conservar ambos",
+            "둘 다 유지",
         ],
         GitMsg::DraftSaved => [
             "Draft saved; the note version has not been chosen yet",
@@ -1252,6 +1370,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Brouillon enregistré ; la version de la note n’est pas encore choisie",
             "Entwurf gespeichert; die Notizversion wurde noch nicht ausgewählt",
             "Borrador guardado; aún no se ha elegido la versión de la nota",
+            "초안을 저장했습니다. 노트 버전은 아직 선택하지 않았습니다",
         ],
         GitMsg::SaveFirst => [
             "Save or resolve local edits before continuing sync",
@@ -1261,6 +1380,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistrez ou résolvez les modifications locales avant de poursuivre la synchronisation",
             "Lokale Änderungen vor dem Fortsetzen der Synchronisierung speichern oder klären",
             "Guarde o resuelva los cambios locales antes de continuar la sincronización",
+            "동기화를 계속하기 전에 로컬 편집 내용을 저장하거나 해결하세요",
         ],
         GitMsg::Acknowledged => [
             "Continue without this attachment",
@@ -1270,6 +1390,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Continuer sans cette pièce jointe",
             "Ohne diesen Anhang fortfahren",
             "Continuar sin este adjunto",
+            "이 첨부 파일 없이 계속",
         ],
         GitMsg::Author => [
             "Commit author: {0} <{1}>",
@@ -1279,6 +1400,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Auteur : {0} <{1}>",
             "Commit-Autor: {0} <{1}>",
             "Autor: {0} <{1}>",
+            "커밋 작성자: {0} <{1}>",
         ],
         GitMsg::QuickSetupHint => [
             "Choose how to start. Markion will keep routine sync to one click.",
@@ -1288,6 +1410,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Choisissez comment commencer. La synchronisation restera accessible en un clic.",
             "Startmethode wählen. Danach genügt ein Klick zum Synchronisieren.",
             "Elija cómo empezar. Después podrá sincronizar con un clic.",
+            "시작 방법을 선택하세요. 이후의 일반 동기화는 한 번의 클릭으로 실행할 수 있습니다.",
         ],
         GitMsg::UseThisFolder => [
             "Use this folder for Backup and Sync",
@@ -1297,6 +1420,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Utiliser ce dossier pour la sauvegarde et la synchronisation",
             "Diesen Ordner für Sicherung und Synchronisierung verwenden",
             "Usar esta carpeta para copia y sincronización",
+            "이 폴더를 백업 및 동기화에 사용",
         ],
         GitMsg::CloneNotesRepository => [
             "Get notes from an existing sync address",
@@ -1306,6 +1430,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Obtenir des notes depuis une adresse de synchronisation existante",
             "Notizen von einer vorhandenen Synchronisierungsadresse abrufen",
             "Obtener notas de una dirección de sincronización existente",
+            "기존 동기화 주소에서 노트 가져오기",
         ],
         GitMsg::StartSyncingFolder => [
             "Enable Backup and Sync for this folder",
@@ -1315,6 +1440,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Activer la sauvegarde et la synchronisation pour ce dossier",
             "Sicherung und Synchronisierung für diesen Ordner aktivieren",
             "Activar copia y sincronización para esta carpeta",
+            "이 폴더의 백업 및 동기화 활성화",
         ],
         GitMsg::RemoteUrl => [
             "Repository address",
@@ -1324,6 +1450,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Adresse du dépôt",
             "Repository-Adresse",
             "Dirección del repositorio",
+            "저장소 주소",
         ],
         GitMsg::RemoteUrlOptional => [
             "Repository address (optional when origin exists)",
@@ -1333,6 +1460,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Adresse du dépôt (facultative si origin existe)",
             "Repository-Adresse (optional, wenn origin vorhanden ist)",
             "Dirección del repositorio (opcional si existe origin)",
+            "저장소 주소 (origin이 있으면 선택 사항)",
         ],
         GitMsg::Destination => [
             "Local folder (automatic when blank)",
@@ -1342,6 +1470,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Dossier local (automatique si vide)",
             "Lokaler Ordner (leer = automatisch)",
             "Carpeta local (automática si está vacía)",
+            "로컬 폴더 (비워 두면 자동)",
         ],
         GitMsg::Branch => [
             "Branch (automatic when blank)",
@@ -1351,6 +1480,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Branche (automatique si vide)",
             "Branch (leer = automatisch)",
             "Rama (automática si está vacía)",
+            "브랜치 (비워 두면 자동)",
         ],
         GitMsg::Advanced => [
             "Advanced setup",
@@ -1360,6 +1490,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Configuration avancée",
             "Erweiterte Einrichtung",
             "Configuración avanzada",
+            "고급 설정",
         ],
         GitMsg::Retry => [
             "Retry",
@@ -1369,6 +1500,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Réessayer",
             "Erneut versuchen",
             "Reintentar",
+            "다시 시도",
         ],
         GitMsg::FirstPublicationPending => [
             "Backup and Sync is ready. Create or save a note, then choose Sync Now to send its first version.",
@@ -1378,6 +1510,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "La sauvegarde et la synchronisation sont prêtes. Créez ou enregistrez une note, puis choisissez Synchroniser pour envoyer sa première version.",
             "Sicherung und Synchronisierung sind bereit. Erstellen oder speichern Sie eine Notiz und wählen Sie Jetzt synchronisieren, um die erste Version zu senden.",
             "La copia y sincronización están listas. Cree o guarde una nota y elija Sincronizar ahora para enviar su primera versión.",
+            "백업 및 동기화가 준비되었습니다. 노트를 만들거나 저장한 뒤 지금 동기화를 선택하여 첫 버전을 전송하세요.",
         ],
         GitMsg::SetupAuthorPair => [
             "Enter both the author name and email, or leave both blank",
@@ -1387,6 +1520,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Saisissez le nom et l’adresse e-mail de l’auteur, ou laissez les deux vides",
             "Autorname und E-Mail gemeinsam angeben oder beide leer lassen",
             "Introduzca el nombre y el correo del autor, o deje ambos vacíos",
+            "작성자 이름과 이메일을 모두 입력하거나 둘 다 비워 두세요",
         ],
         GitMsg::SetupRemoteHelp => [
             "Enter an HTTPS or SSH repository address",
@@ -1396,6 +1530,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Saisissez une adresse de dépôt HTTPS ou SSH",
             "Eine HTTPS- oder SSH-Repository-Adresse eingeben",
             "Introduzca una dirección de repositorio HTTPS o SSH",
+            "HTTPS 또는 SSH 저장소 주소를 입력하세요",
         ],
         GitMsg::SetupReadOnly => [
             "This repository type can be inspected but cannot be synchronized by Markion",
@@ -1405,6 +1540,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ce type de dépôt peut être consulté, mais pas synchronisé par Markion",
             "Dieser Repository-Typ kann geprüft, aber nicht mit Markion synchronisiert werden",
             "Markion puede revisar este tipo de repositorio, pero no sincronizarlo",
+            "이 저장소 유형은 확인할 수 있지만 Markion에서 동기화할 수 없습니다",
         ],
         GitMsg::CloneDestinationRequired => [
             "Choose a local folder for the cloned notes",
@@ -1414,6 +1550,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Choisissez un dossier local pour les notes clonées",
             "Einen lokalen Ordner für die geklonten Notizen wählen",
             "Elija una carpeta local para las notas clonadas",
+            "복제할 노트의 로컬 폴더를 선택하세요",
         ],
         GitMsg::CloneDestinationOutside => [
             "Choose a clone destination outside the current notes folder",
@@ -1423,6 +1560,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Choisissez une destination hors du dossier de notes actuel",
             "Ein Klonziel außerhalb des aktuellen Notizordners wählen",
             "Elija un destino fuera de la carpeta de notas actual",
+            "현재 노트 폴더 밖의 복제 대상을 선택하세요",
         ],
         GitMsg::CloneDestinationExists => [
             "The clone destination already exists; choose a new folder",
@@ -1432,6 +1570,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "La destination existe déjà ; choisissez un nouveau dossier",
             "Das Klonziel ist bereits vorhanden; einen neuen Ordner wählen",
             "El destino ya existe; elija una carpeta nueva",
+            "복제 대상이 이미 있습니다. 새 폴더를 선택하세요",
         ],
         GitMsg::PublicationRetryHint => [
             "The local notes and version were kept. Check login access, then retry.",
@@ -1441,6 +1580,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Les notes et la version locales sont conservées. Vérifiez la connexion, puis réessayez.",
             "Lokale Notizen und Version bleiben erhalten. Anmeldung prüfen und erneut versuchen.",
             "Las notas y la versión locales se conservaron. Revise el acceso y vuelva a intentarlo.",
+            "로컬 노트와 버전을 보존했습니다. 로그인 권한을 확인하고 다시 시도하세요.",
         ],
         GitMsg::AdoptedRepository => [
             "Connected to the existing repository {0}; syncing",
@@ -1450,6 +1590,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Connecté au dépôt existant {0} ; synchronisation",
             "Mit dem bestehenden Repository {0} verbunden; Synchronisierung läuft",
             "Conectado al repositorio existente {0}; sincronizando",
+            "기존 저장소 {0}에 연결했습니다. 동기화 중",
         ],
         GitMsg::HideAdvancedSetup => [
             "Hide advanced setup",
@@ -1459,6 +1600,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Masquer la configuration avancée",
             "Erweiterte Einrichtung ausblenden",
             "Ocultar configuración avanzada",
+            "고급 설정 숨기기",
         ],
         GitMsg::RemoteResetCompare => [
             "Current sync address: {0} — new address: {1}. Reset the sync address?",
@@ -1468,6 +1610,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Adresse de synchronisation actuelle : {0} — nouvelle adresse : {1}. Réinitialiser l'adresse ?",
             "Aktuelle Sync-Adresse: {0} — neue Adresse: {1}. Sync-Adresse zurücksetzen?",
             "Dirección de sincronización actual: {0} — nueva dirección: {1}. ¿Restablecer la dirección?",
+            "현재 동기화 주소: {0} — 새 주소: {1}. 동기화 주소를 재설정할까요?",
         ],
         GitMsg::ResetSyncAddress => [
             "Reset sync address",
@@ -1477,6 +1620,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Réinitialiser l'adresse",
             "Sync-Adresse zurücksetzen",
             "Restablecer la dirección",
+            "동기화 주소 재설정",
         ],
         GitMsg::RemoteUnreachableWarning => [
             "Cannot reach {0}. It may be mistyped, require sign-in, or you may be offline.",
@@ -1486,6 +1630,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Impossible de contacter {0}. L'adresse est peut-être erronée, nécessite une connexion, ou vous êtes hors ligne.",
             "{0} ist nicht erreichbar. Die Adresse ist möglicherweise falsch, erfordert eine Anmeldung oder Sie sind offline.",
             "No se puede contactar {0}. Puede estar mal escrita, requerir inicio de sesión o estar sin conexión.",
+            "{0}에 연결할 수 없습니다. 주소가 잘못되었거나 로그인이 필요하거나 오프라인 상태일 수 있습니다.",
         ],
         GitMsg::UseAddressAnyway => [
             "Use this address anyway",
@@ -1495,6 +1640,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Utiliser cette adresse quand même",
             "Diese Adresse trotzdem verwenden",
             "Usar esta dirección de todos modos",
+            "이 주소로 계속",
         ],
         GitMsg::SetupUnrelatedRemote => [
             "The remote repository has no common history with this folder. Clone it to a separate folder and copy your notes over, or integrate the histories manually.",
@@ -1504,6 +1650,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Le dépôt distant n'a aucun historique commun avec ce dossier. Clonez-le dans un dossier séparé et copiez vos notes, ou intégrez les historiques manuellement.",
             "Das Remote-Repository hat keine gemeinsame Historie mit diesem Ordner. Klonen Sie es in einen separaten Ordner und kopieren Sie die Notizen hinein, oder führen Sie die Historien manuell zusammen.",
             "El repositorio remoto no tiene historial común con esta carpeta. Clónelo en una carpeta separada y copie las notas, o integre los historiales manualmente.",
+            "원격 저장소와 이 폴더에 공통 기록이 없습니다. 다른 폴더로 복제한 뒤 노트를 복사하거나 기록을 직접 통합하세요.",
         ],
         GitMsg::ConflictNeedsAttention => [
             "This note has an unfinished sync conflict. Open Backup and Sync to resolve it or discard the record.",
@@ -1513,6 +1660,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Cette note a un conflit de synchronisation inachevé. Ouvrez Sauvegarde et synchronisation pour le résoudre ou abandonner l’enregistrement.",
             "Diese Notiz hat einen unvollendeten Synchronisierungskonflikt. Öffnen Sie Sicherung und Synchronisierung, um ihn zu lösen oder den Eintrag zu verwerfen.",
             "Esta nota tiene un conflicto de sincronización sin terminar. Abra Copia y sincronización para resolverlo o descartar el registro.",
+            "이 노트에 해결되지 않은 동기화 충돌이 있습니다. 백업 및 동기화를 열어 해결하거나 기록을 버리세요.",
         ],
         GitMsg::ConflictStale => [
             "The recorded sync conflict is no longer in progress; your notes are editable again.",
@@ -1522,6 +1670,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Le conflit de synchronisation enregistré n’est plus en cours ; vos notes sont de nouveau modifiables.",
             "Der aufgezeichnete Synchronisierungskonflikt läuft nicht mehr; Ihre Notizen sind wieder bearbeitbar.",
             "El conflicto de sincronización registrado ya no está en curso; sus notas vuelven a ser editables.",
+            "기록된 동기화 충돌이 더 이상 진행 중이지 않습니다. 노트를 다시 편집할 수 있습니다.",
         ],
         GitMsg::OpenDraft => [
             "Open draft",
@@ -1531,6 +1680,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ouvrir le brouillon",
             "Entwurf öffnen",
             "Abrir borrador",
+            "초안 열기",
         ],
         GitMsg::DiscardRecord => [
             "Discard record",
@@ -1540,6 +1690,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Abandonner l’enregistrement",
             "Eintrag verwerfen",
             "Descartar registro",
+            "기록 버리기",
         ],
         GitMsg::DiscardRecordConfirm => [
             "Discard this sync record?",
@@ -1549,6 +1700,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Abandonner cet enregistrement de synchronisation ?",
             "Diesen Synchronisierungseintrag verwerfen?",
             "¿Descartar este registro de sincronización?",
+            "이 동기화 기록을 버릴까요?",
         ],
         GitMsg::DiscardRecordDetail => [
             "The record, its saved draft and its recovery copies are removed. Notes on disk are not changed.",
@@ -1558,6 +1710,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "L’enregistrement, son brouillon et ses copies de récupération sont supprimés. Les notes sur le disque ne changent pas.",
             "Der Eintrag, sein gespeicherter Entwurf und seine Wiederherstellungskopien werden entfernt. Notizen auf dem Datenträger bleiben unverändert.",
             "Se eliminan el registro, su borrador y sus copias de recuperación. Las notas en disco no cambian.",
+            "기록과 저장된 초안 및 복구 사본을 삭제합니다. 디스크의 노트는 바꾸지 않습니다.",
         ],
         GitMsg::DraftOpened => [
             "Draft opened as an unsaved document; the sync record was cleared.",
@@ -1567,6 +1720,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Brouillon ouvert comme document non enregistré ; l’enregistrement de synchronisation a été effacé.",
             "Entwurf als ungespeichertes Dokument geöffnet; der Synchronisierungseintrag wurde entfernt.",
             "Borrador abierto como documento sin guardar; se borró el registro de sincronización.",
+            "초안을 저장하지 않은 문서로 열고 동기화 기록을 지웠습니다.",
         ],
         GitMsg::RecordDiscarded => [
             "Sync record discarded",
@@ -1576,6 +1730,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Enregistrement de synchronisation abandonné",
             "Synchronisierungseintrag verworfen",
             "Registro de sincronización descartado",
+            "동기화 기록을 버렸습니다",
         ],
         GitMsg::HeldBackSummary => [
             "{0} files are not included in sync",
@@ -1585,6 +1740,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "{0} fichiers ne sont pas inclus dans la synchronisation",
             "{0} Dateien sind nicht in der Synchronisierung enthalten",
             "{0} archivos no se incluyen en la sincronización",
+            "파일 {0}개는 동기화에 포함되지 않습니다",
         ],
         GitMsg::HeldBackHidden => [
             "Not synced: hidden file",
@@ -1594,6 +1750,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : fichier masqué",
             "Nicht synchronisiert: versteckte Datei",
             "No sincronizado: archivo oculto",
+            "동기화 제외: 숨김 파일",
         ],
         GitMsg::HeldBackFileType => [
             "Not synced: .{0} files are not included by default",
@@ -1603,6 +1760,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : les fichiers .{0} ne sont pas inclus par défaut",
             "Nicht synchronisiert: .{0}-Dateien sind standardmäßig nicht enthalten",
             "No sincronizado: los archivos .{0} no se incluyen de forma predeterminada",
+            "동기화 제외: .{0} 파일은 기본적으로 포함되지 않습니다",
         ],
         GitMsg::HeldBackFileTypeUnknown => [
             "Not synced: this file type is not included by default",
@@ -1612,6 +1770,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : ce type de fichier n’est pas inclus par défaut",
             "Nicht synchronisiert: dieser Dateityp ist standardmäßig nicht enthalten",
             "No sincronizado: este tipo de archivo no se incluye de forma predeterminada",
+            "동기화 제외: 이 파일 형식은 기본적으로 포함되지 않습니다",
         ],
         GitMsg::HeldBackOutsideFolders => [
             "Not synced: outside the folders chosen for sync",
@@ -1621,6 +1780,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : en dehors des dossiers choisis pour la synchronisation",
             "Nicht synchronisiert: außerhalb der zur Synchronisierung gewählten Ordner",
             "No sincronizado: fuera de las carpetas elegidas para sincronizar",
+            "동기화 제외: 선택한 동기화 폴더 밖에 있습니다",
         ],
         GitMsg::HeldBackSymlink => [
             "Not synced: symbolic link",
@@ -1630,6 +1790,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : lien symbolique",
             "Nicht synchronisiert: symbolischer Link",
             "No sincronizado: enlace simbólico",
+            "동기화 제외: 심볼릭 링크",
         ],
         GitMsg::HeldBackNested => [
             "Not synced: a separate repository inside this folder",
@@ -1639,6 +1800,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : dépôt distinct dans ce dossier",
             "Nicht synchronisiert: separates Repository in diesem Ordner",
             "No sincronizado: repositorio independiente dentro de esta carpeta",
+            "동기화 제외: 이 폴더 안의 별도 저장소",
         ],
         GitMsg::HeldBackMoved => [
             "Not synced: moved to a location that is not included",
@@ -1648,6 +1810,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : déplacé vers un emplacement non inclus",
             "Nicht synchronisiert: an einen nicht enthaltenen Ort verschoben",
             "No sincronizado: movido a una ubicación no incluida",
+            "동기화 제외: 포함되지 않는 위치로 이동됨",
         ],
         GitMsg::HeldBackRename => [
             "Not synced: renamed across sync folders; review both paths",
@@ -1657,6 +1820,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisé : renommé d’un dossier synchronisé à l’autre ; vérifiez les deux chemins",
             "Nicht synchronisiert: über Synchronisierungsordner hinweg umbenannt; beide Pfade prüfen",
             "No sincronizado: renombrado entre carpetas sincronizadas; revisa ambas rutas",
+            "동기화 제외: 동기화 폴더 간 이름 변경. 두 경로를 확인하세요",
         ],
         GitMsg::HeldBackChanged => [
             "Changed after you approved it; decide again",
@@ -1666,6 +1830,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Modifié après votre approbation ; décidez à nouveau",
             "Nach Ihrer Freigabe geändert; bitte erneut entscheiden",
             "Cambió después de aprobarlo; vuelve a decidir",
+            "승인 후 변경되었습니다. 다시 선택하세요",
         ],
         GitMsg::IncludeOnce => [
             "Include once",
@@ -1675,6 +1840,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Inclure une fois",
             "Einmal einschließen",
             "Incluir una vez",
+            "이번만 포함",
         ],
         GitMsg::AlwaysSyncType => [
             "Always sync .{0} files",
@@ -1684,6 +1850,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Toujours synchroniser les fichiers .{0}",
             ".{0}-Dateien immer synchronisieren",
             "Sincronizar siempre los archivos .{0}",
+            ".{0} 파일 항상 동기화",
         ],
         GitMsg::ExcludeOnDevice => [
             "Don't sync on this device",
@@ -1693,6 +1860,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Ne pas synchroniser sur cet appareil",
             "Auf diesem Gerät nicht synchronisieren",
             "No sincronizar en este dispositivo",
+            "이 기기에서 동기화 안 함",
         ],
         GitMsg::ExtraFileTypes => [
             "Additional file types to sync (for example: pdf; docx)",
@@ -1702,6 +1870,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Types de fichiers supplémentaires à synchroniser (par exemple : pdf; docx)",
             "Zusätzlich zu synchronisierende Dateitypen (zum Beispiel: pdf; docx)",
             "Tipos de archivo adicionales para sincronizar (por ejemplo: pdf; docx)",
+            "추가로 동기화할 파일 형식 (예: pdf; docx)",
         ],
         GitMsg::InvalidFileTypes => [
             "File types must be 1–16 letters or digits, separated by semicolons",
@@ -1711,6 +1880,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Les types de fichiers doivent comporter 1 à 16 lettres ou chiffres, séparés par des points-virgules",
             "Dateitypen müssen aus 1–16 Buchstaben oder Ziffern bestehen, durch Semikolons getrennt",
             "Los tipos de archivo deben tener de 1 a 16 letras o dígitos, separados por punto y coma",
+            "파일 형식은 영문자 또는 숫자 1~16자여야 하며 세미콜론으로 구분합니다",
         ],
         GitMsg::DeviceExclusions => [
             "Not synced on this device",
@@ -1720,6 +1890,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Non synchronisés sur cet appareil",
             "Auf diesem Gerät nicht synchronisiert",
             "No sincronizados en este dispositivo",
+            "이 기기에서 동기화되지 않음",
         ],
         GitMsg::RemoveExclusion => [
             "Remove",
@@ -1729,6 +1900,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Retirer",
             "Entfernen",
             "Quitar",
+            "제거",
         ],
         GitMsg::HeldBackTrackedBlocks => [
             "Your notes are saved on this computer. Updates from other devices are waiting: review {0} first",
@@ -1738,6 +1910,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Vos notes sont enregistrées sur cet ordinateur. Des mises à jour d’autres appareils attendent : vérifiez d’abord {0}",
             "Ihre Notizen sind auf diesem Computer gespeichert. Aktualisierungen anderer Geräte warten: Prüfen Sie zuerst {0}",
             "Tus notas están guardadas en este equipo. Hay actualizaciones de otros dispositivos en espera: revisa primero {0}",
+            "노트를 이 컴퓨터에 저장했습니다. 다른 기기의 업데이트가 대기 중입니다. 먼저 {0} 항목을 검토하세요",
         ],
         GitMsg::SyncCompleteHeldBack => [
             "Sync complete · {0} files not included",
@@ -1747,6 +1920,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Synchronisation terminée · {0} fichiers non inclus",
             "Synchronisierung abgeschlossen · {0} Dateien nicht enthalten",
             "Sincronización completada · {0} archivos no incluidos",
+            "동기화 완료 · 파일 {0}개 제외됨",
         ],
     };
     values[match language {
@@ -1757,6 +1931,7 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
         Language::Fr => 4,
         Language::De => 5,
         Language::Es => 6,
+        Language::Ko => 7,
     }]
 }
 
@@ -1771,6 +1946,28 @@ pub fn git_tf(language: Language, message: GitMsg, args: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_sync_templates_preserve_paths_counts_and_outcomes() {
+        assert_eq!(git_t(Language::Ko, GitMsg::BackupAndSync), "백업 및 동기화");
+        for message in [
+            GitMsg::StateRunning,
+            GitMsg::StatePending,
+            GitMsg::StatePendingBoth,
+            GitMsg::StateOffline,
+            GitMsg::StateUncertain,
+            GitMsg::Message,
+        ] {
+            crate::i18n::assert_template_parity(
+                git_t(Language::En, message),
+                git_t(Language::Ko, message),
+            );
+        }
+        assert!(
+            git_tf(Language::Ko, GitMsg::StateRunning, &["notes/한국어.md"])
+                .contains("notes/한국어.md")
+        );
+    }
 
     #[test]
     fn backup_and_sync_menu_title_keeps_feature_wording() {
@@ -1948,9 +2145,13 @@ mod tests {
                 Language::Fr,
                 Language::De,
                 Language::Es,
+                Language::Ko,
             ] {
                 let value = git_t(language, message);
                 assert!(!value.is_empty());
+                if language == Language::Ko {
+                    crate::i18n::assert_template_parity(english, value);
+                }
                 for index in 0..4 {
                     let placeholder = format!("{{{index}}}");
                     assert_eq!(english.contains(&placeholder), value.contains(&placeholder));

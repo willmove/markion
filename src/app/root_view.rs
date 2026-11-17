@@ -7686,6 +7686,34 @@ fn preferences_appearance_body(
                                 }
                             }),
                         ))
+                        .child(preference_numeric_row(
+                            app.tr(Msg::PrefPanelLineSpacing),
+                            app.line_spacing,
+                            MIN_LINE_SPACING,
+                            MAX_LINE_SPACING,
+                            "%",
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                if let Some(value) = preference_step_value(
+                                    app.line_spacing,
+                                    MIN_LINE_SPACING,
+                                    MAX_LINE_SPACING,
+                                    -5,
+                                ) {
+                                    app.set_line_spacing(value as i64, cx);
+                                }
+                            }),
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                if let Some(value) = preference_step_value(
+                                    app.line_spacing,
+                                    MIN_LINE_SPACING,
+                                    MAX_LINE_SPACING,
+                                    5,
+                                ) {
+                                    app.set_line_spacing(value as i64, cx);
+                                }
+                            }),
+                        ))
                         .child(preference_font_row(app, FontSlot::Editor, cx))
                         .child(preference_font_row(app, FontSlot::Rendered, cx)),
                 )

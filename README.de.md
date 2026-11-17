@@ -1,199 +1,116 @@
-<a id="german"></a>
+<p align="center"><img src="assets/markion-logo.svg" width="80" height="80" alt="Markion"></p>
+<h1 align="center">Markion</h1>
+<p align="center"><strong>Natürlich schreiben. Markdown behalten.</strong><br>Ein nativer Editor für Notizen, technische Dokumente und deinen nächsten Artikel. Mit Rust + GPUI entwickelt.</p>
+
+<p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.fr.md">Français</a> · <strong>Deutsch</strong> · <a href="README.es.md">Español</a></p>
 
 <p align="center">
-  <img src="assets/markion-logo.svg" alt="Markion-Logo" width="128" height="128">
+  <a href="https://github.com/willmove/markion/releases/latest"><img src="https://img.shields.io/github/v/release/willmove/markion?color=168a86" alt="Release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-536878" alt="Windows, macOS, Linux">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center">
-  <a href="README.md#english">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.fr.md">Français</a> · <strong>Deutsch</strong> · <a href="README.es.md">Español</a>
-</p>
+<p align="center"><a href="#install"><strong>Herunterladen</strong></a> · <a href="#new-in-v060">Neuigkeiten</a> · <a href="#performance">Leistung</a> · <a href="docs/user-guide.md">Handbuch</a></p>
 
-# Markion
+![Markion unter Windows: gerendertes Markdown, Aufgaben und Tabelle zwischen Dateibaum und eigenständiger rechter Gliederung](docs/images/markion-workspace-windows.png)
 
-Markion ist ein nativer Desktop-Markdown-Editor, gebaut mit Rust und GPUI. Er vereint reaktionsschnelle Quelltextbearbeitung, einen quellgestützten visuellen Bearbeitungsmodus, Live-Vorschau, Arbeitsbereichswerkzeuge und Mehrformat-Export in einer leichtgewichtigen Anwendung. Markdown bleibt das kanonische Dokumentformat — kein Electron, Tauri oder WebView.
+<p align="center"><sub>Echte Windows-Aufnahme, v0.6.0-Entwicklungsbuild · <a href="docs/images/README.md">Screenshots und Beispielordner</a></sub></p>
 
-## Projektfortschritt (2026-11-17)
+## Warum Markion
 
-Visual Edit bietet kompakte Blockaktionen, Untermenüs beim Darüberfahren, genaues Kopieren der Auswahl, Zeilen-/Spaltenmenüs, Zellumbrüche mit Umschalt+Enter und Bildeigenschaften. Die H1–H5-Slash-Palette lässt sich abschalten; die Emoji-Palette zeigt bis zu 36 Vorschläge. Die Gliederung kann links oder als unabhängiges, größenverstellbares rechtes Panel neben dem Dateibaum stehen. Über Hilfe sind fünf Offline-Anleitungen und zwölf Vorlagen erreichbar; kopieren Sie vor dem Bearbeiten den gesamten Ordner. [Implementierung, Nachweise und offene Prüfungen](docs/project-status.md) · [Beispiele](assets/examples/README.md).
+| ✍️ Ungehindert schreiben | 📁 Dateien selbst verwalten | 📤 Vom Entwurf zur Veröffentlichung |
+| --- | --- | --- |
+| Visuelles Bearbeiten blendet Syntax nach Bedarf aus. Quelltext und geteilte Vorschau sind jederzeit erreichbar. | Gewöhnliche lokale Markdown-Dateien, ohne Konto. Nativer Rust + GPUI-Editor ohne Electron oder eingebettete WebView. | Word importieren, Code, Formeln und Diagramme schreiben und als PDF, Word, HTML oder Bilder exportieren. |
 
-## Installation
+<a id="new-in-v060"></a>
 
-Lade den aktuellen Build von [GitHub Releases](https://github.com/willmove/markion/releases) herunter.
+## Neu in v0.6.0
 
-| Plattform | Release-Pakete | Ziel |
-|---|---|---|
-| Windows | NSIS-Installer `.exe` und portable `.zip` | x86_64 |
-| Linux | `.deb`, `.rpm` und AppImage | x86_64 |
-| macOS | `.app` und `.dmg` | Apple Silicon (arm64) und Intel (x64), macOS 11+ |
+| Highlights | Für deinen Schreiballtag |
+| --- | --- |
+| **Dateien und Gliederung gleichzeitig** | Links die Dateien, rechts eine Gliederung mit einstellbarer Breite. |
+| **Kompakte `/`- und Emoji-Paletten** | Strukturen schnell einfügen; optionales automatisches Slash-Menü und bis zu 36 sichtbare Emojis. |
+| **Blöcke und Tabellen direkt bedienen** | Kompakte Menüs, Bildeigenschaften, Zeilen-/Spaltenaktionen und Shift+Enter innerhalb von Zellen. |
+| **5 Offline-Anleitungen · 12 Vorlagen** | Über **Hilfe → Beispiele und Vorlagen** mit Protokoll, Projektplan oder Artikel starten. |
 
-Windows-Releases sind nicht codesigniert; SmartScreen verlangt eventuell **Weitere Informationen → Trotzdem ausführen**. macOS-Releases werden mit einer Apple Developer ID signiert und notarisiert, sobald die Apple-Zugangsdaten des Maintainers in der CI hinterlegt sind; andernfalls tragen sie nur eine kostenlose Ad-hoc-Signatur, die aktuelles macOS nach einem Browser-Download blockiert („ist beschädigt und kann nicht geöffnet werden“; Abhilfe im Haupt-README). **Hilfe → Nach Updates suchen…** bietet auf jeder Plattform eine umsetzbare Update-Aufforderung: Getaggte Windows-x86_64-NSIS-Installationen und per AppImage gestartete Linux-Installationen erhalten einen kryptografisch verifizierten (cargo-packager-Minisign) Ein-Klick-Download mit Installation — unter Linux wird das laufende AppImage an Ort und Stelle ersetzt und Markion startet automatisch neu —, der den Start verweigert, solange ein Dokument ungespeicherte Änderungen enthält; macOS und Linux-`.deb`/`.rpm`-Installationen öffnen die passende Release-Datei im Systembrowser. Apple-Silicon- und Intel-Macs erhalten jeweils ein natives DMG; ein Universal-Binary wird derzeit nicht bereitgestellt.
+<p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Echtes Markion-Blockmenü: Überschriften, Listen, Blockaktionen und Inline-Formatierung"></p>
 
-## Bearbeitungsmodi
+[Versionshinweise](docs/release-notes/release-notes-v0.6.0.md) · [Projektstand und Prüfungen](docs/project-status.md)
 
-Markion hat vier Ansichtsmodi. Standard ist Visual Edit.
+<a id="install"></a>
 
-- **Bearbeiten** — ein fokussierter Editor für rohen Markdown-Quelltext.
-- **Visuelle Bearbeitung** — eine WYSIWYG-first, quellgestützte Oberfläche. Fließtext bleibt gerendert mit progressiver Syntaxeinblendung; gewöhnliche Fenced-Code-Inhalte, Blockformeln, registrierte Diagramme (Mermaid), Bildeigenschaften und GFM-Tabellenzellen haben exakte Direkteditoren. Konstrukte, deren WYSIWYG-Rendering noch nicht implementiert ist — mehrzeilige oder fehlerhafte Bilder sowie byte-mehrdeutige Syntax — behalten als Übergangslösung eine exakte quellgestützte Bearbeitungsmöglichkeit, verfolgt in der [WYSIWYG-Abdeckungsmatrix und Roadmap der visuellen Bearbeitung](docs/visual-editing-quality.md). Eine Slash-Befehlspalette und ein kompaktes Block-Kontextmenü bieten exakte Blockumwandlungen (Absatz, Überschriften, Listen, Zitat, Fenced Code, Trennlinie, Tabelle), Duplizieren, Nach-oben/unten-Verschieben, quellsicheres Ziehen zum Umordnen und Löschen; auswahlbezogene Formatierungsbefehle und ein visueller Link-Editor führen pro Aktion genau eine quellgestützte Mutation aus. Markdown-Begrenzer werden standardmäßig automatisch gepaart, `:shortcode` öffnet die Emoji-Vervollständigung, Aufgabenlisten-Kästchen lassen sich direkt umschalten, und das Verlassen einer Überschriften-, Listen-, Aufgaben- oder Zitatzeile stellt sie sofort wieder gerendert dar. Dies ist kein separates Rich-Text-Dokumentmodell — das zugrunde liegende Markdown bleibt stets die Wahrheitsquelle.
-- **Geteilte Vorschau** — Quelltext und gerenderte Vorschau nebeneinander, mit optionaler quellbasierter Sync-Scroll-Einstellung, die beide Bereiche an derselben Dokumentposition hält, statt nach Prozent des Gesamtdokuments zu scrollen.
-- **Lesen** — eine gerenderte, nicht editierbare Ansicht, standardmäßig zentriert auf eine lesbare Maximalbreite von 860 px; die adaptive Vorschaubreite kann den ganzen Bereich nutzen.
+## Herunterladen und losschreiben
 
-Beim Moduswechsel bleiben aktives Dokument, Cursor und Auswahl, Rückgängig-Verlauf und der Scroll-Zustand pro Tab erhalten.
+| Plattform | Downloads für v0.6.0 | Downloadgröße |
+| --- | --- | --- |
+| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-portable.zip) | Installer 22.0 MiB |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x64.dmg) | arm64-DMG 27.1 MiB |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x86_64.rpm) | AppImage 52.4 MiB |
 
-Der Befehl **Ansicht → Quelltext/Geteilte Vorschau** (`Ctrl+/` unter Windows/Linux, `Cmd+/` unter macOS) wechselt zwischen den beiden quellorientierten Layouts. Aus der visuellen Bearbeitung oder dem Lesemodus führt der erste Aufruf in den Bearbeitungsmodus.
+[Alle Versionen und Prüfinformationen](https://github.com/willmove/markion/releases) · Die Größen beschreiben Downloads, keinen Speicherverbrauch.
 
-## Dokumente und Arbeitsbereich
+- **Windows:** Installer ausführen oder ZIP entpacken. Noch keine Authenticode-Signatur; SmartScreen erfordert gegebenenfalls **Weitere Informationen → Trotzdem ausführen**.
+- **macOS:** Markion in „Programme“ ziehen. **v0.6.0 ist ad-hoc signiert und nicht notarisiert.** Bei einer vertrauenswürdigen Browser-Downloadkopie nach der Installation die Quarantäne entfernen:
 
-- Mehrtab-Bearbeitung mit Cursor, Auswahl, Scrollen, Rückgängig/Wiederholen, Vorschau, Gliederung und zwischengespeichertem abgeleitetem Markdown-Zustand pro Tab.
-- Das Öffnen einer bereits geöffneten Markdown- oder Textdatei fokussiert ihren vorhandenen Tab, statt ein Duplikat zu erzeugen.
-- **Ordner öffnen** wechselt die Arbeitsbereichswurzel und füllt die Dateien-Seitenleiste mit Markdown-Dateien, einer kuratierten Auswahl an Textdateien (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`/`.asciidoc`) und unterstützten Bilddateien (`.png`, `.jpg`/`.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`/`.tiff`, `.svg`), verschachtelt unter ihren Ordnern; leere Ordner werden ebenfalls gelistet. Markdown bleibt visuell abgehoben, Textdateien öffnen als UTF-8-Text, und Bilddateien öffnen als schreibgeschützte Bild-Tabs, die übergroße Bilder in den Inhaltsbereich einpassen.
-- Das Aufklappen eines Ordners zeigt genau eine Ebene von Kindern, sodass tief verschachtelte Arbeitsbereiche Ebene für Ebene erkundet werden können.
-- Die Einstellung **Versteckte Dateien anzeigen** (standardmäßig aus) zeigt Dotfile-Einträge plus das Windows-Attribut „Versteckt“, während stets ausgeschlossener Build-, Abhängigkeits- und VCS-Ballast (`target`, `node_modules`, `.git`, …) unabhängig davon verborgen bleibt.
-- Kontextmenüs im Dateibaum bieten je nach Ziel: Öffnen, in neuem Tab öffnen, Datei/Ordner anlegen, Umbenennen, Löschen, im System-Dateimanager anzeigen, Filtern und Aktualisieren.
-- Dateien und Ordner lassen sich direkt im Baum benennen; das Löschen eines nicht leeren Ordners erfordert eine zusätzliche Bestätigung.
-- Markdown-Dateien können aus dem Dateimanager des Betriebssystems in Markion gezogen werden.
-- Die Bereiche Dateien und Gliederung sind umschaltbar, und die Trennlinien von Seitenleiste und geteilter Ansicht sind verschiebbar.
-- Der Gliederungsbereich listet die Überschriftenhierarchie des Dokuments als einklappbaren Baum: Jede Überschrift mit Nachkommen zeigt ein Auf-/Zuklapp-Steuerelement, Gliederungen starten vollständig aufgeklappt, das Einklappen ist pro Dokument und nur sitzungsbezogen, und der Abschnitt mit dem Cursor wird hervorgehoben. Ein Klick auf eine Überschrift springt zu ihrer Quellposition — oder im Lesemodus zur gerenderten Überschrift.
-- Der native Fenstertitel zeigt den aktiven Dateinamen hinter der Markion-Marke, mit einem `*`-Suffix bei ungespeicherten Änderungen. Die Statusleiste hält Speicherzustand und flüchtige Operationsrückmeldungen sowie einen kompakten dauerhaften Kontext: Zeichen- und Wortzahl des aktiven Dokuments, die einsbasierte Zeile und Spalte des Cursors, sofern eine Bearbeitungsfläche vorhanden ist, und den aktuellen Git-Branch, wenn Dokument oder Arbeitsbereich zu einem Repository gehören.
-- **Sicherung und Synchronisierung** schützt einen Notizordner an einem Synchronisierungsort mit einem Ein-Klick-Fluss **Jetzt synchronisieren** und verständlichen Statusmeldungen. Git liefert darunter die sichere Versionshistorie; technische Kontrollen bleiben in den erweiterten Git-Details. Siehe die [Anleitung zu Sicherung und Synchronisierung](docs/git-sync.md) für Einrichtung, Authentifizierung, Konflikte und Wiederherstellung.
+  ```bash
+  xattr -cr /Applications/Markion.app
+  ```
 
-## Markdown-Bearbeitung und -Vorschau
+  Nach jedem per Browser geladenen Update wiederholen. [Erster Start](docs/user-guide.md#install).
+- **Linux:** AppImage ausführbar machen (`chmod +x Markion*.AppImage`) und starten oder DEB/RPM installieren. Ohne FUSE: `--appimage-extract-and-run`.
 
-- Das Parsen übernimmt `pulldown-cmark` mit CommonMark- und GFM-orientierter Unterstützung.
-- Formatierungsbefehle decken Absatz (`Ctrl+0` unter Windows/Linux, `Cmd+0` unter macOS), Überschriften, Fett, Kursiv, Inline-Code, Links, Bilder, Listen, Aufgabenlisten, Blockzitate, Fenced-Code-Blöcke und Markdown-Quelltabellen ab. „Absatz“ wandelt überschnittene ATX-Überschriften zurück in normalen Text, ohne Nicht-Überschriften-Zeilen zu verändern.
-- Die Markdown-Autopaarung ist in Quelltext und unterstützten Feldern der visuellen Bearbeitung standardmäßig aktiv: Begrenzer können gepaart, Auswahlen umschlossen, vorhandene Schließer übersprungen und leere Paare mit der Rücktaste entfernt werden. Während der IME-Komposition und in Code-, Blockformel- und Diagramm-Inhaltseditoren bleibt sie deaktiviert.
-- Das Tippen eines offenen `:shortcode` an einer Wortgrenze öffnet die Emoji-Vervollständigung in Quelltext und visueller Bearbeitung; die Bestätigung fügt kanonisches Markdown ein, das ein einziger rückgängig machbarer Quelleingriff bleibt.
-- Das Einfügen von Rich Text aus Word, Google Docs oder Webseiten wandelt die HTML-Variante der Zwischenablage in formatiertes Markdown um — Überschriften, Hervorhebungen, Links, verschachtelte Listen, Tabellen, Code — als ein einziger rückgängig machbarer Schritt; reine Text-Zwischenablagen werden weiterhin wörtlich eingefügt.
-- Überschriftenbefehle bieten standardmäßig H1–H5, mit einer H1–H6-Option in den Einstellungen.
-- Suchen und Ersetzen unterstützt Groß-/Kleinschreibung, reguläre Ausdrücke, Vor/Zurück-Navigation, Ersetzen der aktuellen Fundstelle und Alles ersetzen.
-- Quell-Tabellenbefehle können Tabellen formatieren und Zeilen und Spalten hinzufügen, löschen oder verschieben. Tabellen in der visuellen Bearbeitung bieten zusätzlich direkte quellgestützte Zellbearbeitung, Tab-Navigation, deterministischen Breiten-Umbruch und dieselben Zeilen-/Spaltenoperationen; gewöhnliche Vorschautabellen bleiben schreibgeschützt.
-- Ein Bildressourcen-Workflow nimmt Zwischenablagebilder, hereingezogene Dateien, explizites Einfügen per Datei/URL und vorhandene Dokumentbilder auf. Richtlinien können behalten, kopieren/herunterladen oder über PicGo HTTP, PicGo Core oder einen wörtlichen benutzerdefinierten Befehl hochladen; siehe die [Anleitung zu Bildverarbeitung und -upload](docs/image-handling.md). Markion verwendet kollisionsresistente dokumentrelative Ressourcen, bewahrt exakte Bildmetadaten und hält die Übertragungswiederherstellung außerhalb von Markdown.
-- YAML-Frontmatter wird geparst und in der Vorschau ausgeblendet; `title`, `author` und `date` speisen die Export-Metadaten.
-- Dokumentschreibvorgänge sind atomare Ersetzungen im selben Verzeichnis, die bei einem Schreibfehler den vorhandenen Pfad und den Änderungsstatus bewahren. Markion verfolgt die zuletzt bekannte Dateiidentität auf dem Datenträger, erkennt externe Änderungen vor dem Speichern und während ein Dokument geöffnet ist, lädt nur saubere Dokumente automatisch neu und bietet geänderten Dokumenten eine explizite Konfliktwahl zwischen Neu laden, Überschreiben oder Kopie speichern. Der Wiederherstellungsmanager inventarisiert jeden Wiederherstellungs-Snapshot mit ursprünglichem Pfad und Datenträgerbeziehung und unterstützt Wiederherstellen, Verwerfen, Alle wiederherstellen und Alle verwerfen, ohne unlesbare oder nicht ausgewählte Daten zu löschen.
-- Die automatische Speicherung erfolgt standardmäßig nach fünf Sekunden Inaktivität und schreibt Wiederherstellungskopien für ungespeicherte Dokumente; wiederhergestellte Snapshots bleiben dauerhaft, bis ein erfolgreiches Speichern, ein explizites Verwerfen oder ein atomar geschriebener Nachfolger sie ablöst.
+Eine Markdown-Datei oder einen Ordner öffnen. Vor dem Bearbeiten der Beispiele **den gesamten examples-Ordner einschließlich Bildern kopieren**. [Einstieg und Vorlagen](assets/examples/README.md).
 
-Die gerenderte Vorschau unterstützt:
+## Ein Dokument, vier Arbeitsweisen
 
-- Fett, Kursiv, Durchgestrichen, Inline-Code, Links, Hervorhebungen, Hochstellung, Tiefstellung, Fußnoten (Referenz berühren, um ihre Definition zu lesen), Aufgabenlisten, gängige Emoji-Shortcodes und automatische Links.
-- `[TOC]` / `[toc]`-Token im Dokument werden als live, klickbare Gliederung gerendert, und `[text](#heading)` / `{#id}`-Überschriftensprünge bleiben im Dokument.
-- Korrekte Startnummern geordneter Listen, verschachtelte Listen, Aufzählungszeichen je Tiefe, hängende Einzüge, Bilder und eingebettetes HTML.
-- Unterstütztes Inline-HTML hat konsistente Semantik über gemischtes Markdown, eigenständige HTML-Blöcke, Tabellenzellen und visuelle Bearbeitung hinweg, einschließlich sicherer Farb-Spans, Links und verlinkter Bilder, `kbd`/`samp`, autorisierter Umbrüche und positionierter Hoch-/Tiefstellung; fehlerhaftes oder nicht unterstütztes Markup fällt zurück, ohne Skripte auszuführen.
-- Auswählbarer Vorschautext mit Kontextmenü zum Kopieren als reinen Text, Markdown oder HTML, plus Kopieren der Linkadresse, wo zutreffend.
-- `$...$`-Inline- und `$$...$$`-Blockformeln, offline mit einer eingebetteten RaTeX-Engine (KaTeX-kompatibel) mit gebündelten Schriften zu zwischengespeichertem SVG gesetzt — kein Netzwerkzugriff und keine externe LaTeX-Installation erforderlich.
-- ` ```mermaid `-Fenced-Diagramme (Flussdiagramme, Sequenzdiagramme und mehr), zu bereinigtem, zwischengespeichertem SVG gerendert.
-- Syntaxhervorhebung für Fenced Code mit syntect und dem erweiterten two-face-Grammatiksatz, mit Fallback-Lexer und optionalen Zeilennummern.
+| Modus | Geeignet für |
+| --- | --- |
+| **Visuelles Bearbeiten** · Standard | In gerendertem Markdown schreiben und Text, Tabellen, Code und Formeln direkt bearbeiten. |
+| **Quelltext** | Die gesamte Markdown-Syntax kontrollieren. |
+| **Geteilte Vorschau** | Quelltext und Vorschau nebeneinander, optional mit synchronem Scrollen. |
+| **Lesen** | Eine ruhige Ansicht ohne Bearbeitung. |
 
-## Designs, Sprachen und Einstellungen
+Position, Auswahl und Rückgängig-Verlauf bleiben beim Wechsel erhalten. [Tastenkürzel](docs/keyboard-shortcuts.md).
 
-- Vierzehn eingebaute Designs: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark und Tokyo Night/Light.
-- Eigene Designs nutzen `.toml`-Dateien in Markions lokalem Design-Verzeichnis. Bei der ersten Verwendung wird ein `typewriter.toml`-Beispiel — einschließlich der optionalen `[fonts]`-Tabelle (`editor`, `rendered`, `code`), die Schriftfamilien für den Markdown-Quelltexteditor, gerenderten Fließtext und Code-Oberflächen liefert, solange der Benutzer keine ausdrückliche Präferenz hat — dort als Ausgangspunkt installiert. Alte `.theme`-Dateien werden beim ersten Laden automatisch migriert.
-- Sieben Oberflächensprachen: Englisch, vereinfachtes Chinesisch, traditionelles Chinesisch, Japanisch, Französisch, Deutsch und Spanisch.
-- Das integrierte Einstellungspanel deckt auf **Allgemein** Sprache, Sichtbarkeit der Seitenleiste, adaptive Vorschaubreite, Fokus-/Schreibmaschinenmodus, Markdown-Autopaarung, Code-Zeilennummern, synchrones Scrollen, Versteckte-Dateien-anzeigen und die Tiefe des Überschriftenmenüs ab; auf **Darstellung** Design, Schriftfamilien pro Ebene (Quelltext, Lesen, Code), Schriftgrößen und Absatzabstand.
-- Einstellungen bleiben in `config.toml` erhalten; alte `preferences.conf`-Dateien werden automatisch migriert.
+| Vom Entwurf zur Ausgabe | Enthalten |
+| --- | --- |
+| **Technisches Schreiben** | GFM-Tabellen, Syntaxhervorhebung, LaTeX-Formeln, Mermaid, Fußnoten, Hinweisblöcke und navigierbare Gliederung. |
+| **Vorhandene Inhalte übernehmen** | Lokaler DOCX-Import und formatiertes Einfügen aus Word, Google Docs oder dem Web. [Word-Import](docs/word-import.md) |
+| **Export und Veröffentlichung** | Markdown, HTML mit/ohne Stil, LaTeX, DOCX, PDF, PNG/JPEG und lokaler MarkNice-Arbeitsbereich für WeChat. [Veröffentlichung](docs/marknice-workspace.md) |
+| **Bilder und Ressourcen** | Einfügen, Ziehen, Kopieren/Herunterladen oder Hochladen über PicGo/eigene Befehle. [Bildanleitung](docs/image-handling.md) |
+| **Individuell einrichten** | Themes, Schriftarten pro Oberfläche und Typografie unter **Einstellungen → Erscheinungsbild**; Fokus-/Schreibmaschinenmodus und eigene Tastenkürzel. |
+| **Optionale Verbindungen** | Git-basierte Sicherung und Synchronisierung; AI Agent mit eigenem Schlüssel oder lokalen Modellen. KI ist **standardmäßig ausgeschaltet**. [Synchronisierung](docs/git-sync.md) · [KI](docs/ai-agent-guide.md) |
 
-Alle Konfigurationsfelder sind optional. Die wichtigsten Standardwerte und dateibasierten Einstellungen:
+<a id="performance"></a>
 
-```toml
-theme = "Paper"
-language = "en"
-focus_mode = false
-typewriter_mode = false
-code_line_numbers = true
-preview_adaptive_width = false
-heading_menu_max_level = 5        # 5 oder 6
-sync_scroll = false
-sidebar_visible = true
-sidebar_tab = "files"             # "files" oder "outline"
-outline_position = "left"        # "left" or "right"
-outline_visible = true
-block_handle_menu = true
-slash_commands_enabled = true
-show_hidden_files = false
-markdown_auto_pair = true
+## Nachprüfbare Leistung
 
-# Optionale Schriftfamilien pro Ebene; fehlend = dem Design folgen, dann dem
-# eingebauten Standard (System-UI-Schrift für Quelltext/Lesen, JetBrains Mono für Code).
-# editor_font_family = "Cascadia Code"
-# rendered_font_family = "Georgia"
-# code_font_family = "JetBrains Mono"
+**Historische Windows-Messung im Release-Build · 2026-11-11.** Intel Core Ultra 5 225U, ca. 31 GiB RAM; 100 lokale Änderungen pro Größe. Vergleich der **Modellverarbeitung**, ohne UI-Layout/paint und GPU-Darstellung.
 
-[auto_save]
-enabled = true
-delay_secs = 5
+| Gemischtes Markdown | Erster Modellaufbau | Bearbeitung P50 | Bearbeitung P95 |
+| --- | ---: | ---: | ---: |
+| 100 KiB | 10.77 ms | **0.64 ms** | 1.21 ms |
+| 300 KiB | 28.67 ms | **2.55 ms** | 3.69 ms |
+| 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
+| 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-[git]
-background_check = false
+Bei einem separaten Lauf mit **1080 System-Tastenereignissen** in einem 1-MiB-Dokument betrug Eingabe-Callback → Cursor-paint **26.63 ms P50 / 33.14 ms P95**. Hardware-/OS-Übertragung und GPU-Darstellung sind ausgeschlossen. Dies sind frühere Ergebnisse, kein neuer v0.6.0-Benchmark oder Wettbewerbsranking. [Methode, Rohdaten und Reproduktion](docs/performance.md).
 
-[export]
-backend = "builtin"              # builtin / pandoc
-pdf_engine = "xelatex"            # pandoc
-```
+## Vor dem Start beachten
 
-Konfiguration, Wiederherstellungsdateien, Designs und rotierende Diagnoseprotokolle nutzen plattformgerechte Markion-Datenverzeichnisse. Setze `RUST_LOG=debug` vor dem Start für ausführlichere Protokolle.
+- Markdown bleibt die maßgebliche Quelle. Nicht unterstützte oder auf Byte-Ebene mehrdeutige Syntax nutzt konservative Quelltextbearbeitung. Keine verbundenen GFM-Zellen oder pixelgenauen Bildzuschnitte. [Abdeckung und Lücken](docs/visual-editing-quality.md).
+- Integriertes PDF/DOCX benötigt keinen externen Konverter; optionales Pandoc fällt bei Fehlern auf den integrierten Export zurück. Die Wiedergabe unterscheidet sich je Format. Der MarkNice-Browserbereich folgt der Oberfläche seiner festgelegten Editorversion. Word-Import bleibt in der Sitzung und schreibt nicht nach Markion zurück; zur Übernahme **Copy MD** oder ausdrücklich Markdown speichern. Word und thematischer PDF-Druck im Browser unterscheiden sich vom nativen Export. Markdown-/PDF-/Bildimport und Beispielaktionen werden dort nicht angeboten.
+- Windows-Installationen und Linux-AppImages unterstützen die Installation Minisign-geprüfter Updates in der App. macOS und DEB/RPM öffnen einen Download. Diese Prüfung ist von der OS-Codesignatur getrennt.
+- **Aktueller Quellstand: README und Oberfläche in 8 Sprachen**, einschließlich Koreanisch, Englisch, vereinfachtem/traditionellem Chinesisch, Japanisch, Französisch, Deutsch und Spanisch. In den Einstellungen **한국어** wählen. Die veröffentlichten v0.6.0-Binärdateien haben weiterhin 7 UI-Sprachen; für Koreanisch den aktuellen Quellstand bauen.
 
-## Export
+## Bauen und beitragen
 
-Markion exportiert nach:
-
-- Einem lokalen MarkNice-Arbeitsbereich zur Vorbereitung von Rich Content für WeChat
-- Markdown
-- Formatiertem HTML und reinem HTML
-- LaTeX
-- DOCX
-- PDF
-- PNG- und JPEG-Dokumentschnappschüssen
-
-PDF und DOCX verwenden standardmäßig die eingebauten Exporteure ohne externe Konverter. `backend = "pandoc"` aktiviert Pandoc mit eingebautem Rückfall bei Fehlern; die Statusleiste nennt das verwendete Backend. Das eingebaute PDF unterstützt Seitenumbrüche, eingebettete Schriften mit CJK-Rückfall, Überschriften, Code, Tabellen, Bilder und Formeln. PNG/JPEG nutzen dieselbe Layout-Engine. Die Wiedergabetreue hängt vom Format ab; Diagrammblöcke können als Code erscheinen.
-
-## Word-Import
-
-Wähle **Datei → Word (.docx) importieren**, um ein DOCX vollständig lokal in ein neues gespeichertes Markdown-Dokument umzuwandeln. Markion zeigt vor dem Speicherdialog einen Umwandlungsbericht und verlangt eine ausdrückliche Entscheidung, wenn Inhalte verloren gehen könnten. Unterstützte eingebettete Bilder werden neben dem Markdown in `<Name>.assets/` gespeichert; behalte dieses Verzeichnis zusammen mit der `.md`-Datei. Der Importer ist begrenzt, abbrechbar, offline und überschreibt niemals einen vorhandenen Markdown- oder Ressourcenpfad. Er verwendet die angenommene Ansicht der Änderungsverfolgung, bewahrt Word-Überschriftenebenen getreuer und normalisiert Fett-zu-Wort-Grenzen für interoperables Markdown. Alte `.doc`-, `.docm`-, verschlüsselte Dateien, PDF/OCR und Seitenlayout-Treue liegen außerhalb dieses Workflows. Siehe [`docs/word-import.md`](docs/word-import.md) für die unterstützte semantische Teilmenge, Grenzen, Diagnosen und Aufräumverhalten.
-
-Wähle **Exportieren → Für WeChat veröffentlichen (MarkNice)**, um das aktive In-Memory-Dokument in einem privaten Loopback-Arbeitsbereich im Standardbrowser zu öffnen. Die mitgelieferte Editor-Oberfläche folgt dem angepinnten MarkNice-Editor-Abschnitt (Doppelkarten, Ampel-Kopfzeilen, SVG-Werkzeugleiste, 375-px-Phone-Rahmen) so nahe, wie es eine lokale, nicht werbliche Hülle erlaubt. Designs, Renderer, Formelsatz und Anwendungsskripte funktionieren offline. Formeln werden als in sich geschlossenes Inline-SVG (MathJax) gesetzt und überstehen so die Einfüge-Filterung des WeChat-Editors ohne Duplikate. Browser-Änderungen bleiben in diesem Tab und werden niemals nach Markion zurückgeschrieben. Sein **Word importieren** wandelt eine `.docx`-Datei nur innerhalb dieser Browsersitzung um; hole sie mit **MD kopieren** nach Markion zurück oder speichere das Sitzungs-Markdown anderweitig. Verwaltete lokale Bilder können in der Vorschau angezeigt werden, doch das Kopieren erfordert ihr ausdrückliches Weglassen, da ein lokaler Blob nicht von WeChat veröffentlicht werden kann; Remote-Bilder können weiterhin ihre ursprünglichen Hosts kontaktieren. Der Arbeitsbereich kann außerdem sein exakt aktuelles Markdown kopieren, eigenständiges designtes HTML speichern, eine browsererzeugte MarkNice-Word-Datei speichern oder über den Druckdialog **Als PDF speichern** (gedruckt wird die aktuelle designte, bereinigte MarkNice-Vorschau; im Druckdialog „Als PDF speichern“ wählen). Browser-Word und -PDF unterscheiden sich von Markions nativen/Pandoc-Exporteuren. Der Arbeitsbereich importiert keine Markdown-Dateien, PDFs oder lokalen Bilder und hat keine Beispieldokument-Aktion. Läuft die Zwischenablage-Berechtigung oder die Zweistundensitzung ab, erteile die Berechtigung oder starte erneut aus Markion.
-
-## Leistung
-
-- Vorschaublöcke, Blöcke der visuellen Bearbeitung, Gliederung, Statistiken und Zeilenzahlen werden pro Dokumentversion zwischengespeichert und via `Arc` geteilt.
-- Die Syntaxhervorhebung wird über Bearbeitungen hinweg memoisiert, und das Laden der Grammatiken wird im Hintergrund vorgewärmt.
-- Rückgängig-Snapshots überspringen abgeleitete Caches, während der Editor einen pro Version zwischengespeicherten Text-Handle wiederverwendet.
-- Vorschau-/Visual-Edit-Listen aktualisieren nur geänderte Bereiche, der Dateibaum rendert eine begrenzte Zeilenmenge, und umbrochene Quellzeilen messen ihre tatsächliche Rendehöhe.
-
-Die quellbasierte visuelle Bearbeitung verwendet nach lokalen Eingriffen unabhängig parsbare Regionen inkrementell wieder und fällt auf eine vollständige Ableitung zurück, sobald Markdown-Kontext oder Byte-Bereiche unsicher sind. Die Ableitung der geteilten/Lese-Vorschau bleibt entprellt und zwischengespeichert. Markion nutzt weiterhin einen `String`-Puffer statt eines Rope, und manche semantischen Lesevorgänge erfordern absichtlich ein vollständiges Parsen.
-
-## Aktuelle Einschränkungen
-
-- Offene WYSIWYG-Lücken betreffen mehrzeilige oder fehlerhafte Bilder und Quellbereiche ohne nachweisbar genaue Zuordnung. YAML-Frontmatter, eingerückter Code und nachgewiesene HTML-Entitäten besitzen bereits Bearbeitungs- und Darstellungspfade. Siehe [Abdeckungsmatrix](docs/visual-editing-quality.md).
-- Bildschirmdarstellung und eingebautes PDF setzen Formeln offline mit RaTeX. LaTeX erhält den Formelquelltext; eingebautes DOCX wandelt unterstützte Formeln in Word-Gleichungen um und erhält für andere lesbaren Quelltext.
-- Tabellenzellen der visuellen Bearbeitung unterstützen direkte Bearbeitung plus Fett/Kursiv/Inline-Code/Link auf einer Auswahl, die innerhalb einer Zelle bleibt. GFM-Spaltenbreiten lassen sich ziehen und werden als HTML-Kommentar (`<!-- markion-cols:… -->`) unmittelbar vor der Tabelle persistiert. Inline-Bilder akzeptieren ganzzahlige Breiten von 10–100 % und lassen sich per Ziehen skalieren. Mehrzeilige oder fehlerhafte Bilder und nicht parsebare Tabellen bleiben bekannte Lücken der WYSIWYG-Abdeckungsroadmap mit quellgestützten Bearbeitungspfaden.
-- Ein-Klick-Updates installieren die Windows-NSIS-Distribution und ersetzen ein laufendes Linux-AppImage nach Minisign-Verifikation an Ort und Stelle (danach automatischer Neustart); der Austausch des macOS-Bundles und die Selbstersetzung von Linux-`.deb`/`.rpm` bleiben zukünftige Arbeit, und die Update-Authentifizierung ist weder Windows Authenticode noch Apple-Notarisierung.
-- Eine vollständige Installations-UI für eigene Designs ist noch nicht implementiert.
-- Der Export verwendet formatspezifisches Layout statt Editorpixel aufzunehmen; sehr große Dokumente verwenden noch kein Rope und nicht in allen abgeleiteten Teilsystemen vollständig inkrementelles Parsen.
-
-## Entwicklung
-
-Rust stable ist erforderlich. Vom Repository-Stamm aus:
+Mit Rust stable und den nativen Build-Werkzeugen deiner Plattform ([CI-Konfiguration](.github/workflows/release.yml)) im Repository-Stamm ausführen:
 
 ```powershell
 cargo run
-cargo build
+cargo test --workspace
 pwsh ./scripts/check-quality.ps1
 ```
 
-Der Qualitätsbefehl prüft Rust-Formatierung und -Lints, die vollständige Test-Suite des Cargo-Workspace, das angepinnte MarkNice-Bundle und jedes OpenSpec-Artefakt im Strict-Modus. Siehe die [Anleitung zum lokalen MarkNice-Arbeitsbereich](docs/marknice-workspace.md) und den [Unterstützungs- und Engineering-Vertrag der visuellen Bearbeitung](docs/visual-editing-quality.md).
-
-Das Wurzelpaket ist das Anwendungs-Crate `markion`. Von Typune übernommene, GPUI-freie Bibliotheks-Crates liegen unter `crates/*`:
-
-```powershell
-cargo test -p markdown
-cargo test -p export
-cargo test --workspace
-```
-
-Ein einfaches `cargo test` testet nur das Wurzelpaket; nutze `cargo test --workspace` für jedes Mitglied. Unter Windows ist die App ein GUI-Subsystem-Executable und kann nach einem Debug-Build auch so gestartet werden:
-
-```powershell
-.\target\debug\markion.exe
-```
-
-## Lizenz
-
-Markion steht unter der [MIT-Lizenz](LICENSE).
+[Handbuch / 使用指南](docs/user-guide.md) · [FAQ](docs/faq.md) · [Fehler melden](https://github.com/willmove/markion/issues) · [Release-Ablauf](docs/release-process.md) · [MIT-Lizenz](LICENSE)

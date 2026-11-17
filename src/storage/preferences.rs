@@ -62,6 +62,8 @@ struct PreferencesFile {
     rendered_font_size: u16,
     #[serde(deserialize_with = "deserialize_paragraph_spacing")]
     paragraph_spacing: u16,
+    #[serde(deserialize_with = "deserialize_line_spacing")]
+    line_spacing: u16,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -451,6 +453,7 @@ impl From<&AppPreferences> for PreferencesFile {
             editor_font_size: normalize_editor_font_size(preferences.editor_font_size as i64),
             rendered_font_size: normalize_rendered_font_size(preferences.rendered_font_size as i64),
             paragraph_spacing: normalize_paragraph_spacing(preferences.paragraph_spacing as i64),
+            line_spacing: crate::model::normalize_line_spacing(preferences.line_spacing as i64),
             editor_font_family: crate::model::normalize_font_family(
                 preferences.editor_font_family.as_deref(),
             ),
@@ -523,6 +526,7 @@ impl From<PreferencesFile> for AppPreferences {
             editor_font_size: normalize_editor_font_size(file.editor_font_size as i64),
             rendered_font_size: normalize_rendered_font_size(file.rendered_font_size as i64),
             paragraph_spacing: normalize_paragraph_spacing(file.paragraph_spacing as i64),
+            line_spacing: crate::model::normalize_line_spacing(file.line_spacing as i64),
             editor_font_family: crate::model::normalize_font_family(
                 file.editor_font_family.as_deref(),
             ),
@@ -829,6 +833,15 @@ where
     )?))
 }
 
+fn deserialize_line_spacing<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(crate::model::normalize_line_spacing(
+        deserialize_integer_or(deserializer, crate::model::DEFAULT_LINE_SPACING as i64)?,
+    ))
+}
+
 fn deserialize_paragraph_spacing<'de, D>(deserializer: D) -> Result<u16, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -942,19 +955,42 @@ mod tests {
         let preferences = AppPreferences {
             editor_font_size: 18,
             rendered_font_size: 20,
-            paragraph_spacing: 16,
+            paragraph_spacing: 96,
+            line_spacing: 150,
             ..AppPreferences::default()
         };
         let rendered = render_app_preferences(&preferences);
         let parsed = parse_app_preferences(&rendered).unwrap();
         assert_eq!(parsed.editor_font_size, 18);
         assert_eq!(parsed.rendered_font_size, 20);
-        assert_eq!(parsed.paragraph_spacing, 16);
+        assert_eq!(parsed.paragraph_spacing, 96);
+        assert_eq!(parsed.line_spacing, 150);
 
         let missing = parse_app_preferences("theme = \"Paper\"\n").unwrap();
         assert_eq!(missing.editor_font_size, DEFAULT_EDITOR_FONT_SIZE);
         assert_eq!(missing.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
         assert_eq!(missing.paragraph_spacing, DEFAULT_PARAGRAPH_SPACING);
+        assert_eq!(missing.line_spacing, crate::model::DEFAULT_LINE_SPACING);
+    }
+
+    #[test]
+    fn line_spacing_defaults_malformed_values_and_bounds_numeric_extremes() {
+        for value in ["\"wide\"", "true", "[]", "{}", "1.5"] {
+            let parsed = parse_app_preferences(&format!("line_spacing = {value}\n")).unwrap();
+            assert_eq!(parsed.line_spacing, 100, "{value}");
+        }
+        for (input, expected) in [
+            (i64::MIN, 75),
+            (74, 75),
+            (127, 127),
+            (301, 300),
+            (i64::MAX, 300),
+        ] {
+            let parsed = parse_app_preferences(&format!("line_spacing = {input}\n")).unwrap();
+            assert_eq!(parsed.line_spacing, expected);
+        }
+        assert_eq!(normalize_paragraph_spacing(96), 96);
+        assert_eq!(normalize_paragraph_spacing(i64::MAX), 128);
     }
 
     #[test]

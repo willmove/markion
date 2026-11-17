@@ -1,199 +1,116 @@
-<a id="traditional-chinese"></a>
+<p align="center"><img src="assets/markion-logo.svg" width="80" height="80" alt="Markion"></p>
+<h1 align="center">Markion</h1>
+<p align="center"><strong>專注表達，保留 Markdown 的自由。</strong><br>從日常筆記、技術文件到文章發布，使用 Rust + GPUI 原生編輯器。</p>
+
+<p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <strong>繁體中文</strong> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a> · <a href="README.es.md">Español</a></p>
 
 <p align="center">
-  <img src="assets/markion-logo.svg" alt="Markion 標誌" width="128" height="128">
+  <a href="https://github.com/willmove/markion/releases/latest"><img src="https://img.shields.io/github/v/release/willmove/markion?color=168a86" alt="Release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-536878" alt="Windows, macOS, Linux">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center">
-  <a href="README.md#english">English</a> · <a href="README.zh-CN.md">简体中文</a> · <strong>繁體中文</strong> · <a href="README.ja.md">日本語</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a> · <a href="README.es.md">Español</a>
-</p>
+<p align="center"><a href="#install"><strong>立即下載</strong></a> · <a href="#new-in-v060">新版亮點</a> · <a href="#performance">實測效能</a> · <a href="docs/user-guide.md#simplified-chinese">使用指南</a></p>
 
-# Markion
+![Windows 實機截圖：檔案樹、視覺化 Markdown、任務列表與表格，以及獨立的右側大綱](docs/images/markion-workspace-windows.png)
 
-Markion 是一款使用 Rust 和 GPUI 打造的原生桌面 Markdown 編輯器。它在單一輕量應用中結合了流暢的原始碼編輯、基於原始碼的視覺化編輯模式、即時預覽、工作區工具與多格式匯出。Markdown 始終是文件的標準資料格式——不使用 Electron、Tauri 或 WebView。
+<p align="center"><sub>Windows 實機拍攝，v0.6.0 開發建置 · <a href="docs/images/README.md">截圖說明與示範文件</a></sub></p>
 
-## 專案進展（2026-11-17）
+## 為什麼選擇 Markion
 
-視覺化編輯新增緊湊區塊操作、懸停子選單、精確選取範圍剪貼簿操作、表格列欄選單、儲存格 Shift+Enter 換行與圖片屬性編輯。斜線補全提供 H1–H5 控制項並可關閉自動彈出；emoji 面板最多顯示 36 個候選。大綱可放在左側，或作為獨立可調寬的右側面板與檔案樹並排。透過「說明」中的樣例與範本入口可取得 5 篇離線指南與 12 份範本；編輯前請複製整個資料夾。[實作、證據與待驗收事項](docs/project-status.md) · [樣例索引](assets/examples/README.md)。
+| ✍️ 寫作少一點打擾 | 📁 檔案始終屬於你 | 📤 從草稿走向發布 |
+| --- | --- | --- |
+| 視覺化編輯按需隱藏語法，隨時切換原始碼或分欄預覽。 | 普通本地 Markdown 檔案，無需帳號。Rust + GPUI 原生編輯器，無 Electron 或內嵌 WebView。 | 匯入 Word，編寫程式碼、公式與圖表，再匯出 PDF、Word、HTML 或圖片。 |
 
-## 安裝
+<a id="new-in-v060"></a>
 
-請從 [GitHub Releases](https://github.com/willmove/markion/releases) 下載最新版本。
+## v0.6.0 新亮點
 
-| 平台 | 發佈套件 | 目標架構 |
-|---|---|---|
-| Windows | NSIS `.exe` 安裝程式與可攜式 `.zip` | x86_64 |
-| Linux | `.deb`、`.rpm` 與 AppImage | x86_64 |
-| macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）與 Intel（x64），macOS 11+ |
+| 亮點 | 帶來的改變 |
+| --- | --- |
+| **檔案樹與大綱同時可見** | 左側找檔案，右側看結構，大綱寬度可自由調整。 |
+| **緊湊斜槓命令與 emoji 面板** | 輸入 `/` 快速插入結構，可關閉自動彈出；emoji 一次最多展示 36 個候選。 |
+| **直接操作塊與表格** | 緊湊選單完成格式設定、圖片屬性與行列操作；Shift+Enter 在單元格內換行。 |
+| **5 篇離線指南 · 12 份模板** | 透過**幫助 → 樣例與模板**，快速開始會議紀要、專案計劃或文章。 |
 
-Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → 仍要執行」。在維護者於 CI 中設定 Apple 憑證後，macOS 發佈包會以 Apple Developer ID 簽章並經過公證；否則只帶免費的 ad-hoc 簽章，透過瀏覽器下載後會被目前的 macOS 以「已損毀，無法打開」攔截（因應方式詳見主 README 的 macOS 首次啟動說明）。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝與 Linux AppImage 啟動可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝——Linux 上會原地替換執行中的 AppImage 並自動重新啟動 Markion——且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux `.deb`/`.rpm` 安裝會在系統瀏覽器中開啟對應的發佈檔案。Apple Silicon 與 Intel Mac 各有原生 DMG；目前尚不提供通用二進位。
+<p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Markion 實機塊選單：標題層級、列表、塊操作與行內格式"></p>
 
-## 編輯模式
+[完整發布說明](docs/release-notes/release-notes-v0.6.0.md) · [專案進展與驗證記錄](docs/project-status.md)
 
-Markion 提供四種檢視模式，預設使用視覺化編輯。
+<a id="install"></a>
 
-- **編輯** — 專注的原始 Markdown 原始碼編輯器。
-- **視覺化編輯** — 所見即所得優先、基於原始碼的編輯介面。正文保持渲染並逐步顯示必要語法；一般圍欄程式碼內容、區塊數學公式、已註冊的圖表（Mermaid）、圖片屬性欄位與 GFM 表格儲存格提供精確的直接編輯器。尚未實作所見即所得渲染的結構——多行或畸形圖片及位元組對應不明確的語法——暫時保留精確的原始碼編輯通道，並登記在[視覺化編輯 WYSIWYG 涵蓋矩陣與路線圖](docs/visual-editing-quality.md)中等待逐步關閉。斜線命令面板與精簡的右鍵區塊選單提供精確的區塊轉換（段落、標題、清單、引用、圍欄程式碼、分隔線、表格）、複製、上移/下移、原始碼安全的拖曳重排與刪除；選取範圍上下文格式命令與視覺化連結編輯器對每次操作執行一次精確的原始碼變更。Markdown 分隔符號預設自動配對，輸入 `:shortcode` 會開啟 emoji 自動完成，任務清單核取方塊可直接點擊切換；游標離開標題、清單、任務或引用列後，該列會立即恢復為渲染形態。它不是獨立的富文字文件模型——底層 Markdown 始終是唯一資料來源。
-- **分割預覽** — 左右同時顯示原始碼和渲染預覽，可選擇啟用同步捲動：基於原始碼對應按文件位置對齊兩個窗格，而非按整篇捲動百分比同步。
-- **閱讀** — 不可編輯的渲染檢視，預設置中並限制為適合閱讀的 860 px 最大寬度；啟用「預覽自適應寬度」後可使用整個窗格。
+## 下載，即刻開始
 
-切換模式會保留目前文件、游標和選取範圍、復原歷史以及每個分頁的捲動狀態。
+| 平臺 | v0.6.0 下載 | 下載體積 |
+| --- | --- | --- |
+| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-portable.zip) | 安裝程式 22.0 MiB |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x64.dmg) | arm64 DMG 27.1 MiB |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x86_64.rpm) | AppImage 52.4 MiB |
 
-使用**檢視 → 原始碼/分割預覽**（Windows/Linux 為 `Ctrl+/`，macOS 為 `Cmd+/`）可在兩種原始碼導向版面之間切換；從視覺化編輯或閱讀模式首次執行時會進入編輯模式。
+[全部版本與資源校驗資訊](https://github.com/willmove/markion/releases) · 以上為下載大小，並非執行記憶體。
 
-## 文件與工作區
+- **Windows：**執行安裝程式或解壓 ZIP。暫未提供 Authenticode 簽名，SmartScreen 可能需要選擇**更多資訊 → 仍要執行**。
+- **macOS：**將 Markion 拖入“應用程式”。**v0.6.0 為 ad-hoc 簽名，尚未公證。**確認瀏覽器下載的副本可信後，安裝完成執行：
 
-- 多分頁編輯，每個分頁分別保存游標、選取範圍、捲動、復原/重做、預覽、大綱和衍生 Markdown 快取狀態。
-- 再次開啟已開啟的 Markdown 或純文字檔案時會聚焦現有分頁，而不會建立重複分頁。
-- **開啟資料夾**可切換工作區根目錄，並在「檔案」側邊欄中顯示 Markdown 檔案、精選的純文字檔案（`.txt`、`.text`、`.log`、`.csv`、`.tsv`、`.org`、`.rst`、`.adoc`/`.asciidoc`）以及受支援的圖片檔案（`.png`、`.jpg`/`.jpeg`、`.gif`、`.webp`、`.bmp`、`.tif`/`.tiff`、`.svg`），按目錄層級巢狀顯示；空資料夾也會列出。Markdown 檔案保持醒目區分，純文字檔案以 UTF-8 文字開啟，圖片檔案以唯讀圖片分頁開啟，並將超尺寸圖片調整到內容區域內顯示。
-- 展開資料夾時只顯示下一層的子項目，可逐層深入檢視深層巢狀的工作區。
-- **顯示隱藏的資料夾/檔案**偏好設定（預設關閉）可顯示點號開頭（dotfile）以及 Windows 隱藏屬性的項目；而始終排除的建置、相依性和 VCS 雜訊目錄（`target`、`node_modules`、`.git` 等）在任何情況下都保持隱藏。
-- 檔案樹右鍵選單會依目標提供開啟、在新分頁開啟、新增檔案/資料夾、重新命名、刪除、在系統檔案管理器中顯示、篩選和重新整理等操作。
-- 檔案和資料夾可就地命名；刪除非空資料夾需要二次確認。
-- 可從作業系統檔案管理器將 Markdown 檔案拖入 Markion。
-- 「檔案」和「大綱」面板均可切換顯示，側邊欄與分割預覽的分隔線可拖曳調整。
-- 「大綱」面板以可折疊樹狀結構列出文件標題層級：含有下級標題的標題會顯示展開/折疊控制項，新開啟的文件大綱預設完全展開，折疊狀態按文件獨立、僅作用於目前工作階段，並會醒目顯示游標所在章節。點擊標題會跳轉到對應原始碼位置——在閱讀模式下則跳轉到對應的渲染標題。
-- 原生視窗標題在 Markion 品牌文字後顯示目前開啟的檔名，文件有未儲存變更時會帶 `*` 後綴。狀態列保留儲存狀態和暫態操作回饋，並提供精簡的持續性上下文：目前文件的字元數與字數、在存在編輯介面時顯示游標所在的行號與欄號（從 1 開始），以及在文件或工作區屬於 Git 倉庫時顯示目前分支名稱。
-- **備份與同步**透過一次點擊的「立即同步」和清晰易懂的狀態提示，將筆記資料夾安全地保存在同步位置。底層由 Git 提供可靠的版本歷史，技術操作則收納在「進階 Git 詳情」中。設定、驗證、衝突與復原說明見[備份與同步指南](docs/git-sync.md)。
+  ```bash
+  xattr -cr /Applications/Markion.app
+  ```
 
-## Markdown 編輯與預覽
+  每次透過瀏覽器下載更新後需重複執行。[首次啟動詳情](docs/user-guide.md#安装)。
+- **Linux：**為 AppImage 新增執行許可權（`chmod +x Markion*.AppImage`）後執行，或安裝 DEB/RPM。無 FUSE 時可用 `--appimage-extract-and-run`。
 
-- 使用 `pulldown-cmark` 解析 Markdown，面向 CommonMark 和 GFM。
-- 格式化命令支援段落（Windows/Linux 為 `Ctrl+0`，macOS 為 `Cmd+0`）、標題、粗體、斜體、行內程式碼、連結、圖片、清單、任務清單、引用、圍欄程式碼區塊和原始碼 Markdown 表格。「段落」可將選取範圍內的 ATX 標題恢復為一般文字，並保持非標題列不變。
-- 原始碼編輯器及受支援的視覺化編輯欄位預設啟用 Markdown 自動配對：可補齊分隔符號、包裹選取範圍、跳過已有結束符號，並用 Backspace 刪除空配對；IME 組字期間以及程式碼、區塊公式和圖表內容編輯器內不會觸發。
-- 在詞語邊界輸入未閉合的 `:shortcode` 會在原始碼和視覺化編輯中開啟 emoji 自動完成；確認後插入標準 Markdown，並保持為一次可復原的原始碼編輯。
-- 貼上來自 Word、Google 文件或網頁的富文字時，會將剪貼簿中的 HTML 轉換為帶格式的 Markdown（標題、強調、連結、巢狀清單、表格、程式碼），整個貼上可一次復原；純文字剪貼簿仍按原樣逐字貼上。
-- 標題命令預設顯示 H1–H5，可在「偏好設定」中擴展為 H1–H6。
-- 尋找與取代支援區分大小寫、正規表示式、上一個/下一個符合、取代目前項目和全部取代。
-- 原始碼表格命令可格式化表格並新增、刪除或移動行列。視覺化編輯中的表格還支援直接編輯儲存格、使用 Tab 巡覽、確定性寬度重排，以及同樣的原始碼驅動行列操作；一般預覽表格保持唯讀。
-- 圖片資源工作流程支援剪貼簿圖片、拖入檔案、明確檔案／URL 插入以及已有文件圖片。可依來源選擇保留、複製／下載，或透過 PicGo HTTP、PicGo Core、字面參數自訂命令上傳；詳見[圖片處理與上傳指南](docs/image-handling.md)。Markion 使用抗衝突的文件相對資源，精確保留圖片中繼資料，並將傳輸復原資料置於 Markdown 之外。
-- 可解析 YAML 前言並在預覽中隱藏；其中的 `title`、`author` 和 `date` 會用於匯出中繼資料。
-- 文件寫入採用同目錄的原子替換，寫入失敗時保留文件路徑和髒狀態。Markion 會追蹤最近已知的磁碟檔案身分，在儲存前及文件開啟期間偵測外部變更，僅自動重新載入乾淨文件，並為髒文件提供重新載入、覆寫或另存副本的衝突選擇。復原管理器會列出每個復原快照及其原始路徑和磁碟關係，支援還原、捨棄、全部還原與全部捨棄，且不會刪除無法讀取或未選取的復原資料。
-- 自動儲存預設在停止輸入五秒後執行，並為未儲存文件寫入復原副本；已還原的復原快照會保持持久，直到成功儲存、明確捨棄或被原子寫入的後繼復原所取代。
+開啟 Markdown 檔案或資料夾即可寫作。試用內建樣例時，請**先複製整個 examples 資料夾及其中的圖片，再開始編輯**。[上手與模板](assets/examples/README.md)。
 
-渲染預覽支援：
+## 一份文件，四種工作方式
 
-- 粗體、斜體、刪除線、行內程式碼、連結、醒目標記、上標、下標、註腳（將游標懸停在引用上即可閱讀定義）、任務清單、常用 emoji 短代碼和自動連結。
-- 文內 `[TOC]` / `[toc]` 標記會渲染為可點擊的即時目錄，`[text](#heading)` / `{#id}` 標題錨點會在文件內跳轉。
-- 正確的有序清單起始編號、巢狀清單、分層項目符號、懸掛縮排、圖片和嵌入式 HTML。
-- 受支援的行內 HTML 在混合 Markdown、獨立 HTML 區塊、表格儲存格和視覺化編輯中保持一致語意，包括安全的顏色 span、連結與連結圖片、`kbd`/`samp`、原樣換行以及正確定位的上下標；畸形或不支援的標記會安全回退，不會執行腳本。
-- 可選取預覽文字，並透過右鍵選單複製為純文字、Markdown 或 HTML；在適用位置還可複製連結位址。
-- `$...$` 行內公式和 `$$...$$` 區塊公式，由內嵌的 RaTeX（相容 KaTeX）引擎離線排版為帶內嵌字體的 SVG 並快取——無需連網，也無需安裝外部 LaTeX。
-- ` ```mermaid ` 圍欄圖表（流程圖、循序圖等）渲染為經過消毒處理的 SVG 並快取。
-- 使用 syntect 和 two-face 擴充語法集醒目標示圍欄程式碼，對未涵蓋語言使用後備語法分析，並可顯示行號。
+| 模式 | 適合的場景 |
+| --- | --- |
+| **視覺化編輯** · 預設 | 在渲染後的 Markdown 中直接編輯正文、表格、程式碼與公式。 |
+| **原始碼** | 精確掌控全部 Markdown 語法。 |
+| **分欄預覽** | 原始碼與預覽並排，可開啟同步滾動。 |
+| **閱讀** | 乾淨、不可編輯的閱讀檢視。 |
 
-## 主題、語言與偏好設定
+切換模式時保留位置、選區與撤銷歷史。[快捷鍵](docs/keyboard-shortcuts.md)。
 
-- 十四款內建主題：Paper、Ink、Solar、Forest、Rose、Graphite、GitHub Light/Dark、Solarized Light/Dark、One Light/Dark 和 Tokyo Night/Light。
-- 自訂主題使用 Markion 本機主題目錄中的 `.toml` 檔案；首次使用時會安裝 `typewriter.toml` 示範檔案（含可選的 `[fonts]` 表——`editor`、`rendered`、`code`，在使用者沒有明確偏好時為原始碼編輯器、正文和程式碼平面提供字體）。舊版 `.theme` 檔案會在首次載入時自動遷移。
-- 七種介面語言：英語、簡體中文、繁體中文、日語、法語、德語和西班牙語。
-- 應用內偏好設定面板在**一般**中可設定語言、側邊欄顯示、預覽自適應寬度、專注/打字機模式、Markdown 自動配對、程式碼行號、同步捲動、顯示隱藏檔案和標題選單層級；在**外觀**中可設定主題、按平面的字體（原始碼/閱讀/程式碼，預設跟隨主題）、字號和段落間距。
-- 偏好設定保存在 `config.toml`；舊版 `preferences.conf` 會自動遷移。
+| 從構思到交付 | 已有能力 |
+| --- | --- |
+| **技術寫作** | GFM 表格、程式碼高亮、LaTeX 公式、Mermaid、腳註、提示塊與可跳轉大綱。 |
+| **遷入既有內容** | 本地 DOCX 匯入；貼上 Word、Google Docs 或網頁中的富文字。[Word 匯入](docs/word-import.md) |
+| **匯出與發布** | Markdown、帶樣式/純 HTML、LaTeX、DOCX、PDF、PNG/JPEG，以及本地 MarkNice 公眾號排版工作區。[發布指南](docs/marknice-workspace.md) |
+| **圖片與資源** | 貼上、拖入、複製/下載，或透過 PicGo、自定義命令上傳。[圖片指南](docs/image-handling.md) |
+| **調整到順手** | **偏好設定 → 外觀**中調整主題、各編輯平面的字型與排版；支援專注/打字機模式及自定義快捷鍵。 |
+| **按需連線工具** | Git 驅動的備份與同步；使用自備金鑰或本地模型的 AI Agent。AI **預設關閉**。[同步](docs/git-sync.md) · [AI](docs/ai-agent-guide.md) |
 
-所有設定欄位均可省略。主要預設值和僅能透過檔案設定的選項如下：
+<a id="performance"></a>
 
-```toml
-theme = "Paper"
-language = "en"
-focus_mode = false
-typewriter_mode = false
-code_line_numbers = true
-preview_adaptive_width = false
-heading_menu_max_level = 5        # 5 或 6
-sync_scroll = false
-sidebar_visible = true
-sidebar_tab = "files"             # "files" 或 "outline"
-outline_position = "left"        # "left" or "right"
-outline_visible = true
-block_handle_menu = true
-slash_commands_enabled = true
-show_hidden_files = false
-markdown_auto_pair = true
+## 有據可查的效能
 
-# 可選的按平面字體；省略時先跟隨主題，再回退到內建預設
-#（原始碼/正文為系統 UI 字體，程式碼為 JetBrains Mono）。
-# editor_font_family = "Cascadia Code"
-# rendered_font_family = "Georgia"
-# code_font_family = "JetBrains Mono"
+**Windows release 構建歷史實測 · 2026-11-11。**Intel Core Ultra 5 225U，約 31 GiB 記憶體；每種大小 100 次區域性編輯。下表對比不同文件大小的**模型處理耗時**，不含介面排版、paint 或 GPU 呈現。
 
-[auto_save]
-enabled = true
-delay_secs = 5
+| 混合 Markdown | 首次模型構建 | 編輯 P50 | 編輯 P95 |
+| --- | ---: | ---: | ---: |
+| 100 KiB | 10.77 ms | **0.64 ms** | 1.21 ms |
+| 300 KiB | 28.67 ms | **2.55 ms** | 3.69 ms |
+| 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
+| 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-[git]
-background_check = false
+另一輪 1 MiB 文件的 **1080 次系統按鍵**實測中，應用輸入回撥 → 游標 paint 為 **P50 26.63 ms / P95 33.14 ms**，不含硬體/系統輸入傳輸與 GPU 呈現。這些是既有記錄，不是 v0.6.0 的重新跑分或競品排名。[測試方法、原始資料與復現命令](docs/performance.md)。
 
-[export]
-backend = "builtin"              # builtin / pandoc
-pdf_engine = "xelatex"            # pandoc
-```
+## 開始前瞭解這些
 
-設定、復原檔案、主題和按日輪換的診斷日誌均使用適合各平台的 Markion 資料目錄。啟動前設定 `RUST_LOG=debug` 可獲得更詳細的日誌。
+- Markdown 始終是文件源資料；不支援或無法精確定位的語法保留原始碼編輯路徑。暫不支援 GFM 合併單元格與圖片畫素裁剪。[覆蓋範圍與已知缺口](docs/visual-editing-quality.md)。
+- 內建 PDF/DOCX 無需外部轉換器；可選 Pandoc，失敗時回退內建匯出，不同格式保真度不同。MarkNice 瀏覽器工作區沿用固定版本的編輯器外觀；Word 匯入僅在當前會話生效、不寫回 Markion，需**複製 MD**或顯式儲存 Markdown 帶回。其 Word 匯出和主題化列印 PDF 有別於原生匯出；該工作區不提供 Markdown/PDF/圖片匯入與樣例操作。
+- Windows 安裝版與 Linux AppImage 支援 Minisign 驗證的一鍵更新；macOS 與 DEB/RPM 開啟下載連結。更新驗證與作業系統程式碼簽名不同。
+- **目前原始碼提供 8 種 README 與 8 種介面語言**：英語、簡體/繁體中文、日語、韓語、法語、德語和西班牙語。在偏好設定中選擇 **한국어** 即可。已發布的 v0.6.0 安裝包仍為 7 種介面語言；使用韓語介面請建置目前原始碼。
 
-## 匯出
+## 構建與貢獻
 
-Markion 可匯出為：
-
-- 用於準備微信富文字內容的本機 MarkNice 工作區
-- Markdown
-- 帶樣式 HTML 和純 HTML
-- LaTeX
-- DOCX
-- PDF
-- PNG 和 JPEG 文件快照
-
-PDF 與 DOCX 預設使用內建匯出器，無需外部轉換器。設定 `backend = "pandoc"` 才會優先使用 Pandoc；失敗時回退至內建引擎，狀態列會標明實際後端。內建 PDF 支援分頁、嵌入字型與中文回退、標題、程式碼、表格、圖片和公式；PNG/JPEG 快照共用該排版引擎。各格式保真度不同，圖表圍欄仍可能以程式碼呈現。
-
-## Word 匯入
-
-選擇 **檔案 → 匯入 Word（.docx）**，可以完全在本機把一份 DOCX 轉換為新的已儲存 Markdown 文件。Markion 會先顯示轉換報告，再開啟儲存對話框；如果可能遺失內容，必須明確選擇繼續。支援的內嵌圖片儲存在 Markdown 旁的 `<檔名>.assets/` 中，移動或複製時請讓它與 `.md` 檔案同行。匯入過程有資源上限、可取消、無需連網，而且不會覆寫已有 Markdown 或資源目錄。修訂按「接受後的檢視」匯入；Word 標題層級會得到更準確的保留，粗體與後續文字的邊界會正規化為相容性更好的 Markdown。舊版 `.doc`、`.docm`、加密檔案、PDF/OCR 和頁面版式複刻不在此流程範圍內。支援的語意子集、限制、診斷和清理行為詳見 [`docs/word-import.md`](docs/word-import.md)。
-
-選擇 **匯出 → 發佈到微信公眾號（MarkNice）** 可在預設瀏覽器中將目前記憶體文件開啟到一個私有的本機回環工作區。內建編輯器外觀盡量貼近固定版本的 MarkNice 編輯區（雙卡片、紅綠燈標題列、SVG 工具列、375px 手機框），而不會帶入行銷網站。主題、渲染器、數學公式排版和應用腳本全部離線可用；公式以自包含的行內 SVG（MathJax）渲染，貼上到公眾號草稿時不會被清洗破壞，也不會出現重複。瀏覽器中的編輯僅保留在該分頁內，永遠不會寫回 Markion。瀏覽器工作區裡的 **匯入 Word** 只在目前瀏覽器工作階段中把 `.docx` 轉成 Markdown；若要帶回 Markion，請使用 **複製 MD** 或自行另存工作階段中的 Markdown。受管理的本機圖片可以預覽，但複製時會明確排除它們，因為本機 blob 無法發佈到微信；遠端圖片仍可能存取其原始主機。工作區還可以複製目前 Markdown、將主題化預覽存為 HTML、存為瀏覽器產生的 Word，或透過列印對話框 **存為 PDF**（列印的是目前主題化、已消毒的 MarkNice 預覽）。瀏覽器 Word/PDF 與 Markion 原生/Pandoc 匯出不同。工作區不提供匯入 Markdown、匯入 PDF、匯入本機圖片或範例文件。如果剪貼簿權限或兩小時工作階段過期，請重新授權或從 Markion 重新啟動。
-
-## 效能
-
-- 預覽區塊、視覺化編輯區塊、大綱、統計資訊和行數均按文件版本快取，並透過 `Arc` 共享。
-- 語法醒目標示會跨編輯複用，語法庫在背景預熱。
-- 復原快照不包含衍生快取；編輯器按版本複用快取的文字控制代碼。
-- 預覽/視覺化編輯清單僅更新變化範圍，檔案樹限制每幀渲染的列數，換行後的原始碼列會測量實際渲染高度。
-
-局部編輯後，帶原始碼對應的視覺化編輯模型會增量複用可獨立解析的區域；當 Markdown 上下文或位元組範圍無法確定時，則回退為完整衍生。分割/閱讀預覽仍使用防抖與快取。Markion 仍使用 `String` 而非 rope 文字緩衝區，部分語意讀取也會有意執行完整解析。
-
-## 目前限制
-
-- 目前的 WYSIWYG 缺口為多行或畸形圖片，以及無法證明精確歸屬的原始碼；YAML 前言、縮排程式碼與已證明的 HTML 實體已有編輯及呈現路徑。詳見[涵蓋矩陣](docs/visual-editing-quality.md)。
-- 畫面與內建 PDF 使用離線 RaTeX 公式排版；LaTeX 匯出保留原始公式，內建 DOCX 把支援的公式轉成 Word 數學公式，不支援的形式保留可讀原始碼。
-- 視覺化表格儲存格支援直接編輯，且選取範圍完全落在一個儲存格內時可使用粗體/斜體/行內程式碼/連結。GFM 表格欄寬可拖曳，並以緊鄰表格前的 HTML 註解（`<!-- markion-cols:… -->`）寫入原始碼。行內圖片寬度為 10–100% 的整數，且支援拖曳縮放。多行或畸形圖片和無法解析的表格仍是 WYSIWYG 涵蓋路線圖上的已知缺口，暫時保留原始碼驅動編輯路徑。
-- 一鍵更新在完成 Minisign 驗證後會安裝 Windows NSIS 版本，並原地替換執行中的 Linux AppImage（替換後自動重新啟動）；macOS 套件替換與 Linux `.deb`/`.rpm` 自我替換仍是後續工作，且更新身分驗證並非 Windows Authenticode 或 Apple 公證。
-- 尚未實作完整的自訂主題安裝介面。
-- 匯出使用各格式的排版，而非截取編輯器像素；超大文件尚未全面使用 rope 或完全增量解析。
-
-## 開發
-
-需要 Rust stable。在倉庫根目錄執行：
+準備 Rust stable 與平臺原生構建工具（[CI 構建配置](.github/workflows/release.yml)），在倉庫根目錄執行：
 
 ```powershell
 cargo run
-cargo build
+cargo test --workspace
 pwsh ./scripts/check-quality.ps1
 ```
 
-品質命令會檢查 Rust 格式與程式碼檢查（lint）、完整 Cargo workspace 測試套件、固定的 MarkNice bundle，以及嚴格模式下的所有 OpenSpec 工件。另請參閱[本機 MarkNice 工作區指南](docs/marknice-workspace.md)與[視覺化編輯支援與工程契約](docs/visual-editing-quality.md)。
-
-根套件是 `markion` 應用 crate。源自 Typune 且不依賴 GPUI 的函式庫 crate 位於 `crates/*`：
-
-```powershell
-cargo test -p markdown
-cargo test -p export
-cargo test --workspace
-```
-
-一般 `cargo test` 只測試根套件；使用 `cargo test --workspace` 可測試全部成員。在 Windows 上，應用建置為 GUI 子系統執行檔；完成偵錯建置後還可直接執行：
-
-```powershell
-.\target\debug\markion.exe
-```
-
-## 授權條款
-
-Markion 使用 [MIT 授權條款](LICENSE)。
+[完整使用指南](docs/user-guide.md#simplified-chinese) · [常見問題](docs/faq.md) · [反饋問題](https://github.com/willmove/markion/issues) · [發布流程](docs/release-process.md) · [MIT 許可證](LICENSE)

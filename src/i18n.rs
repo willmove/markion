@@ -11,6 +11,8 @@
 
 use crate::model::SidebarTab;
 
+mod ko;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum ContextMenuMsg {
@@ -40,6 +42,30 @@ pub enum ContextMenuMsg {
 
 pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static str {
     let labels: &[&str; 22] = match language {
+        Language::Ko => &[
+            "문단",
+            "제목",
+            "표",
+            "이미지",
+            "블록",
+            "삽입",
+            "이미지 크기 조절",
+            "{0} 복사",
+            "{0} 잘라내기",
+            "{0} 복제",
+            "{0} 삭제",
+            "{0} 위로 이동",
+            "{0} 아래로 이동",
+            "{0} 아래에 문단 삽입",
+            "대체 텍스트",
+            "이미지 URL",
+            "참고 콜아웃",
+            "팁 콜아웃",
+            "중요 콜아웃",
+            "경고 콜아웃",
+            "주의 콜아웃",
+            "블록 서식 지정",
+        ],
         Language::En => &[
             "Paragraph",
             "Heading",
@@ -513,6 +539,43 @@ pub fn image_t(language: Language, message: ImageMsg) -> &'static str {
         "Editar origen de imagen",
     ];
     let catalog = match language {
+        Language::Ko => &[
+            "이미지",
+            "삽입 정책",
+            "로컬 파일",
+            "클립보드 이미지",
+            "원격 이미지",
+            "유지",
+            "복사",
+            "저장",
+            "다운로드",
+            "업로드",
+            "리소스 폴더",
+            "폴더 템플릿",
+            "현재 문서에 적용된 경로",
+            "업로더",
+            "사용 안 함",
+            "PicGo HTTP",
+            "PicGo Core",
+            "사용자 명령",
+            "엔드포인트",
+            "실행 프로그램",
+            "설정 파일",
+            "인수",
+            "시간 제한",
+            "업로드 테스트",
+            "파일 선택…",
+            "파일에서 이미지 삽입…",
+            "URL에서 이미지 삽입…",
+            "선택한 이미지 업로드",
+            "선택한 이미지 로컬 저장",
+            "문서 이미지 업로드",
+            "문서 이미지 로컬 저장",
+            "이미지 편집",
+            "너비",
+            "정렬",
+            "이미지 소스 편집",
+        ],
         Language::En => &EN,
         Language::ZhHans => &ZH_HANS,
         Language::ZhHant => &ZH_HANT,
@@ -690,6 +753,26 @@ pub fn table_t(language: Language, message: TableMsg) -> &'static str {
         "Tabla actualizada",
     ];
     let catalog = match language {
+        Language::Ko => &[
+            "위에 삽입",
+            "아래에 삽입",
+            "왼쪽에 삽입",
+            "오른쪽에 삽입",
+            "위로 이동",
+            "아래로 이동",
+            "왼쪽으로 이동",
+            "오른쪽으로 이동",
+            "왼쪽 정렬",
+            "가운데 정렬",
+            "오른쪽 정렬",
+            "복제",
+            "내용 지우기",
+            "행 삭제",
+            "열 삭제",
+            "행 추가",
+            "열 추가",
+            "표가 업데이트되었습니다",
+        ],
         Language::En => &EN,
         Language::ZhHans => &ZH_HANS,
         Language::ZhHant => &ZH_HANT,
@@ -714,6 +797,14 @@ pub enum ImageRecoveryMsg {
 
 pub fn image_recovery_t(language: Language, message: ImageRecoveryMsg) -> &'static str {
     let catalog: &[&str; 6] = match language {
+        Language::Ko => &[
+            "이미지 작업",
+            "복구",
+            "취소",
+            "버리기",
+            "URL 복사",
+            "파일 위치 열기",
+        ],
         Language::En => &[
             "Image operations",
             "Recovery",
@@ -777,6 +868,15 @@ pub enum StartupFailureMsg {
 
 pub fn startup_failure_tf(language: Language, message: StartupFailureMsg, args: &[&str]) -> String {
     let catalog: &[&str; 7] = match language {
+        Language::Ko => &[
+            "Markion을 시작할 수 없습니다",
+            "Markion의 그래픽 렌더러를 시작하지 못했습니다. Markion은 Vulkan으로 창을 그리며, 사용 가능한 Vulkan 드라이버를 찾지 못했습니다.\n\n해결 방법:\n- 그래픽 카드의 Vulkan 드라이버를 설치하세요. GPU가 없는 컴퓨터에는 Mesa 소프트웨어 드라이버를 설치하세요 (Debian/Ubuntu/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast).\n- 드라이버를 직접 지정하려면 VK_DRIVER_FILES=/path/to/driver_icd.json 환경 변수로 Markion을 시작하세요 (이전 Vulkan 로더에서는 VK_ICD_FILENAMES).\n- 오래된 드라이버 매니페스트나 충돌하는 암시적 레이어가 있다면 VK_LOADER_DRIVERS_DISABLE 또는 VK_LOADER_LAYERS_DISABLE로 비활성화하세요.\n- Markion AppImage에는 소프트웨어 Vulkan 드라이버가 포함되어 있습니다. MARKION_SOFTWARE_VULKAN=1로 사용을 강제할 수 있습니다.\n\n전체 안내: {0}",
+            "Markion의 그래픽 렌더러를 시작하지 못했습니다. 그래픽 드라이버를 업데이트하고 다시 시도하세요.",
+            "Markion에 포함된 소프트웨어 Vulkan 드라이버도 시작하지 못했습니다.",
+            "Markion 시작에 실패했습니다.",
+            "세부 정보: {0}",
+            "로그 파일: {0}",
+        ],
         Language::En => &[
             "Markion cannot start",
             "Markion could not start its graphics renderer. Markion draws its window with Vulkan, and no usable Vulkan driver was found.\n\nTo fix this:\n- Install the Vulkan driver for your graphics card, or Mesa's software driver on machines without a GPU (Debian/Ubuntu/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast).\n- To force a specific driver, start Markion with VK_DRIVER_FILES=/path/to/driver_icd.json (VK_ICD_FILENAMES on older Vulkan loaders).\n- If a stale driver manifest or a crashing implicit layer is installed, disable it with VK_LOADER_DRIVERS_DISABLE or VK_LOADER_LAYERS_DISABLE.\n- The Markion AppImage includes a software Vulkan driver; MARKION_SOFTWARE_VULKAN=1 forces it.\n\nFull guide: {0}",
@@ -859,6 +959,16 @@ pub enum ImageStatusMsg {
 
 pub fn image_status_tf(language: Language, message: ImageStatusMsg, args: &[&str]) -> String {
     let catalog: &[&str; 8] = match language {
+        Language::Ko => &[
+            "현재 선택 영역에 이미지가 없습니다",
+            "처리할 수 있는 이미지 없음 ({0}개 건너뜀)",
+            "이미지 참조 {0}개 처리 중 (고유 이미지 {1}개)…",
+            "이미지: 적용 {0}개, 실패 {1}개, 미적용 {2}개",
+            "이미지 처리 중…",
+            "이미지가 준비되었지만 삽입 대상이 변경되었습니다",
+            "이미지가 준비되었습니다. 작업 공간이 사용 중입니다",
+            "이미지 작업 실패: {0}",
+        ],
         Language::En => &[
             "No image at the current selection",
             "No eligible images ({0} skipped)",
@@ -952,6 +1062,7 @@ pub enum Language {
     Fr,
     De,
     Es,
+    Ko,
 }
 
 impl Language {
@@ -965,6 +1076,7 @@ impl Language {
             Self::Fr => "fr",
             Self::De => "de",
             Self::Es => "es",
+            Self::Ko => "ko",
         }
     }
 
@@ -979,6 +1091,7 @@ impl Language {
             "fr" | "francais" | "français" | "french" | "fra" => Self::Fr,
             "de" | "deutsch" | "german" | "ger" | "deu" => Self::De,
             "es" | "espanol" | "español" | "spanish" | "spa" => Self::Es,
+            "ko" | "ko-kr" | "kor" | "korean" | "한국어" => Self::Ko,
             // English is the safe default for anything unrecognised.
             _ => Self::En,
         }
@@ -995,6 +1108,7 @@ impl Language {
             Self::Fr => "Français",
             Self::De => "Deutsch",
             Self::Es => "Español",
+            Self::Ko => "한국어",
         }
     }
 
@@ -1009,6 +1123,7 @@ impl Language {
             Self::Es,
             Self::Fr,
             Self::Ja,
+            Self::Ko,
         ]
     }
 }
@@ -1344,6 +1459,7 @@ pub enum Msg {
     StatusRenderedFontSize,
     /// {0}=logical pixel value — rendered paragraph spacing changed.
     StatusParagraphSpacing,
+    StatusLineSpacing,
     /// Status: code display theme switched to Light.
     StatusCodeThemeLight,
     /// Status: code display theme switched to Dark.
@@ -1753,6 +1869,7 @@ pub enum Msg {
     PrefPanelRenderedFontSize,
     /// Rendered paragraph-spacing row label.
     PrefPanelParagraphSpacing,
+    PrefPanelLineSpacing,
     /// Source-editor font-family row label.
     PrefPanelEditorFontFamily,
     /// Rendered-document font-family row label.
@@ -2013,6 +2130,41 @@ const P0_EN: [&str; 32] = [
     "Image unavailable. Check the path or connection.",
     "An unsafe or stale edit was rejected; the document was preserved. Details were written to the Markion log.",
 ];
+
+const P0_KO: [&str; 32] = [
+    "이미지 리소스를 추가하기 전에 Markdown 문서를 저장하세요",
+    "이미지를 삽입했습니다. 일부 리소스 처리 실패: {0}",
+    "교체할 이미지 선택",
+    "지원하지 않는 이미지 형식",
+    "이미지 소스를 안전하게 교체할 만큼 정확히 식별할 수 없습니다",
+    "이미지를 교체할 수 없습니다: {0}",
+    "끌어놓은 이미지를 읽을 수 없습니다: {0}",
+    "외부에서 변경된 파일을 다시 불러왔습니다",
+    "파일이 Markion 외부에서 변경되었습니다. 다시 불러오기, 덮어쓰기 또는 복사본 저장을 선택하세요",
+    "파일이 Markion 외부에서 삭제되었습니다. 로컬 편집 내용은 보존됩니다",
+    "파일이 Markion 외부에서 변경됨",
+    "{0}\n\n디스크 버전을 다시 불러오거나 로컬 편집 내용으로 덮어쓰거나 편집 내용을 다른 파일로 저장하세요.",
+    "다시 불러오기",
+    "덮어쓰기",
+    "복사본 저장",
+    "외부 변경 처리 선택 대기 중",
+    "외부 파일을 로컬 편집 내용으로 덮어썼습니다",
+    "외부 파일을 다시 불러왔습니다. 저장하지 않은 로컬 편집 내용은 버렸습니다",
+    "링크 URL 및 제목 편집 중",
+    "링크 URL이 필요합니다",
+    "링크 편집기가 열린 동안 문서가 변경되어 링크를 저장하지 않았습니다",
+    "링크 편집",
+    "텍스트",
+    "URL",
+    "제목 (선택 사항)",
+    "적용",
+    "왼쪽",
+    "가운데",
+    "오른쪽",
+    "교체…",
+    "이미지를 사용할 수 없습니다. 경로나 연결을 확인하세요.",
+    "안전하지 않거나 오래된 편집을 거부하고 문서를 보존했습니다. 세부 정보는 Markion 로그에 기록했습니다.",
+];
 const P0_ZH_HANS: [&str; 32] = [
     "添加图片资源前请先保存 Markdown 文档",
     "图片已插入；部分资源失败：{0}",
@@ -2220,6 +2372,7 @@ const P0_ES: [&str; 32] = [
 
 pub fn p0_t(lang: Language, msg: P0Msg) -> &'static str {
     let table = match lang {
+        Language::Ko => &P0_KO,
         Language::En => &P0_EN,
         Language::ZhHans => &P0_ZH_HANS,
         Language::ZhHant => &P0_ZH_HANT,
@@ -2327,6 +2480,50 @@ const P1_EN: [&str; 41] = [
     "Lists",
     "Emoji",
     "No matching emoji",
+];
+
+const P1_KO: [&str; 41] = [
+    "문서 복구",
+    "복원하거나 버릴 복구 사본을 선택하세요. 선택하지 않은 사본은 디스크에 안전하게 보관됩니다.",
+    "모두 복원",
+    "모두 버리기",
+    "제목 없는 문서",
+    "원본 변경 없음",
+    "디스크의 원본 변경됨",
+    "원본 파일 없음",
+    "원본 상태 알 수 없음",
+    "읽을 수 없는 복구 사본: {0}",
+    "나중을 위해 보관",
+    "문서 복구됨: {0}",
+    "복구 사본 버림: {0}",
+    "일부 복구 사본을 복원하지 못했습니다: {0}",
+    "블록 명령",
+    "일치하는 명령 없음",
+    "텍스트",
+    "제목 {0}",
+    "글머리 기호 목록",
+    "번호 목록",
+    "할 일 목록",
+    "인용",
+    "코드 블록",
+    "구분선",
+    "표",
+    "다음으로 변환",
+    "복제",
+    "삭제",
+    "위로 이동",
+    "아래로 이동",
+    "명령을 적용하기 전에 블록이 변경되었습니다",
+    "시각 편집에서 이 블록을 안전하게 변경할 수 없습니다",
+    "블록 이동됨",
+    "블록 복제됨",
+    "블록 삭제됨",
+    "블록 끌기",
+    "닫기",
+    "텍스트 및 제목",
+    "목록",
+    "이모지",
+    "일치하는 이모지 없음",
 ];
 const P1_ZH_HANS: [&str; 41] = [
     "恢复文档",
@@ -2597,6 +2794,12 @@ pub enum BlockGripMsg {
 
 pub fn block_grip_t(lang: Language, msg: BlockGripMsg) -> &'static str {
     let labels = match lang {
+        Language::Ko => [
+            "블록 핸들 클릭 시 메뉴 표시",
+            "아래에 추가",
+            "블록 복사",
+            "선택 영역 복사",
+        ],
         Language::En => [
             "Show block menu on grip click",
             "Add below",
@@ -2650,6 +2853,7 @@ pub fn block_grip_t(lang: Language, msg: BlockGripMsg) -> &'static str {
 
 pub fn p1_t(lang: Language, msg: P1Msg) -> &'static str {
     let table = match lang {
+        Language::Ko => &P1_KO,
         Language::En => &P1_EN,
         Language::ZhHans => &P1_ZH_HANS,
         Language::ZhHant => &P1_ZH_HANT,
@@ -2674,6 +2878,7 @@ pub enum AdvancedMsg {
 
 pub fn advanced_t(lang: Language, msg: AdvancedMsg) -> &'static str {
     let labels = match lang {
+        Language::Ko => ["코드 접기", "코드 펼치기", "{0}줄"],
         Language::En => ["Fold code", "Expand code", "{0} lines"],
         Language::ZhHans => ["折叠代码", "展开代码", "{0} 行"],
         Language::ZhHant => ["摺疊程式碼", "展開程式碼", "{0} 行"],
@@ -2692,6 +2897,7 @@ pub fn advanced_t(lang: Language, msg: AdvancedMsg) -> &'static str {
 /// Look up a static (non-parameterised) message for `lang`.
 pub fn t(lang: Language, msg: Msg) -> &'static str {
     match lang {
+        Language::Ko => ko::t(msg),
         Language::En => en(msg),
         Language::ZhHans => zh(msg),
         Language::ZhHant => zh_hant(msg),
@@ -2994,6 +3200,7 @@ pub struct MarkdownReferenceSection {
 /// Localized Markdown syntax cheat sheet for the Help overlay.
 pub fn markdown_reference(lang: Language) -> Vec<MarkdownReferenceSection> {
     match lang {
+        Language::Ko => ko::markdown_reference(),
         Language::En => markdown_reference_en(),
         Language::ZhHans => markdown_reference_zh_hans(),
         Language::ZhHant => markdown_reference_zh_hant(),
@@ -3796,6 +4003,46 @@ fn build_shortcut_section(
 
 fn shortcut_labels(lang: Language) -> ShortcutLabels {
     match lang {
+        Language::Ko => ShortcutLabels {
+            sections: ["파일", "탭", "편집 중", "보기", "검색", "표", "내보내기"],
+            files: [
+                "새로 만들기",
+                "열기",
+                "폴더 열기",
+                "저장",
+                "다른 이름으로 저장",
+                "종료",
+            ],
+            tabs: ["새 탭", "새 탭에서 열기", "탭 닫기", "다음/이전 탭"],
+            editing: [
+                "굵게",
+                "기울임꼴",
+                "인라인 코드",
+                "링크",
+                "이미지",
+                "문단 / 제목",
+                "실행 취소/다시 실행",
+                "다시 실행",
+            ],
+            view: [
+                "보기 모드 전환",
+                t(lang, Msg::ItemSourceSplitPreview),
+                "시각 편집 모드",
+                "읽기 모드",
+                "사이드바",
+                "파일",
+                "개요",
+                "파일 필터",
+                "테마",
+                "집중 모드",
+                "타자기 모드",
+                "코드 줄 번호",
+                "환경 설정",
+            ],
+            search: ["찾기", "바꾸기", "다음/이전 검색 결과"],
+            tables: ["표 서식 지정", "행 추가/삭제", "행 이동", "열 추가/삭제"],
+            export: ["HTML", "일반 HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
+        },
         Language::En => ShortcutLabels {
             sections: [
                 "Files", "Tabs", "Editing", "View", "Search", "Tables", "Export",
@@ -4165,6 +4412,8 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
 /// and the preferences summary).
 pub fn sidebar_tab_label(lang: Language, tab: SidebarTab) -> &'static str {
     match (lang, tab) {
+        (Language::Ko, SidebarTab::Files) => "파일",
+        (Language::Ko, SidebarTab::Outline) => "개요",
         (Language::En, SidebarTab::Files) => "files",
         (Language::En, SidebarTab::Outline) => "outline",
         (Language::ZhHans, SidebarTab::Files) => "文件",
@@ -4188,6 +4437,8 @@ pub fn sidebar_tab_label(lang: Language, tab: SidebarTab) -> &'static str {
 
 fn en(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "Line spacing (100% = default)",
+        Msg::StatusLineSpacing => "Line spacing: {0}",
         Msg::MenuFile => "File",
         Msg::MenuEdit => "Edit",
         Msg::MenuView => "View",
@@ -4872,7 +5123,7 @@ fn en(msg: Msg) -> &'static str {
 //   {4}=preview adaptive width {5}=sidebar {6}=source font size
 //   {7}=reading font size {8}=paragraph spacing {9}=prefs path
 //   {10}=themes dir {11}=custom theme count
-const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\nSource font size: {6}\nReading font size: {7}\nParagraph spacing: {8}\nAuto-save to file: {12}\nAuto-save delay: {13}s\n\nPreferences: {9}\nCustom themes: {10}\nInstalled custom themes: {11}";
+const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\nSource font size: {6}\nReading font size: {7}\nParagraph spacing: {8}\nAuto-save to file: {12}\nAuto-save delay: {13}s\n\nPreferences: {9}\nCustom themes: {10}\nInstalled custom themes: {11}\nLine spacing: {14}%";
 
 // ---------------------------------------------------------------------------
 // Japanese
@@ -4880,6 +5131,8 @@ const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mod
 
 fn ja(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "行間（100% = 標準）",
+        Msg::StatusLineSpacing => "行間: {0}",
         Msg::MenuFile => "ファイル",
         Msg::MenuEdit => "編集",
         Msg::MenuView => "表示",
@@ -5563,7 +5816,7 @@ fn ja(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\nソースのフォントサイズ: {6}\n閲覧フォントサイズ: {7}\n段落間隔: {8}\nファイルへ自動保存: {12}\n自動保存間隔: {13}秒\n\n設定ファイル: {9}\nカスタムテーマ: {10}\nインストール済みカスタムテーマ: {11}";
+const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\nソースのフォントサイズ: {6}\n閲覧フォントサイズ: {7}\n段落間隔: {8}\nファイルへ自動保存: {12}\n自動保存間隔: {13}秒\n\n設定ファイル: {9}\nカスタムテーマ: {10}\nインストール済みカスタムテーマ: {11}\n行間: {14}%";
 
 // ---------------------------------------------------------------------------
 // French
@@ -5571,6 +5824,8 @@ const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタ�
 
 fn fr(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "Interligne (100 % = valeur par défaut)",
+        Msg::StatusLineSpacing => "Interligne : {0}",
         Msg::MenuFile => "Fichier",
         Msg::MenuEdit => "Édition",
         Msg::MenuView => "Affichage",
@@ -6285,7 +6540,7 @@ fn fr(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\nTaille de la source : {6}\nTaille de lecture : {7}\nEspacement des paragraphes : {8}\nEnregistrement auto vers le fichier : {12}\nDélai d'enregistrement auto : {13}s\n\nPréférences : {9}\nThèmes personnalisés : {10}\nThèmes installés : {11}";
+const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\nTaille de la source : {6}\nTaille de lecture : {7}\nEspacement des paragraphes : {8}\nEnregistrement auto vers le fichier : {12}\nDélai d'enregistrement auto : {13}s\n\nPréférences : {9}\nThèmes personnalisés : {10}\nThèmes installés : {11}\nInterligne: {14}%";
 
 // ---------------------------------------------------------------------------
 // German
@@ -6293,6 +6548,8 @@ const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode m
 
 fn de(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "Zeilenabstand (100% = Standard)",
+        Msg::StatusLineSpacing => "Zeilenabstand: {0}",
         Msg::MenuFile => "Datei",
         Msg::MenuEdit => "Bearbeiten",
         Msg::MenuView => "Ansicht",
@@ -6989,7 +7246,7 @@ fn de(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\nQuelltext-Schriftgröße: {6}\nLeseschriftgröße: {7}\nAbsatzabstand: {8}\nAutomatisch in Datei speichern: {12}\nAutospeicher-Intervall: {13}s\n\nEinstellungen: {9}\nBenutzerdefinierte Designs: {10}\nInstallierte Designs: {11}";
+const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\nQuelltext-Schriftgröße: {6}\nLeseschriftgröße: {7}\nAbsatzabstand: {8}\nAutomatisch in Datei speichern: {12}\nAutospeicher-Intervall: {13}s\n\nEinstellungen: {9}\nBenutzerdefinierte Designs: {10}\nInstallierte Designs: {11}\nZeilenabstand: {14}%";
 
 // ---------------------------------------------------------------------------
 // Spanish
@@ -6997,6 +7254,8 @@ const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschi
 
 fn es(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "Interlineado (100% = predeterminado)",
+        Msg::StatusLineSpacing => "Interlineado: {0}",
         Msg::MenuFile => "Archivo",
         Msg::MenuEdit => "Edición",
         Msg::MenuView => "Ver",
@@ -7683,7 +7942,7 @@ fn es(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\nTamaño de fuente del código: {6}\nTamaño de lectura: {7}\nEspacio entre párrafos: {8}\nAutoguardar en archivo: {12}\nRetraso de autoguardado: {13}s\n\nPreferencias: {9}\nTemas personalizados: {10}\nTemas instalados: {11}";
+const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\nTamaño de fuente del código: {6}\nTamaño de lectura: {7}\nEspacio entre párrafos: {8}\nAutoguardar en archivo: {12}\nRetraso de autoguardado: {13}s\n\nPreferencias: {9}\nTemas personalizados: {10}\nTemas instalados: {11}\nInterlineado: {14}%";
 
 // ---------------------------------------------------------------------------
 // Chinese (Simplified)
@@ -7691,6 +7950,8 @@ const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo m
 
 fn zh(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "行间距（100% 为默认）",
+        Msg::StatusLineSpacing => "行间距：{0}",
         Msg::MenuFile => "文件",
         Msg::MenuEdit => "编辑",
         Msg::MenuView => "视图",
@@ -8340,7 +8601,7 @@ fn zh(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n源码字号：{6}\n阅读字号：{7}\n段落间距：{8}\n自动保存到原文件：{12}\n自动保存间隔：{13} 秒\n\n首选项：{9}\n主题目录：{10}\n已安装自定义主题：{11}";
+const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n源码字号：{6}\n阅读字号：{7}\n段落间距：{8}\n自动保存到原文件：{12}\n自动保存间隔：{13} 秒\n\n首选项：{9}\n主题目录：{10}\n已安装自定义主题：{11}\n行间距: {14}%";
 
 // ---------------------------------------------------------------------------
 // Traditional Chinese (Taiwan regional terminology)
@@ -8348,6 +8609,8 @@ const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机
 
 fn zh_hant(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelLineSpacing => "行距（100% 為預設）",
+        Msg::StatusLineSpacing => "行距：{0}",
         Msg::MenuFile => "檔案",
         Msg::MenuEdit => "編輯",
         Msg::MenuView => "檢視",
@@ -8999,7 +9262,7 @@ fn zh_hant(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n原始碼字號：{6}\n閱讀字號：{7}\n段落間距：{8}\n自動儲存到原檔案：{12}\n自動儲存間隔：{13} 秒\n\n偏好設定：{9}\n佈景主題目錄：{10}\n已安裝自訂佈景主題：{11}";
+const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n原始碼字號：{6}\n閱讀字號：{7}\n段落間距：{8}\n自動儲存到原檔案：{12}\n自動儲存間隔：{13} 秒\n\n偏好設定：{9}\n佈景主題目錄：{10}\n已安裝自訂佈景主題：{11}\n行距: {14}%";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -9053,8 +9316,198 @@ fn substitute(template: &str, args: &[&str]) -> String {
 }
 
 #[cfg(test)]
+pub(crate) fn assert_template_parity(english: &str, translated: &str) {
+    let placeholders = |text: &str| {
+        let pattern = regex::Regex::new(r"\{\d+\}").expect("placeholder pattern");
+        pattern
+            .find_iter(text)
+            .map(|value| value.as_str().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        placeholders(english),
+        placeholders(translated),
+        "placeholder mismatch: {english:?} / {translated:?}"
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_auxiliary_catalogs_preserve_placeholders() {
+        for message in [
+            ContextMenuMsg::Paragraph,
+            ContextMenuMsg::Heading,
+            ContextMenuMsg::Table,
+            ContextMenuMsg::Image,
+            ContextMenuMsg::Block,
+            ContextMenuMsg::Insert,
+            ContextMenuMsg::ScaleImage,
+            ContextMenuMsg::Copy,
+            ContextMenuMsg::Cut,
+            ContextMenuMsg::Duplicate,
+            ContextMenuMsg::Delete,
+            ContextMenuMsg::MoveUp,
+            ContextMenuMsg::MoveDown,
+            ContextMenuMsg::AddBelow,
+            ContextMenuMsg::ImageAlt,
+            ContextMenuMsg::ImageUrl,
+            ContextMenuMsg::CalloutNote,
+            ContextMenuMsg::CalloutTip,
+            ContextMenuMsg::CalloutImportant,
+            ContextMenuMsg::CalloutWarning,
+            ContextMenuMsg::CalloutCaution,
+            ContextMenuMsg::FormatBlock,
+        ] {
+            let korean = context_menu_t(Language::Ko, message);
+            assert!(!korean.is_empty());
+            assert_template_parity(context_menu_t(Language::En, message), korean);
+        }
+        for message in [
+            ImageMsg::Tab,
+            ImageMsg::Policies,
+            ImageMsg::LocalFiles,
+            ImageMsg::Clipboard,
+            ImageMsg::RemoteFiles,
+            ImageMsg::Keep,
+            ImageMsg::Copy,
+            ImageMsg::Save,
+            ImageMsg::Download,
+            ImageMsg::Upload,
+            ImageMsg::Resources,
+            ImageMsg::Directory,
+            ImageMsg::ResolvedDirectory,
+            ImageMsg::Provider,
+            ImageMsg::Disabled,
+            ImageMsg::PicGoHttp,
+            ImageMsg::PicGoCore,
+            ImageMsg::CustomCommand,
+            ImageMsg::Endpoint,
+            ImageMsg::Program,
+            ImageMsg::ConfigFile,
+            ImageMsg::Arguments,
+            ImageMsg::Timeout,
+            ImageMsg::TestUpload,
+            ImageMsg::ChooseFile,
+            ImageMsg::InsertFile,
+            ImageMsg::InsertUrl,
+            ImageMsg::UploadSelected,
+            ImageMsg::SaveSelected,
+            ImageMsg::UploadDocument,
+            ImageMsg::SaveDocument,
+            ImageMsg::EditImage,
+            ImageMsg::Width,
+            ImageMsg::Alignment,
+            ImageMsg::EditSource,
+        ] {
+            let korean = image_t(Language::Ko, message);
+            assert!(!korean.is_empty());
+            assert_template_parity(image_t(Language::En, message), korean);
+        }
+        for message in [
+            TableMsg::InsertAbove,
+            TableMsg::InsertBelow,
+            TableMsg::InsertLeft,
+            TableMsg::InsertRight,
+            TableMsg::MoveUp,
+            TableMsg::MoveDown,
+            TableMsg::MoveLeft,
+            TableMsg::MoveRight,
+            TableMsg::AlignLeft,
+            TableMsg::AlignCenter,
+            TableMsg::AlignRight,
+            TableMsg::Duplicate,
+            TableMsg::ClearContents,
+            TableMsg::DeleteRow,
+            TableMsg::DeleteColumn,
+            TableMsg::AddRow,
+            TableMsg::AddColumn,
+            TableMsg::TableUpdated,
+        ] {
+            let korean = table_t(Language::Ko, message);
+            assert!(!korean.is_empty());
+            assert_template_parity(table_t(Language::En, message), korean);
+        }
+        for message in [
+            ImageRecoveryMsg::Operations,
+            ImageRecoveryMsg::Recovery,
+            ImageRecoveryMsg::Cancel,
+            ImageRecoveryMsg::Discard,
+            ImageRecoveryMsg::CopyUrl,
+            ImageRecoveryMsg::RevealFile,
+        ] {
+            let korean = image_recovery_t(Language::Ko, message);
+            assert!(!korean.is_empty());
+            assert_template_parity(image_recovery_t(Language::En, message), korean);
+        }
+        for message in [
+            BlockGripMsg::ShowMenu,
+            BlockGripMsg::AddBelow,
+            BlockGripMsg::CopyBlock,
+            BlockGripMsg::CopySelection,
+        ] {
+            let korean = block_grip_t(Language::Ko, message);
+            assert!(!korean.is_empty());
+            assert_template_parity(block_grip_t(Language::En, message), korean);
+        }
+        for message in [
+            AdvancedMsg::FoldCode,
+            AdvancedMsg::ExpandCode,
+            AdvancedMsg::CodeLines,
+        ] {
+            let korean = advanced_t(Language::Ko, message);
+            assert!(!korean.is_empty());
+            assert_template_parity(advanced_t(Language::En, message), korean);
+        }
+        for message in [
+            StartupFailureMsg::Title,
+            StartupFailureMsg::RendererLinux,
+            StartupFailureMsg::RendererGeneric,
+            StartupFailureMsg::SoftwareFallbackFailed,
+            StartupFailureMsg::Generic,
+            StartupFailureMsg::Details,
+            StartupFailureMsg::LogDirectory,
+        ] {
+            assert_template_parity(
+                &startup_failure_tf(Language::En, message, &[]),
+                &startup_failure_tf(Language::Ko, message, &[]),
+            );
+        }
+        for message in [
+            ImageStatusMsg::NoAtSelection,
+            ImageStatusMsg::NoEligible,
+            ImageStatusMsg::Processing,
+            ImageStatusMsg::Summary,
+            ImageStatusMsg::GenericProcessing,
+            ImageStatusMsg::TargetChanged,
+            ImageStatusMsg::WorkspaceBusy,
+            ImageStatusMsg::OperationFailed,
+        ] {
+            assert_template_parity(
+                &image_status_tf(Language::En, message, &[]),
+                &image_status_tf(Language::Ko, message, &[]),
+            );
+        }
+    }
+
+    #[test]
+    fn korean_locale_aliases_and_native_name_are_stable() {
+        for code in ["ko", "ko-kr", "kor", "korean", "한국어", " KO-KR "] {
+            assert_eq!(Language::from_code(code), Language::Ko);
+        }
+        assert_eq!(Language::Ko.code(), "ko");
+        assert_eq!(Language::Ko.native_name(), "한국어");
+        assert!(Language::all().contains(&Language::Ko));
+        let preferences = crate::model::AppPreferences {
+            language: Language::Ko.code().into(),
+            ..Default::default()
+        };
+        let saved = crate::storage::render_app_preferences(&preferences);
+        let loaded = crate::storage::parse_app_preferences(&saved).unwrap();
+        assert_eq!(Language::from_code(&loaded.language), Language::Ko);
+    }
 
     #[test]
     fn p0_workflow_catalog_is_complete_for_every_language() {
@@ -9095,6 +9548,9 @@ mod tests {
         for language in Language::all() {
             for message in messages {
                 assert!(!p0_t(*language, message).trim().is_empty());
+                if *language == Language::Ko {
+                    assert_template_parity(p0_t(Language::En, message), p0_t(*language, message));
+                }
             }
         }
         assert_eq!(
@@ -9198,6 +9654,9 @@ mod tests {
         for language in Language::all() {
             for message in messages {
                 assert!(!p1_t(*language, message).trim().is_empty());
+                if *language == Language::Ko {
+                    assert_template_parity(p1_t(Language::En, message), p1_t(*language, message));
+                }
             }
         }
         assert_eq!(p1_tf(Language::En, P1Msg::Heading, &["2"]), "Heading 2");
@@ -9749,6 +10208,7 @@ mod tests {
             Msg::StatusEditorFontSize,
             Msg::StatusRenderedFontSize,
             Msg::StatusParagraphSpacing,
+            Msg::StatusLineSpacing,
             Msg::StatusCodeThemeLight,
             Msg::StatusCodeThemeDark,
             Msg::StatusCodeWrapOn,
@@ -9974,6 +10434,7 @@ mod tests {
             Msg::PrefPanelEditorFontSize,
             Msg::PrefPanelRenderedFontSize,
             Msg::PrefPanelParagraphSpacing,
+            Msg::PrefPanelLineSpacing,
             Msg::PrefPanelFocusMode,
             Msg::PrefPanelTypewriterMode,
             Msg::PrefPanelCodeLineNumbers,
@@ -10035,6 +10496,8 @@ mod tests {
             assert!(!t(Language::Fr, msg).is_empty(), "empty Fr for {msg:?}");
             assert!(!t(Language::De, msg).is_empty(), "empty De for {msg:?}");
             assert!(!t(Language::Es, msg).is_empty(), "empty Es for {msg:?}");
+            assert_template_parity(t(Language::En, msg), t(Language::Ko, msg));
+            assert!(!t(Language::Ko, msg).is_empty(), "empty Ko for {msg:?}");
         }
     }
 }

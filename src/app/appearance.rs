@@ -126,6 +126,7 @@ impl MarkionApp {
                     app.editor_font_size = preferences.editor_font_size;
                     app.rendered_font_size = preferences.rendered_font_size;
                     app.paragraph_spacing = preferences.paragraph_spacing;
+                    app.line_spacing = preferences.line_spacing;
                     app.editor_font_family = None;
                     app.rendered_font_family = None;
                     app.code_font_family = None;
@@ -342,6 +343,19 @@ impl MarkionApp {
             self.center_cursor_if_typewriter();
         }
         self.status = self.trf(Msg::StatusParagraphSpacing, &[&format!("{value}px")]);
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn set_line_spacing(&mut self, value: i64, cx: &mut Context<Self>) {
+        let value = normalize_line_spacing(value);
+        if self.line_spacing == value {
+            return;
+        }
+        self.line_spacing = value;
+        self.refresh_typography_measurements(true, true);
+        self.center_cursor_if_typewriter();
+        self.status = self.trf(Msg::StatusLineSpacing, &[&format!("{value}%")]);
         self.persist_preferences();
         cx.notify();
     }
