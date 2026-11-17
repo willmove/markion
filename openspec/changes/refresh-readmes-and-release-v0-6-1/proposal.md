@@ -8,6 +8,7 @@ The READMEs still download v0.6.0 and describe Korean as source-only. Publish th
 - Keep historical screenshots and performance measurements accurately labeled; link concise bilingual release notes and verification records.
 - Synchronize workspace, application, lockfile and packager versions; run the canonical preflight and publish an annotated new tag after required acceptance or explicitly authorized exceptions.
 - Verify all native builds, packages, updater signatures/manifests, OSS mirror and final GitHub metadata.
+- Align CI's OpenSpec pin with the locally verified 1.13.0 version so pure documentation changes using skip_specs validate consistently; correct AppImage download filename casing against the workflow's actual asset names.
 
 Non-goals: new application features, new performance claims, rewriting existing public tags, or silently waiving manual acceptance. The existing Markdown version/cache invariants are unaffected by documentation and version metadata changes.
 

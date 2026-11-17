@@ -35,7 +35,7 @@
   },
   "docs": {
     "files": 12,
-    "local_links_checked": 359,
+    "local_links_checked": 363,
     "errors": []
   },
   "raw_log_sha256": {
@@ -50,5 +50,6 @@
     "single_undo_save_matches_baseline": true,
     "installed_package_acceptance": false
   },
-  "manual_matrix": "Full candidate/final native matrix NOT_RUN/BLOCKED; release-specific exception not yet authorized."
+  "manual_matrix": "Full candidate/final native matrix NOT_RUN/BLOCKED; release-specific exception not yet authorized.",
+  "ci_openspec_parity": "Pinned 1.5.0 cannot validate skip_specs; corrected to published and locally verified 1.13.0. Remote gate pending."
 }

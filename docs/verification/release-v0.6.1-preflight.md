@@ -26,6 +26,8 @@ Executed on Windows 11 Pro 10.0.26300 x86_64 with PowerShell 7.6.9, Rust/Cargo 1
 
 The initial quality script passed formatting, Clippy, every workspace suite and bundle verification, then failed strict validation on the older `prefer-appimage-update-on-arch` delta. Its MODIFIED requirement omitted five newly archived background-update scenarios. Rebased that active delta on the current requirement while retaining its distribution mapping and all existing scenarios; no application or stable-spec edit was needed. The focused validation and final full strict validation then passed. The initial failure is retained in the hashed quality log; no test failure was hidden or converted to a pass.
 
+CI parity: the old workflow pinned OpenSpec 1.5.0, which rejects pure-doc skip_specs changes supported by local 1.13.0. Reproduced that incompatibility with the exact 1.5.0 CLI; aligned the workflow pin to published 1.13.0. The remote corrected gate must pass before tagging. README AppImage links also now use the actual lowercase `markion_0.6.1_x86_64.AppImage` asset name.
+
 The five ignored tests remain three optional external export-engine integrations and two external-network tests. They are not passing results. Deterministic scheduling, staging integrity, Later/reopen and dirty-install guards are covered by automated tests; a five-hour soak and actual signed upgrades are not.
 
 ## Windows development-binary precheck
