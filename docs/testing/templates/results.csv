@@ -59,5 +59,5 @@ P02,离线样例库与安装资源,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,实�
 P03,偏好、语言、主题与真实缩放,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,设置即时并正确持久化；重置有明确范围，不删除文档/恢复记录；无截断到无法操作，快捷键反馈正确；不改变源。,,,,,明/暗 × 代表长短语言 × 100/150/200%或macOS实际档位；小窗口/重启。
 P04,窗口边角、首帧与输入可见性,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,按钮/边角命中正确；内容不被阴影边框遮住；光标与前文始终可见，无第一次缺caret或交替隐藏；拖动不与菜单混淆。,,,,,Windows/macOS/X11/Wayland；窗口/最大化/fullscreen；typewriter开/关；HiDPI。
 P05,真实连续输入与内存观察,P1,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,保存无丢重键；交互无新冻结/视口错误；记录全部样本、P50/P95/max和回落趋势；不把模型benchmark当键盘到GPU延迟。,,,,,四大小；密集单行/全局引用/图多另列；无编译并行负载；同机旧版对照。
-P06,真实上一版本升级与失败回退,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,只有明确用户动作才下载安装；dirty拒绝；未验证payload不执行；失败现安装仍可用；macOS/DEB/RPM走正确手动下载，不声称自替换。,,,,,Windows/AppImage成功；每种失败；macOS/DEB/RPM/不带公钥构建fallback。
+P06,真实上一版本升级与失败回退,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,默认可后台下载并验证；关闭自动下载时等待用户动作；安装始终需要明确确认且dirty拒绝；稍后保留本会话就绪包；未验证payload不执行；失败现安装仍可用；macOS/DEB/RPM走正确手动下载，不声称自替换。,,,,,Windows/AppImage成功；每种失败；自动下载开/关；后台到期/手动检查；Later/重开/dirty确认；macOS/DEB/RPM/不带公钥构建fallback。
 P07,最终标签包与公开元数据,P0,EXPAND_REQUIRED_VARIANTS,,,1,,NOT_RUN,程序/资源身份有链路；候选结果不冒充最终包；构建变化重跑相关项；required失败/未验无授权例外不能报告完成；签名及发布门禁保留。,,,,,GitHub/OSS；所有平台包；候选/最终构建映射；缺环境必须披露。

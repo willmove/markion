@@ -22,7 +22,7 @@ Executed on Windows 11 Pro 10.0.26300 x86_64 with PowerShell 7.6.9, Rust/Cargo 1
 | Formatting / Clippy | Passed; existing Clippy/linker warnings and proc-macro-error2 future-compatibility notice retained |
 | Pinned MarkNice bundle / examples | 23 files / 3,140,387 bytes verified; 18 Markdown examples, index and local references passed |
 | Acceptance fixture integrity | 62 cases / 14 documentation pages checked; fresh 160-file run prepared and baseline/working hashes verified |
-| Strict OpenSpec / README link checks / git diff --check | Final 96 items passed / 0 failed; 12 documents / 359 local links passed; diff check passed |
+| Strict OpenSpec / README link checks / git diff --check | Final 96 items passed / 0 failed; final documentation scan: 13 documents / 387 local links passed; diff check passed |
 
 The initial quality script passed formatting, Clippy, every workspace suite and bundle verification, then failed strict validation on the older `prefer-appimage-update-on-arch` delta. Its MODIFIED requirement omitted five newly archived background-update scenarios. Rebased that active delta on the current requirement while retaining its distribution mapping and all existing scenarios; no application or stable-spec edit was needed. The focused validation and final full strict validation then passed. The initial failure is retained in the hashed quality log; no test failure was hidden or converted to a pass.
 
@@ -44,7 +44,7 @@ The [maintained acceptance suite](../testing/README.md) requires platform/packag
 
 The [native acceptance record](release-v0.6.1/native-acceptance.md) identifies the limited development precheck, environment, binary/resource boundaries and the outstanding matrix.
 
-The full current-candidate/final-package native matrix has not been executed: Windows NSIS/ZIP actual save, IME and table workflows at real DPI variants; macOS arm64/Intel; Linux X11/Wayland DEB/RPM/AppImage interaction and IME; browser/WeChat/Word interoperability and actual DOCX producers; and dedicated clean previous-version Windows/AppImage upgrades. These remain NOT_RUN/BLOCKED, not PASS. Existing change-specific Windows evidence is linked above and is not relabeled as installed-package acceptance.
+The full current-candidate/final-package native matrix has not been executed: the final ZIP Source save/Undo subset below does not cover NSIS installation, actual IME/table/DPI variants, macOS arm64/Intel interaction, Linux X11/Wayland editing/input, browser/WeChat/Word and actual DOCX producers, or dedicated clean previous-version Windows/AppImage upgrades. Remaining variants stay NOT_RUN/BLOCKED, not PASS. Existing change-specific Windows evidence is linked above and is not relabeled as final installed-package acceptance.
 
 On 2026-11-18 (Asia/Shanghai), after reviewing the v0.6.1 candidate and the explicit incomplete scope, the maintainer authorized: **“允许本次例外，披露未验证范围并继续发布”** (“Allow this release-specific exception, disclose the unverified scope and continue publication”). Exception `V061-NATIVE-SCOPE` covers the incomplete full Windows installed-package/IME/DPI matrix, macOS/Linux native interaction, supported browser/WeChat/Word and actual-producer interoperability, and previous-version signed Windows/AppImage upgrade/soak/failure variants identified above and in the native report. The Windows development precheck remains a limited precheck; unexecuted cases remain NOT_RUN/BLOCKED, never PASS. The reason is that this run did not execute the exhaustive dedicated native/platform/interoperability/upgrade environments; the maintainer explicitly accepts that limitation for v0.6.1 only. The bilingual release notes disclose the gap. All automated source checks, native packaging/resource verification, no-GPU AppImage smoke, updater signing, assets, manifests and OSS verification remain mandatory.
 
@@ -54,8 +54,27 @@ Candidate packaging on `17db038`: [44122459859](https://github.com/willmove/mark
 
 - [x] Source checks and reviewed documentation complete.
 - [x] Release-specific native acceptance readiness or explicitly authorized exception recorded.
-- [ ] Dedicated Release Markion v0.6.1 commit and annotated tag pushed.
-- [ ] All four native builds, resource verification, AppImage smoke, signing, publication and mirror jobs succeed.
-- [ ] Seven packages, both signatures, channel-specific update.json, versions, hashes and public mirror reachability verified.
-- [ ] Actual macOS signing mode and final bilingual notes verified.
-- [ ] Latest stable non-draft metadata and final Git synchronization verified.
+- [x] Dedicated Release Markion v0.6.1 commit and annotated tag pushed.
+- [x] All four native builds, resource verification, AppImage smoke, signing, publication and mirror jobs succeed.
+- [x] Seven packages, both signatures, channel-specific update.json, versions, hashes and public mirror reachability verified.
+- [x] Actual macOS signing mode and final bilingual notes verified.
+- [x] Latest stable non-draft metadata and final Git synchronization verified.
+
+## Final publication evidence
+
+- Published [Markion v0.6.1](https://github.com/willmove/markion/releases/tag/v0.6.1) at **2026-11-18 01:08:11 Asia/Shanghai** as the latest stable, non-draft Release, titled `Markion v0.6.1`, with curated English-first/Simplified-Chinese notes and the full v0.6.0 comparison.
+- Immutable annotated tag object `7f997b30976482b5ac144a6cdde4d322208657d8` points to dedicated release commit `86de371421be1a772d48bcfa5ce9c547c88fe161`. No public tag was moved or recreated. The final commit's [quality run 44126537705](https://github.com/willmove/markion/actions/runs/44126537705) independently passed all 51 suites (2,238 / 0 / 5 ignored), formatting, Clippy, bundle and 96 strict OpenSpec items.
+- Authoritative [tag run 44126538925](https://github.com/willmove/markion/actions/runs/44126538925), **attempt 2**, passed all eight jobs: four native builds, no-GPU AppImage smoke, updater signing/metadata, GitHub publication and OSS mirror. Attempt 1's two macOS jobs never acquired a runner and timed out after 15 minutes; GitHub explicitly reported arm64 capacity constraints. The [original diagnostics](release-v0.6.1/attempt-1-runner-capacity.json) are retained. Retrying failed jobs preserved successful Windows/Linux results and the same tag. Redundant branch packaging on the identical final source was intentionally canceled; the earlier candidate packaging and both candidate/final quality runs passed.
+- [Machine-readable asset verification](release-v0.6.1-assets.json): all seven platform packages, both updater signatures and `update.json` are attached. All 13 public mirror objects returned HTTP 200. Every mirrored package was streamed and hashed; size and SHA-256 match GitHub asset digests and `sha256sums.txt`. Both update manifests declare 0.6.1, name their own distribution host, match in all other fields and carry signatures byte-identical to their channel's `.sig` files. Mirror `manifest.json` and `packager.toml` also declare 0.6.1.
+- Both macOS job logs explicitly report **`adhoc; notarize: false`**. README and release-note first-launch instructions retain `xattr -cr /Applications/Markion.app`. Updater Minisign authentication is not Authenticode or Apple notarization.
+- The actual no-GPU AppImage [screenshot](release-v0.6.1/appimage-smoke.png) was downloaded and inspected: the main window and Markdown content are visibly rendered. This establishes the CI smoke scope, not the full Linux interaction matrix.
+
+## Final Windows portable package verification
+
+The final ZIP's SHA-256 is `cfe10af0f20097dd4b06372f258d09d30a241a8443a690edcb0f36693bdde00e`. The extracted executable reports 0.6.1 and hashes to `3ea9f6a774207e781ad8a08209b46835f4ca747a5bf99b76b7c4fa80468502c6`.
+
+The initial local packaged-example helper rejected `01-getting-started.md`: the current local/Git blob uses LF (3,946 bytes), while the Windows CI checkout and ZIP use CRLF (4,005 bytes). This was a checkout-reference difference, not changed prose. Preserved the failed check and then compared **all 95 resource/license files** strictly against `git -c core.autocrlf=true cat-file --filters v0.6.1:<path>`, with unchanged tagged attributes; every byte matched, with no missing or extra payload files. The pinned MarkNice tree's explicit `eol=lf` remained byte-identical to canonical Git blobs. [Per-file identities and initial-check explanation](release-v0.6.1/final-package-resources.json). The packaged bundle independently verified 23 files / 3,140,387 bytes; examples comprise 18 Markdown files and one PNG.
+
+A fresh isolated run launched the extracted final ZIP with its own packaged assets and APPDATA/LOCALAPPDATA, without installing over the daily app. Actual Source typing and Save produced the complete independently expected **83-byte** file, including an unchanged Chinese table; one Undo and Save restored the complete **80-byte** baseline. The test process was closed. [Final identity and byte checks](release-v0.6.1/final-native-smoke.json), [window](release-v0.6.1/final-portable-window.png), [saved source](release-v0.6.1/final-source-saved.png), [restored source](release-v0.6.1/final-source-restored.png). This passes that portable-package subset only; the remaining native matrix stays explicitly unverified under `V061-NATIVE-SCOPE`.
+
+Post-publication records also align the P06 CSV template with its already updated case: default background download/staging is allowed, while installation requires explicit confirmation and a final dirty-document check. No application or packaged resource bytes changed after tagging. Subsequent commits contain verification/documentation only; main is synchronized with origin and the release tag remains on the dedicated release commit.

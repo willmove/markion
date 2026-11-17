@@ -41,7 +41,9 @@
   "raw_log_sha256": {
     "cargo-check.log": "0fa1666f0bc1d04973a52ef8870255432e62839c3d8394fb3881b7fa0482839a",
     "quality.log": "13b7b5f7af5e36c81a478a701b89b42d5c1d75e39c3d5caa051cbdfce3db6285",
-    "openspec-final.log": "a7fb79a9558b2c57874c07b3b1043b63012306b28bf3d9cd0d33f66123cbbfb3"
+    "openspec-final.log": "a7fb79a9558b2c57874c07b3b1043b63012306b28bf3d9cd0d33f66123cbbfb3",
+    "assets-verification.log": "9812188d5a586c35b18a1a71b489abfa65911a69d57f20f322269c5a77ad139c",
+    "final-pinned-bundle.log": "ea2927753ef384a8288b2f664f3bd6d5aafbfc4bb998de2c053e15cb98f3e08b"
   },
   "native_development_precheck": {
     "exe_sha256": "2E80B7B385E56DF0E8F9A463E88D8E5A87004C3E1EBFDFD5927F2B161823C052",
@@ -66,5 +68,29 @@
     "log_sha256": "35fc68f59979874fffa472a7def5fe5803d61c6a69a1a18cd5e81e36976676d8"
   },
   "candidate_packaging_workflow_url": "https://github.com/willmove/markion/actions/runs/44122459859",
-  "candidate_packaging_conclusion": "success: four native builds, resources and no-GPU AppImage smoke"
+  "candidate_packaging_conclusion": "success: four native builds, resources and no-GPU AppImage smoke",
+  "release_commit": "86de371421be1a772d48bcfa5ce9c547c88fe161",
+  "annotated_tag_object": "7f997b30976482b5ac144a6cdde4d322208657d8",
+  "final_quality_workflow_url": "https://github.com/willmove/markion/actions/runs/44126537705",
+  "final_quality_workflow_conclusion": "success",
+  "final_quality_checks": {
+    "commit": "86de371421be1a772d48bcfa5ce9c547c88fe161",
+    "workspace_suites": 51,
+    "passed": 2238,
+    "failed": 0,
+    "ignored": 5,
+    "strict_openspec_passed": 96,
+    "strict_openspec_failed": 0,
+    "log_sha256": "e1f8c19e1e48a4f12bd337c910ac5736e82c3018af1cff98f8eb8d5e3f63392a"
+  },
+  "publication_workflow_url": "https://github.com/willmove/markion/actions/runs/44126538925",
+  "publication_workflow_attempt": 2,
+  "publication_workflow_conclusion": "success",
+  "final_native_smoke": "release-v0.6.1/final-native-smoke.json",
+  "final_resources": "95 files matched exact tagged Windows checkout bytes; initial LF/CRLF local-reference failure retained.",
+  "final_documentation_checks": {
+    "files": 13,
+    "local_links_checked": 387,
+    "errors": []
+  }
 }

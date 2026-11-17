@@ -1,6 +1,6 @@
 # Markion v0.6.1 native acceptance record
 
-Date/time: 2026-11-18, Asia/Shanghai. Stage: candidate development precheck; final package acceptance remains separate.
+Date/time: 2026-11-18, Asia/Shanghai. Stages: candidate development precheck, final Windows ZIP subset and CI AppImage smoke; the full native matrix remains separately unverified.
 
 ## Build and environment identity
 
@@ -22,17 +22,25 @@ The text API is not an actual IME composition/candidate exercise. An attempted C
 
 | Scope | Current result | Reason |
 | --- | --- | --- |
-| Windows NSIS/ZIP installed-package, real input/IME, table and DPI variants | NOT_RUN | Only the labeled development precheck above was executed; no dedicated installer/upgrade test account |
+| Full Windows NSIS/ZIP installed-package, real input/IME, table and DPI matrix | NOT_RUN for remaining variants | Development precheck and the final ZIP Source subset below passed; NSIS/upgrade, IME/table/DPI variants remain unexecuted |
 | macOS arm64 and actual Intel DMG interaction/Gatekeeper/IME | BLOCKED | No dedicated native release-test environment used in this run |
 | Linux X11/Wayland DEB/RPM/AppImage interaction, IBus/Fcitx and CSD | BLOCKED | No dedicated native desktop environment used in this run |
 | Browser/WeChat/Word, actual DOCX producer corpus and viewer layout | NOT_RUN | Full supported interoperability matrix not executed |
 | Previous-version Windows/AppImage signed upgrade, Later/reopen, dirty refusal and failure recovery | NOT_RUN | Requires final signed metadata and dedicated isolated system environments |
 | Five-hour wall-clock update soak and full native performance/input matrix | NOT_RUN | Automated deterministic scheduling tests and historical measurements do not establish these results |
 | Automated workspace/bundle/examples/OpenSpec | PASS within CLI/GPUI scope | See [source check record](../release-v0.6.1-source-checks.json); 5 ignored tests remain ignored |
-| Final packages, signatures, manifests and mirror | NOT_RUN | Await authoritative tag run and asset verification |
+| Final packages, signatures, manifests and mirror | PASS within CLI/CI scope | Tag attempt 2 all eight jobs passed; seven packages, two signatures, both manifests, all 13 mirror objects and payload hashes verified |
 
 The 62-case template is a group inventory, not an expanded executed-variant count. No coverage percentage or full-suite native PASS is claimed. The per-variant matrix was not executed and remains unverified. Existing historical evidence is not attributed to this binary.
 
 ## Release-specific decision
 
 Exception `V061-NATIVE-SCOPE`, authorized 2026-11-18 (Asia/Shanghai): **“允许本次例外，披露未验证范围并继续发布”**. The maintainer explicitly accepted the incomplete Windows installed-package/IME/DPI, macOS/Linux interaction, browser/WeChat/Word/producer and dedicated previous-version signed-upgrade matrix for v0.6.1. The [preflight](../release-v0.6.1-preflight.md) records scope and reason. This does not change NOT_RUN/BLOCKED to PASS or authorize an exception for another release. Automated native packaging/resource verification, no-GPU AppImage smoke, updater signing, all assets, hashes and both update channels remain mandatory. The final release notes disclose the unverified matrix.
+
+## Final-tag Windows portable subset and CI smoke
+
+- Final commit `86de371421be1a772d48bcfa5ce9c547c88fe161`, tag object `7f997b30976482b5ac144a6cdde4d322208657d8`; [tag run](https://github.com/willmove/markion/actions/runs/44126538925), attempt 2, all eight jobs passed. Attempt 1's two unacquired macOS runners are retained as an [infrastructure failure](attempt-1-runner-capacity.json), not a native pass.
+- Final ZIP SHA-256 `cfe10af0f20097dd4b06372f258d09d30a241a8443a690edcb0f36693bdde00e`; executable version 0.6.1, SHA-256 `3ea9f6a774207e781ad8a08209b46835f4ca747a5bf99b76b7c4fa80468502c6`, PID 21260. [Identity/results](final-native-smoke.json).
+- Fresh `target/tmp/release-v0.6.1/final-acceptance-run`, same deterministic 160-file fixture manifest, separate roaming/local profiles and disabled auto-save/downloads. Resource lookup used the extracted package, with its directory as the working directory; the pinned bundle verified 23 files / 3,140,387 bytes. Every one of 95 resources/license files matched exact tagged Windows checkout bytes. The initial local LF-reference failure and CRLF analysis are retained in [resource verification](final-package-resources.json); no packaged file was rewritten.
+- Actual pointer focus, Source text entry ` QA`, Ctrl+S: full **83-byte** output matched [independent expected source](final-expected-edited.md), SHA-256 `8b4d6b64a3d4b607aebd757e25cd091769a2d22be165929024fe4d544586865f`. One Ctrl+Z and Ctrl+S restored the full [80-byte baseline](final-expected-baseline.md), SHA-256 `ba4e8d066ded875768fa2da850f5f887ebdedc5f7aa29e0fb274c98002b34e91`. The Chinese table remained byte-exact. [Window](final-portable-window.png), [save](final-source-saved.png), [restoration](final-source-restored.png).
+- Only the new isolated test process was closed; its window disappeared. The actual CI [AppImage screenshot](appimage-smoke.png) was also inspected and visibly renders the main window and Markdown content without a GPU. These results do not establish full IME, clipboard, viewer, installation/upgrade or other native variants.

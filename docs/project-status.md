@@ -1,15 +1,15 @@
 # Project status / 项目进展
 
-Updated / 更新：2026-11-17。This snapshot describes repository implementation and recorded evidence; publication is tracked separately below. 本页区分代码实现、已有证据与发布状态，不以任务勾选数代替验收结果。
+Updated / 更新：2026-11-18。This snapshot describes repository implementation and recorded evidence; publication is tracked separately below. 本页区分代码实现、已有证据与发布状态，不以任务勾选数代替验收结果。
 
 ## Release state / 发布状态
 
-- v0.6.1 preparation / 准备中：韩语界面、可调行距与段距、后台更新准备，以及保留内容的表格/分隔线插入。README 已同步；当前源码和原生验收、构建、签名、镜像仍按 [v0.6.1 preflight](verification/release-v0.6.1-preflight.md) 逐项验证，尚未宣称发布完成。
+- v0.6.1 published / 已发布：韩语界面、可调行距与段距、后台更新准备，以及保留内容的表格/分隔线插入；八种 README 已同步。Windows workspace **2,238 passed / 5 ignored / 0 failed**，四个原生构建、AppImage 冒烟、签名、发布和镜像均通过，七包及签名/清单/哈希完成核验，最终 Windows ZIP 保存/撤销子集通过。完整人工矩阵按本次明确授权保留为未验证，见 [v0.6.1 preflight](verification/release-v0.6.1-preflight.md)。
 
 - v0.6.0 published / 已发布：紧凑上下文菜单、表格与图片属性、斜杠/emoji 补全、独立右侧大纲及离线样例库；Windows workspace **2,216 passed / 5 ignored / 0 failed**。四个平台打包、AppImage 冒烟、签名、发布、镜像及哈希验证均完成；未验证人工项按维护者授权明确跳过，见 [v0.6.0 preflight](verification/release-v0.6.0-preflight.md)。
 
-- Latest verified public stable tag / 当前公开稳定版本：[`v0.6.0`](https://github.com/willmove/markion/releases/tag/v0.6.0).
-- Published comparison / 本次完整对比：[`v0.5.3...v0.6.0`](https://github.com/willmove/markion/compare/v0.5.3...v0.6.0).
+- Latest verified public stable tag / 当前公开稳定版本：[`v0.6.1`](https://github.com/willmove/markion/releases/tag/v0.6.1).
+- Published comparison / 本次完整对比：[`v0.6.0...v0.6.1`](https://github.com/willmove/markion/compare/v0.6.0...v0.6.1).
 - Previous v0.5.3 preflight / 上一版本记录: **2136 passed / 5 ignored / 0 failed**, bundle verification and build/lint/spec checks pass; the tag packaging/signing/publication/mirror workflow and Windows repository quality gate passed. 本次全量回归、标签构建/签名/发布/镜像及 Windows 仓库质量检查已通过；缺少环境的人工项按维护者授权记录为跳过；详见 [v0.5.3 preflight](verification/release-v0.5.3-preflight.md)。
 - Follow the [release process](release-process.md). A prepared version or successful build alone does not establish publication: native packages, updater signatures and manifests, the AppImage smoke test, OSS mirror, release notes, and required manual evidence must be verified. 准备版本号或构建成功不等于发布完成；安装包、签名、元数据、冒烟测试、镜像与人工验证均须核实。
 

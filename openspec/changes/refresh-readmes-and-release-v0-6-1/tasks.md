@@ -11,5 +11,9 @@
 
 ## 3. Publication and final verification
 
-- [ ] 3.1 Push the reviewed main branch and a new annotated v0.6.1 tag on the dedicated Release Markion v0.6.1 commit after acceptance readiness; monitor every native build, smoke, signing, publication and mirror job to success.
-- [ ] 3.2 Publish final bilingual notes; verify seven packages, both signatures, update.json, manifest hosts/versions/signatures, mirror hashes/reachability, actual macOS signing mode and stable non-draft metadata. Retain final evidence and verify Git synchronization.
+- [x] 3.1 Push the reviewed main branch and a new annotated v0.6.1 tag on the dedicated Release Markion v0.6.1 commit after acceptance readiness; monitor every native build, smoke, signing, publication and mirror job to success.
+- [x] 3.2 Publish final bilingual notes; verify seven packages, both signatures, update.json, manifest hosts/versions/signatures, mirror hashes/reachability, actual macOS signing mode and stable non-draft metadata. Retain final evidence and verify Git synchronization.
+
+## Final verification — 2026-11-18
+
+Published v0.6.1 at 86de371421be1a772d48bcfa5ce9c547c88fe161 with immutable annotated tag 7f997b30976482b5ac144a6cdde4d322208657d8. Final quality: 2,238 passed / 0 failed / 5 ignored, 96 strict OpenSpec items. Tag run 44126538925 attempt 2: all eight jobs passed after retained hosted-macOS capacity failures on attempt 1. Seven packages, both signatures, channel manifests, 13 mirror objects and all payload hashes verified. Final Windows ZIP Source save/Undo and no-GPU AppImage smoke passed within their documented subset; full native matrix remains unverified under the explicit v0.6.1 maintainer exception. The local LF-reference package-check failure was preserved, then all 95 resource/license files matched exact tagged Windows checkout bytes; no payload was altered. See docs/verification/release-v0.6.1-preflight.md and its linked machine-readable records.

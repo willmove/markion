@@ -1,0 +1,5 @@
+Exception: <repo>\scripts\verify-examples.ps1:79
+Line |
+  79 |              throw "Packaged example differs from the source: $relativ …
+     |              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Packaged example differs from the source: 01-getting-started.md

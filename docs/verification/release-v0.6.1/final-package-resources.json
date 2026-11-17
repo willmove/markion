@@ -1,0 +1,681 @@
+{
+  "tag": "v0.6.1",
+  "release_commit": "86de371421be1a772d48bcfa5ce9c547c88fe161",
+  "package": "markion_0.6.1_x64-portable.zip",
+  "package_sha256": "cfe10af0f20097dd4b06372f258d09d30a241a8443a690edcb0f36693bdde00e",
+  "result": "PASS",
+  "reference": "Exact tagged Git Windows checkout: core.autocrlf=true; unchanged tagged .gitattributes, including MarkNice eol=lf. No packaged bytes were modified.",
+  "files_verified": 95,
+  "example_files_verified": 19,
+  "pinned_bundle_files_unchanged_from_git_blob": true,
+  "initial_local_helper_failure": "Local working-tree examples are LF, while the Windows runner checkout/package uses CRLF. The initial strict local-worktree comparison failed at 01-getting-started.md; retained in final-package-resources.log. All package files subsequently matched exact tagged Windows checkout bytes.",
+  "files": [
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 2303,
+      "sha256": "80032be18b9c7ce0c3b9f82d3b78f0cd57119f0f250bf23d94bc375fbe99bc7a",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/01-getting-started.md",
+      "bytes": 4005,
+      "sha256": "66671fb9a5a1e007b76fe83bc8a3b6b8489a6565c06865a8aa01a2286c6b3ca8",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/02-markdown-formatting.md",
+      "bytes": 2673,
+      "sha256": "8ac7f0ac23727cb5bfbb006e0bab9e1a0aac10b0e60208b3646919554df4751d",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/03-tables-and-html.md",
+      "bytes": 2736,
+      "sha256": "d5a62cf3b99f5ab3279ef55cde9e7be3cd488f2c4af6faf1ee881f8c8482178d",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/04-code-math-diagrams.md",
+      "bytes": 2392,
+      "sha256": "4929ae477b5c28aed0f594aa594f33feaf6409c7783cad0cd53e805942063e32",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/05-images-links-export.md",
+      "bytes": 2864,
+      "sha256": "d3c778fcfa2afa0320714daa9c41bcf7b066f2c89b2536f1e1106e9766b73152",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/10-daily-note.md",
+      "bytes": 1163,
+      "sha256": "7047569470d940ccd183a235d36f3c293f74f0b627f2b6b3d62eb4683a6b2b3f",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/11-meeting-notes.md",
+      "bytes": 1312,
+      "sha256": "c4b03bd6c1b4d2513eec66d503e8522927335490f28abefe4b2c222d841e5a76",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/12-weekly-report.md",
+      "bytes": 1317,
+      "sha256": "92aba0a36dbb2291ddcca629015df163c7e3dcedaaa1bfd4d5ec2a01356dfc21",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/13-project-plan.md",
+      "bytes": 1933,
+      "sha256": "fc76587a3211343c89b626f9bb3d3697b1d86b17725f0de6f521e003f0ac1335",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/14-feature-spec.md",
+      "bytes": 1506,
+      "sha256": "33f4345785b24def02fd28d6b337cb032951490c0fa26e1b964f8ab6c8fe7475",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/15-reading-notes.md",
+      "bytes": 1412,
+      "sha256": "a2bdc1e6a2a92fe9eb5a1fbbbd19ebd0e9511c6b192993471185412035e0f50e",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/16-how-to.md",
+      "bytes": 1699,
+      "sha256": "a6aae6f08a87e2d9cb77d54cff92f29590836bc8467d2e8658c79e1d5b645d72",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/17-article-draft.md",
+      "bytes": 1697,
+      "sha256": "91aa838681f74de617d2ef6446e50c148dc31b67bc831e1838462344cacf57f6",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/18-troubleshooting.md",
+      "bytes": 1766,
+      "sha256": "a94fd59e9a952f44ef43e557757452a6005a2ad21b386a1b0a99039cf7a46799",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/19-changelog.md",
+      "bytes": 1237,
+      "sha256": "e36978a895aacb346ccb3a4fc754fcb87538d736a59758abc013998b2f847ad2",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/20-resume.md",
+      "bytes": 1640,
+      "sha256": "6e37e8c65751666bb43cbafcd7ae1975f7bfca0f41c6ab940420d639a35f7059",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/21-study-plan.md",
+      "bytes": 1536,
+      "sha256": "287f56549c56b5a95941d2c58f75df8d4134b4ac091b07ed86baed59c7d296f7",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/README.md",
+      "bytes": 5089,
+      "sha256": "449b7a5a475dd8d988b595823923f52028ddc8a91a528ddcc19012640cfe9ce8",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/examples/images/markion.png",
+      "bytes": 39045,
+      "sha256": "3b0b70cad2c4dc37f709ada9caf1459feca79c6be4aec88f0f535d8f88ac06bd",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/LICENSE.lucide",
+      "bytes": 3251,
+      "sha256": "6fc5b7332939dd5c61af3a5f97450f7bc05d4a396dd0bc21ac341716b3b05096",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/align-center.svg",
+      "bytes": 209,
+      "sha256": "09ff54e142c4397a1156f2ceac2b215d42d14a3a70cbc149ed74a849850079f7",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/align-left.svg",
+      "bytes": 209,
+      "sha256": "d56afb16ab0c116a0b9b17108eaf804d9129db820bb287039e14b301ef820f9e",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/align-right.svg",
+      "bytes": 211,
+      "sha256": "5a8b670f22654277590305839c5391223783e3002854365fa129a6f0e6145788",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/arrow-down.svg",
+      "bytes": 199,
+      "sha256": "29a21991c59e59354d3a038a1de5e5a5cf6fac8c0c0c1a9ac6be5cc40c1e43b0",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/arrow-up.svg",
+      "bytes": 275,
+      "sha256": "2736a678677bce07b3dea606e4ff75ad7de4d9eaed031f649f1d946a970eeda8",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/braces.svg",
+      "bytes": 394,
+      "sha256": "52b69e58ad7e2a9371953636e76a33930cc9f4db7ba8130d19dd69e195bf8e51",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/check.svg",
+      "bytes": 252,
+      "sha256": "68901c2e732dad8a92dae26f109f3de4ce95812029b50432a899cd96ff768360",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/chevron-down.svg",
+      "bytes": 249,
+      "sha256": "df0809577fd4661afa2e6335dc6773286f510ce6b93d9a2822fc332f8fdf2cf0",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/chevron-right.svg",
+      "bytes": 250,
+      "sha256": "5dcd9f62b8b9713f147a7f172f997fc5f6b9a936310e5fd77d53d9ea650e996b",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/clipboard.svg",
+      "bytes": 298,
+      "sha256": "3e4a8aefcd7de9ff2f42847aa709e462e67cf8f6f45300d2941d68b1efb361a0",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/clock.svg",
+      "bytes": 285,
+      "sha256": "e90d3294b13703b0db498272f8198c97aaa54aa73c02c2fe1d7bdf368992c863",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/copy-plus.svg",
+      "bytes": 302,
+      "sha256": "f5a555d2448f6e8ba66c1e767e25c1116c8876a631f679646a2912eae1df9fb5",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/copy.svg",
+      "bytes": 353,
+      "sha256": "f3a752d8c4ad07a69ead10b0856395a5d37eae38896b86b97e4b9fe2cb4f9495",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/cut.svg",
+      "bytes": 282,
+      "sha256": "1a6f95b408296c71dfda0886ae325cd9a04c673b4f6bb380edb0952151d8da20",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/download.svg",
+      "bytes": 240,
+      "sha256": "474255f4623ace14b6444817f3dfc057ca631c31fdefc3cc183e31f93f8f5ca2",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/file-code.svg",
+      "bytes": 460,
+      "sha256": "884a82dab8240fc654aa5d8fab99f5d5134a609a7c5c9898a768aae0c54c38de",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/file-cog.svg",
+      "bytes": 751,
+      "sha256": "b16a3b350938530586465e8badf9ff712dbe409411ac18fce384153ee0d6a4f2",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/file-image.svg",
+      "bytes": 487,
+      "sha256": "2df6b0b30fea468297692a6f80d1b03c0c4f83ceba7fa561b44df14afe47c8c1",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/file-text.svg",
+      "bytes": 461,
+      "sha256": "b0e47486380ffca86daba9d7ddb6d4113e21a0c42930e140cedd6a703515dc02",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/file.svg",
+      "bytes": 387,
+      "sha256": "19bcc35ad103f402c228ecfe39a2100b3f14450695cd9063314ab1c9463b2189",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/folder-open.svg",
+      "bytes": 414,
+      "sha256": "5bf197d963fcc382548e42564462ade47cdc0979257edd2ca2fc654621b0aecf",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/folder.svg",
+      "bytes": 355,
+      "sha256": "4074731c598ed2773f1063855bcd47b9359a73e3c35d4cd1e5578b2f97361bfa",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/info.svg",
+      "bytes": 309,
+      "sha256": "f970e5e71c5dd8761aa4833425c0332fd6f6470d03f0adcf4edd848e52579292",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/lightbulb.svg",
+      "bytes": 386,
+      "sha256": "be0dee94416f1c8ee309d9aec315180270e020056e0d27af5813d8702360b961",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/link.svg",
+      "bytes": 334,
+      "sha256": "c260d21a48c584a835fb144fc7d27a3e8148733233e9641232054190260d9ce0",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/list-ordered.svg",
+      "bytes": 257,
+      "sha256": "52af83fd2165c0cf8dbd56c8c10066387aef95005ecf101d98097303db23a558",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/list-todo.svg",
+      "bytes": 259,
+      "sha256": "22b3e446e2541b2bbf0c48c860e5b374f56a75cbd1d186f52696982127f4afa6",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/list.svg",
+      "bytes": 233,
+      "sha256": "e1a4a587d7d324c1d55b40bf1efe905a4dddfd0dd524c64a87490d579b34ac48",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/message-square-warning.svg",
+      "bytes": 349,
+      "sha256": "955d76575302f9c4428fa269e7caf80769b3bdb75a3080dc47abadc5a10b7de7",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/minus.svg",
+      "bytes": 245,
+      "sha256": "4479adf4ac7effde850681e1409f02ea2df669b03edcf1f067c2ca07ac6d2e9e",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/octagon-alert.svg",
+      "bytes": 525,
+      "sha256": "c43c63122dc31591d3b5c21cde14b9572b9c6a7db612a96a01ed0f315685830d",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/paperclip.svg",
+      "bytes": 357,
+      "sha256": "e04d79eead1095d75f9f85c7ec992727f41f9128553619dd668476566ffa188f",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/plus.svg",
+      "bytes": 270,
+      "sha256": "f50294735c162595ea59e425a098d4e3679a89b82f1efd06779425a5922720c2",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/quote.svg",
+      "bytes": 262,
+      "sha256": "f42efb894fed9bc291082b52ef7218a84aa7318c19260f0ba8c7e725e3690d2e",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/settings.svg",
+      "bytes": 600,
+      "sha256": "71971561be289afbcd1f2f1f83fe2cd5936681ad17d590c5524b5f3b5073784a",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/sigma.svg",
+      "bytes": 202,
+      "sha256": "0f4235d4d8b51e22de384257f0f2ff5df5da33e2ff12f0da541a93e2255ac232",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/square.svg",
+      "bytes": 274,
+      "sha256": "edf70b79082fb26beccb89b4fb5cebbbeeb7f68e71a87a03b4a8a7872489ccf8",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/table.svg",
+      "bytes": 247,
+      "sha256": "e1325d305e0a9abb78bba5838682792bb9614afd3c7d3a9382099655379251b8",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/text.svg",
+      "bytes": 210,
+      "sha256": "772dcff8f9a6a4eff90585baf4c2ac8900c38f46982fe876b13010c2c1f0a13f",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/trash.svg",
+      "bytes": 406,
+      "sha256": "893e0f5c6bda2007d81f8fa3cc968406ea5286eb050167cd025f5cc3dd353614",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/triangle-alert.svg",
+      "bytes": 360,
+      "sha256": "fb500bf7f29134f3e26a06c2b0e0478e188d4180d7bfc0b0298cf1c1c4eb1ad0",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/upload.svg",
+      "bytes": 240,
+      "sha256": "5f95a20a8c8e275ddb89c0e4476a9da641a7ef4406d749c581e8c539d957c39e",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/icons/ui/x.svg",
+      "bytes": 274,
+      "sha256": "5b4165ae1f49b53694ba06340e7580d81dedadd1e17b286e3a0147cf957b97f3",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/markion-logo.svg",
+      "bytes": 918,
+      "sha256": "0341e6ec6532d4b279c51cbe513b0b5570ad5639daabeea59e40bbc38c324c2c",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/markion.icns",
+      "bytes": 187399,
+      "sha256": "748b313d46d7b5ef849c5f8f778e14de4f361c69a26025098ae2aab18a7f3e33",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/markion.ico",
+      "bytes": 45298,
+      "sha256": "10c4cedb1fe1eb29d5a05d3e96e0cdc04739d2766fa49769652b72b977eee539",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/markion.png",
+      "bytes": 39045,
+      "sha256": "3b0b70cad2c4dc37f709ada9caf1459feca79c6be4aec88f0f535d8f88ac06bd",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/LICENSE.html-docx-js.txt",
+      "bytes": 1081,
+      "sha256": "5746fa04896076c29db8ed46105d6ca2fe9b596550e8a7e0194c5fe2dd3e8a01",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/LICENSE.jszip.txt",
+      "bytes": 33753,
+      "sha256": "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/LICENSE.marked.txt",
+      "bytes": 2942,
+      "sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/LICENSE.marknice.txt",
+      "bytes": 1065,
+      "sha256": "48e43d00c3a2ae3aff3b5ef23825064ece9efe9d8f27bd4421a2e0df35c4bd39",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/LICENSE.mathjax.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/bundle-manifest.json",
+      "bytes": 6228,
+      "sha256": "e45d0d19db043a43f05e02a5a7577211cc2e5fa3e977a90d2b1349806d156f42",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/index.html",
+      "bytes": 10780,
+      "sha256": "a6fe0494278648e32409a61b9a7c2feb750848ac1f94c6a4d09c409491ea9d69",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/bridge.js",
+      "bytes": 40914,
+      "sha256": "6c5c25aadf048636180a96e60e95507224ce23a631476902905499cec5f026d5",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/compatibility-corpus.json",
+      "bytes": 814,
+      "sha256": "a7b3e78ae5db5b956ba6557c3fc080dce6fc55efd3330ffdba45e7a3275e34aa",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/compatibility-golden.json",
+      "bytes": 1203,
+      "sha256": "0c4045714c837051b078f08165814ac04fc9ed23c921e6f062b206ab921b26d5",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/docx-compatibility-fixture.json",
+      "bytes": 1190,
+      "sha256": "658fa1b6c54498e4646570f3d6874d30512d49036ddc5601ade47fd1ded6bb3c",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/export-runtime.js",
+      "bytes": 21073,
+      "sha256": "7c5a8ef23686cac89e038bc158c041657830e0e47dc8042b5de38b616ae57d36",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/marknice-format-runtime.js",
+      "bytes": 11900,
+      "sha256": "b8583f9713374348173f5309e6826d3452fd9096144957bf6c5d4f345fc8dcb6",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/marknice-word-import-runtime.js",
+      "bytes": 30632,
+      "sha256": "db88f665dc95711b2c3f5ec49d6e01072e3b1237003db460a89dc09e2ea8b68a",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/marknice-word-runtime.js",
+      "bytes": 16348,
+      "sha256": "7a68555795b74fd7df4e644bc4c3a7e7c570cec05be4790771466b611f20c929",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/math-runtime.js",
+      "bytes": 11504,
+      "sha256": "cbfb5d80eb094ef542897e49d86555f91146371dace87c0706704b5426e5aa38",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/self-test.html",
+      "bytes": 3980,
+      "sha256": "3b9d506ac73421534fb5a6ae3bb449f3306f2b33adc6194d551f89323ccbbe0c",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/self-test.js",
+      "bytes": 34059,
+      "sha256": "50e621a51a5735a436d2f1088260cd608796dbeeb45b80d1b6810b2cb2d7f9d6",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/theme-runtime.js",
+      "bytes": 34064,
+      "sha256": "46b698699d618ad3518d83b5d81bb425cd42f317b4e3e4c468cf65429cc56628",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/vendor/html-docx.js",
+      "bytes": 416065,
+      "sha256": "e5b9717420117a9ee585538c8263e8cf3f56822cd3994b9402a08e8f1dd81cb9",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/vendor/jszip.min.js",
+      "bytes": 97630,
+      "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/vendor/marked.umd.js",
+      "bytes": 73384,
+      "sha256": "d7931d1cd7bf727dd756c871637edcc9e0f8538003b927368400ec1ee47a9dd9",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/vendor/tex-svg-full.js",
+      "bytes": 2275113,
+      "sha256": "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/marknice-workspace/static/workspace.css",
+      "bytes": 9535,
+      "sha256": "953379bbb25c182c959d25e508186afbd632c52f98725ed38737717473691a50",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/templates/README.md",
+      "bytes": 1440,
+      "sha256": "5b0ca1e9fff97d70e579e2538d2950ca88a7b9c03fb292ef5589eef59034493d",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/templates/build_reference_docx.py",
+      "bytes": 26943,
+      "sha256": "ad354b7e0a947e68dab5e6072aa94d2e2ac66b9823a0d6d433dd372887d04b17",
+      "differs_from_canonical_git_blob": true,
+      "difference_only_lf_to_crlf": true
+    },
+    {
+      "path": "assets/templates/reference.docx",
+      "bytes": 6175,
+      "sha256": "054dad6164c2f6ae8930e0e1f0d6684f4c6e7a9a5fa4e341ff3eeae656b4d75f",
+      "differs_from_canonical_git_blob": false,
+      "difference_only_lf_to_crlf": true
+    }
+  ],
+  "initial_local_helper_raw_log_sha256": "813c8fd98764ea0ad8dafcbe507cf17ed8e63d4706beda27d50077c32e9495f5",
+  "initial_local_helper_retained_evidence": "initial-working-tree-reference-check.txt"
+}

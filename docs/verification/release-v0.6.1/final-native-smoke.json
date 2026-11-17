@@ -1,0 +1,23 @@
+{
+  "release_commit": "86de371421be1a772d48bcfa5ce9c547c88fe161",
+  "exe_sha256": "3ea9f6a774207e781ad8a08209b46835f4ca747a5bf99b76b7c4fa80468502c6",
+  "exe_product_version": "0.6.1",
+  "pid": 21260,
+  "run": "target/tmp/release-v0.6.1/final-acceptance-run",
+  "fixture_manifest_sha256": "f2ea48d67f62b383cdc92dce5772fa379cbb495f0dd93dc050ccae3b303723aa",
+  "package_resource_files_verified": 95,
+  "packaged_examples_verified": 19,
+  "pinned_bundle_files": 23,
+  "pinned_bundle_bytes": 3140387,
+  "final_portable_launch": "PASS",
+  "source_edit_ui_save_full_expected_bytes": "PASS (83 bytes)",
+  "single_undo_ui_save_full_baseline_bytes": "PASS (80 bytes)",
+  "baseline_sha256": "ba4e8d066ded875768fa2da850f5f887ebdedc5f7aa29e0fb274c98002b34e91",
+  "edited_sha256": "8b4d6b64a3d4b607aebd757e25cd091769a2d22be165929024fe4d544586865f",
+  "restored_actual_sha256": "ba4e8d066ded875768fa2da850f5f887ebdedc5f7aa29e0fb274c98002b34e91",
+  "package_resources_reference": "Exact tagged Windows Git checkout; 95 resource/license files matched with core.autocrlf=true and tagged .gitattributes. Initial LF-working-tree comparison failure retained.",
+  "pinned_bundle_result": "23 files / 3140387 bytes verified",
+  "full_native_matrix": "Only this Windows portable synthetic Source save/undo subset and CI AppImage smoke passed; remaining matrix remains unverified under V061-NATIVE-SCOPE.",
+  "test_instance_closed": true,
+  "package_sha256": "cfe10af0f20097dd4b06372f258d09d30a241a8443a690edcb0f36693bdde00e"
+}
