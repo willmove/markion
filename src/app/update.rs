@@ -1,4 +1,4 @@
-//! In-app "Check for Updates" action.
+//! Periodic discovery, authenticated update staging and explicit restart handoff.
 //!
 //! Fetches the repository's latest published GitHub Release through the GitHub
 //! REST API, compares its `tag_name` against `env!("CARGO_PKG_VERSION")`, and
@@ -8,22 +8,15 @@
 //! - same/older version -> "up to date";
 //! - fetch or parse failure -> error dialog (no crash).
 //!
-//! Windows x86_64 tagged builds with an embedded updater public key can, after
-//! explicit user confirmation, download a signed NSIS installer, verify its
-//! cargo-packager Minisign signature, launch it in passive mode, and exit.
-//! Linux x86_64 builds launched as an AppImage (the AppImage runtime exports
-//! `APPIMAGE`) can likewise download the signed AppImage, verify it, replace
-//! the running AppImage file in place, and relaunch the updated copy. DEB/RPM
-//! installs cannot self-replace without root, so they — like macOS and keyless
-//! builds — open the matching Release asset in the system browser. All network
-//! and installer work runs off the render path and never touches
-//! cached-per-version Markdown state.
+//! Windows x86_64 and Linux AppImage tagged builds use authenticated packages.
+//! Downloads are staged independently of installation; only an explicit restart
+//! confirmation with clean documents permits installation. Other packages retain
+//! browser downloads. No update work invalidates version-cached Markdown state.
 
 use super::*;
 use anyhow::{Context as _, Result, anyhow};
 use gpui::AnyWindowHandle;
 use serde::Deserialize;
-use serde_json;
 use std::env::consts;
 
 /// GitHub's unauthenticated "Get the latest release" endpoint. GitHub Releases
@@ -145,20 +138,147 @@ fn current_update_primary_action() -> UpdatePrimaryAction {
     )
 }
 
+/// Session-scoped update state. Only one operation or prompt can own the flow.
+#[derive(Default)]
+pub(super) struct UpdateState {
+    busy: bool,
+    prompt_open: bool,
+    pub(super) installing: bool,
+    ready: Option<Arc<ReadyUpdate>>,
+}
+
+impl UpdateState {
+    fn can_check(&self) -> bool {
+        !self.busy && !self.prompt_open && !self.installing && self.ready.is_none()
+    }
+
+    fn should_check(
+        &self,
+        last: Option<&str>,
+        now: time::OffsetDateTime,
+        startup_override: bool,
+    ) -> bool {
+        self.can_check() && (startup_override || update_check_due(last, now))
+    }
+}
+
+struct ReadyUpdate {
+    version: String,
+    manual_url: String,
+    package: PreparedUpdate,
+}
+
+struct PreparedUpdate {
+    #[cfg(any(windows, target_os = "linux"))]
+    metadata: cargo_packager_updater::Update,
+    #[cfg(any(windows, target_os = "linux"))]
+    file: tempfile::TempPath,
+    #[cfg(any(windows, target_os = "linux"))]
+    digest: [u8; 32],
+}
+
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60 * 60);
+
+fn update_check_due(last: Option<&str>, now: time::OffsetDateTime) -> bool {
+    let Some(checked) = last.and_then(|s| {
+        time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+    }) else {
+        return true;
+    };
+    let elapsed = now - checked;
+    elapsed.is_negative()
+        || elapsed >= time::Duration::seconds(UPDATE_CHECK_INTERVAL.as_secs() as i64)
+}
+
 impl MarkionApp {
+    pub(super) fn toggle_automatic_update_downloads(&mut self, cx: &mut Context<Self>) {
+        self.automatically_download_updates = !self.automatically_download_updates;
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn supports_signed_updates(&self) -> bool {
+        current_update_primary_action() == UpdatePrimaryAction::SignedInstall
+    }
+
+    pub(super) fn arm_update_checks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Unit tests and the isolated native replay must never contact releases.
+        if cfg!(test) || env::var_os("MARKION_NATIVE_SMOKE_DIR").is_some() {
+            return;
+        }
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_secs(10)).await;
+            let mut startup = true;
+            loop {
+                if this
+                    .update(cx, |app, cx| {
+                        if app.update_state.should_check(
+                            app.last_update_check.as_deref(),
+                            time::OffsetDateTime::now_utc(),
+                            startup && app.check_for_updates_on_startup,
+                        ) {
+                            app.begin_update_check(false, handle, cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                startup = false;
+                // A short wake interval also handles sleep/resume and wall-clock changes.
+                Timer::after(Duration::from_secs(60)).await;
+            }
+        })
+        .detach();
+    }
+
     pub(super) fn check_for_updates(
         &mut self,
         _: &CheckForUpdates,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Capture the window handle so the dialog can be shown after the async
-        // fetch resolves, mirroring the pattern in `editing.rs` (`quit_confirm`).
-        let window_handle = window.window_handle();
-        self.status = self.tr(Msg::StatusUpdateChecking).into();
         self.active_menu = None;
         cx.notify();
+        if self.update_state.busy || self.update_state.prompt_open {
+            return;
+        }
+        let handle = window.window_handle();
+        if self.update_state.ready.is_some() {
+            // The action currently owns `window`; handle.update cannot borrow
+            // it again until this callback returns. Reserve the prompt slot.
+            self.update_state.prompt_open = true;
+            cx.spawn(async move |this, cx| {
+                let _ = this.update(cx, |app, cx| {
+                    app.update_state.prompt_open = false;
+                    app.prompt_update_ready(handle, cx);
+                });
+            })
+            .detach();
+        } else {
+            self.begin_update_check(true, handle, cx);
+        }
+    }
 
+    fn begin_update_check(
+        &mut self,
+        manual: bool,
+        handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.update_state.can_check() {
+            return;
+        }
+        self.update_state.busy = true;
+        self.last_update_check = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok();
+        self.persist_preferences();
+        if manual {
+            self.status = self.tr(Msg::StatusUpdateChecking).into();
+            cx.notify();
+        }
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
@@ -172,13 +292,13 @@ impl MarkionApp {
                     }
                 })
                 .await;
-
             let _ = this.update(cx, |app, cx| {
-                match &outcome {
-                    UpdateCheckOutcome::UpToDate => {
-                        app.status = t(app.language, Msg::StatusUpdateUpToDate).into();
+                app.update_state.busy = false;
+                match outcome {
+                    UpdateCheckOutcome::UpToDate if manual => {
+                        app.status = app.tr(Msg::StatusUpdateUpToDate).into();
                         let language = app.language;
-                        let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = handle.update(cx, |_, window, cx| {
                             std::mem::drop(window.prompt(
                                 PromptLevel::Info,
                                 t(language, Msg::DialogUpToDateTitle),
@@ -190,21 +310,20 @@ impl MarkionApp {
                     }
                     UpdateCheckOutcome::Available { version, url } => {
                         app.status =
-                            tf(app.language, Msg::StatusUpdateAvailable, &[version]).into();
-                        app.prompt_update_available(
-                            version.clone(),
-                            url.clone(),
-                            window_handle,
-                            cx,
-                        );
+                            tf(app.language, Msg::StatusUpdateAvailable, &[&version]).into();
+                        if app.automatically_download_updates && app.supports_signed_updates() {
+                            app.download_update(version, url, manual, handle, cx);
+                        } else {
+                            app.prompt_update_available(version, url, handle, cx);
+                        }
                     }
-                    UpdateCheckOutcome::Failed { error, manual_url } => app
-                        .show_update_check_failure(
-                            error.clone(),
-                            manual_url.clone(),
-                            window_handle,
-                            cx,
-                        ),
+                    UpdateCheckOutcome::Failed { error, manual_url } if manual => {
+                        app.show_update_check_failure(error, manual_url, handle, cx);
+                    }
+                    UpdateCheckOutcome::Failed { error, .. } => {
+                        tracing::warn!(%error, "background update check failed");
+                    }
+                    UpdateCheckOutcome::UpToDate => {}
                 }
                 cx.notify();
             });
@@ -215,19 +334,28 @@ impl MarkionApp {
     fn show_update_check_failure(
         &mut self,
         error: String,
-        manual_url: String,
-        window_handle: AnyWindowHandle,
+        url: String,
+        handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
         self.status = tf(self.language, Msg::StatusUpdateCheckFailed, &[&error]).into();
-        cx.notify();
+        let detail = tf(self.language, Msg::DialogUpdateCheckFailedDetail, &[&error]);
+        self.prompt_update_failure(Msg::DialogUpdateCheckFailedTitle, detail, url, handle, cx);
+    }
 
+    fn prompt_update_failure(
+        &mut self,
+        title: Msg,
+        detail: String,
+        url: String,
+        handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         let language = self.language;
-        let detail = tf(language, Msg::DialogUpdateCheckFailedDetail, &[&error]);
-        let Ok(answer) = window_handle.update(cx, |_, window, cx| {
+        let Ok(answer) = handle.update(cx, |_, window, cx| {
             window.prompt(
                 PromptLevel::Warning,
-                t(language, Msg::DialogUpdateCheckFailedTitle),
+                t(language, title),
                 Some(&detail),
                 &[
                     PromptButton::ok(t(language, Msg::DialogButtonDownloadManually)),
@@ -238,11 +366,16 @@ impl MarkionApp {
         }) else {
             return;
         };
-
+        self.update_state.prompt_open = true;
+        cx.notify();
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
-                let _ = this.update(cx, |_, cx| cx.open_url(&manual_url));
-            }
+            let download = matches!(answer.await, Ok(0));
+            let _ = this.update(cx, |app, cx| {
+                app.update_state.prompt_open = false;
+                if download {
+                    cx.open_url(&url);
+                }
+            });
         })
         .detach();
     }
@@ -251,23 +384,19 @@ impl MarkionApp {
         &mut self,
         version: String,
         url: String,
-        window_handle: AnyWindowHandle,
+        handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
         let action = current_update_primary_action();
         let language = self.language;
         let detail = tf(language, Msg::DialogUpdateAvailableDetail, &[&version]);
-        let primary_label = match action {
-            UpdatePrimaryAction::SignedInstall => t(language, Msg::DialogButtonDownloadAndInstall),
-            UpdatePrimaryAction::BrowserDownload => t(language, Msg::DialogButtonDownloadUpdate),
-        };
-        let Ok(answer) = window_handle.update(cx, |_, window, cx| {
+        let Ok(answer) = handle.update(cx, |_, window, cx| {
             window.prompt(
                 PromptLevel::Info,
                 t(language, Msg::DialogUpdateAvailableTitle),
                 Some(&detail),
                 &[
-                    PromptButton::ok(primary_label),
+                    PromptButton::ok(t(language, Msg::DialogButtonDownloadUpdate)),
                     PromptButton::cancel(t(language, Msg::DialogButtonLater)),
                 ],
                 cx,
@@ -275,56 +404,207 @@ impl MarkionApp {
         }) else {
             return;
         };
-
+        self.update_state.prompt_open = true;
         cx.spawn(async move |this, cx| {
-            if !matches!(answer.await, Ok(0)) {
-                return;
-            }
+            let download = matches!(answer.await, Ok(0));
             let _ = this.update(cx, |app, cx| {
-                app.activate_update_action(action, version, url, window_handle, cx);
+                app.update_state.prompt_open = false;
+                if download {
+                    match action {
+                        UpdatePrimaryAction::BrowserDownload => cx.open_url(&url),
+                        UpdatePrimaryAction::SignedInstall => {
+                            app.download_update(version, url, true, handle, cx)
+                        }
+                    }
+                }
             });
         })
         .detach();
     }
 
-    fn activate_update_action(
+    fn download_update(
         &mut self,
-        action: UpdatePrimaryAction,
         version: String,
         url: String,
-        window_handle: AnyWindowHandle,
+        manual: bool,
+        handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
-        if action == UpdatePrimaryAction::BrowserDownload {
-            cx.open_url(&url);
+        if !self.update_state.can_check() {
             return;
         }
-
-        if self.tabs.iter().any(EditorTab::is_dirty) {
-            let language = self.language;
-            let _ = window_handle.update(cx, |_, window, cx| {
-                std::mem::drop(window.prompt(
-                    PromptLevel::Warning,
-                    t(language, Msg::DialogUpdateSaveFirstTitle),
-                    Some(t(language, Msg::DialogUpdateSaveFirstDetail)),
-                    &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
-                    cx,
-                ));
-            });
-            return;
-        }
-
+        self.update_state.busy = true;
         self.status = tf(self.language, Msg::StatusUpdateDownloading, &[&version]).into();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { install_signed_update() })
+                .spawn(async move {
+                    prepare_signed_update(&version)
+                        .map(|package| ReadyUpdate {
+                            version,
+                            manual_url: url.clone(),
+                            package,
+                        })
+                        .map_err(|error| (format!("{error:#}"), url))
+                })
                 .await;
-            let _ = this.update(cx, |app, cx| match result {
-                Ok(()) => app.finish_signed_update(window_handle, cx),
-                Err(error) => {
-                    app.show_update_install_failure(error.to_string(), url, window_handle, cx)
+            let _ = this.update(cx, |app, cx| {
+                app.update_state.busy = false;
+                match result {
+                    Ok(ready) => {
+                        app.update_state.ready = Some(Arc::new(ready));
+                        app.prompt_update_ready(handle, cx);
+                    }
+                    Err((error, url)) if manual => {
+                        app.show_update_install_failure(error, url, handle, cx)
+                    }
+                    Err((error, _)) => {
+                        tracing::warn!(%error, "automatic update download failed");
+                        app.status =
+                            tf(app.language, Msg::StatusUpdateInstallFailed, &[&error]).into();
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn prompt_update_ready(&mut self, handle: AnyWindowHandle, cx: &mut Context<Self>) {
+        if self.update_state.busy || self.update_state.prompt_open {
+            return;
+        }
+        let Some(ready) = self.update_state.ready.as_ref() else {
+            return;
+        };
+        let detail = tf(
+            self.language,
+            Msg::DialogUpdateReadyDetail,
+            &[&ready.version],
+        );
+        self.status = tf(self.language, Msg::StatusUpdateReady, &[&ready.version]).into();
+        let language = self.language;
+        let Ok(answer) = handle.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Info,
+                t(language, Msg::DialogUpdateReadyTitle),
+                Some(&detail),
+                &[
+                    PromptButton::ok(t(language, Msg::DialogButtonRestartAndUpdate)),
+                    PromptButton::cancel(t(language, Msg::DialogButtonLater)),
+                ],
+                cx,
+            )
+        }) else {
+            return;
+        };
+        self.update_state.prompt_open = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let restart = matches!(answer.await, Ok(0));
+            let _ = this.update(cx, |app, cx| {
+                app.update_state.prompt_open = false;
+                if restart {
+                    app.install_ready_update(handle, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn update_documents_are_clean(
+        &mut self,
+        handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.tabs.iter().any(EditorTab::is_dirty) {
+            return true;
+        }
+        let language = self.language;
+        let _ = handle.update(cx, |_, window, cx| {
+            std::mem::drop(window.prompt(
+                PromptLevel::Warning,
+                t(language, Msg::DialogUpdateSaveFirstTitle),
+                Some(t(language, Msg::DialogUpdateSaveFirstDetail)),
+                &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
+                cx,
+            ));
+        });
+        false
+    }
+
+    fn install_ready_update(&mut self, handle: AnyWindowHandle, cx: &mut Context<Self>) {
+        if self.update_state.busy || !self.update_documents_are_clean(handle, cx) {
+            return;
+        }
+        let Some(ready) = self.update_state.ready.clone() else {
+            return;
+        };
+        self.update_state.busy = true;
+        cx.spawn(async move |this, cx| {
+            let package = ready.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { read_verified_package(&package.package) })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.update_state.busy = false;
+                match result {
+                    Ok(bytes) => {
+                        // Recheck after disk I/O, since the user may have typed while it ran.
+                        if !app.update_documents_are_clean(handle, cx) {
+                            return;
+                        }
+                        app.update_state.busy = true;
+                        app.update_state.installing = true;
+                        app.status = app.tr(Msg::StatusUpdateInstalling).into();
+                        if let Ok(bounds) = handle.update(cx, |_, window, _| {
+                            window.blur();
+                            window.window_bounds()
+                        }) {
+                            app.apply_window_bounds(bounds);
+                        }
+                        app.flush_layout();
+                        app.sync_and_persist_session();
+                        app.persist_preferences();
+                        cx.notify();
+                        cx.spawn(async move |this, cx| {
+                            let package = ready.clone();
+                            let result = cx
+                                .background_executor()
+                                .spawn(
+                                    async move { install_prepared_update(&package.package, bytes) },
+                                )
+                                .await;
+                            let _ = this.update(cx, |app, cx| {
+                                app.update_state.busy = false;
+                                app.update_state.installing = false;
+                                let focus = app.focus_handle.clone();
+                                let _ = handle.update(cx, |_, window, _| window.focus(&focus));
+                                match result {
+                                    Ok(()) => app.finish_signed_update(handle, cx),
+                                    Err(error) => app.show_update_install_failure(
+                                        format!("{error:#}"),
+                                        ready.manual_url.clone(),
+                                        handle,
+                                        cx,
+                                    ),
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                    }
+                    Err(error) => {
+                        app.update_state.ready = None;
+                        app.show_update_install_failure(
+                            format!("{error:#}"),
+                            ready.manual_url.clone(),
+                            handle,
+                            cx,
+                        );
+                    }
                 }
             });
         })
@@ -334,66 +614,34 @@ impl MarkionApp {
     fn show_update_install_failure(
         &mut self,
         error: String,
-        manual_url: String,
-        window_handle: AnyWindowHandle,
+        url: String,
+        handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
         self.status = tf(self.language, Msg::StatusUpdateInstallFailed, &[&error]).into();
-        cx.notify();
-
-        let language = self.language;
-        let detail = tf(language, Msg::DialogUpdateInstallFailedDetail, &[&error]);
-        let Ok(answer) = window_handle.update(cx, |_, window, cx| {
-            window.prompt(
-                PromptLevel::Warning,
-                t(language, Msg::DialogUpdateInstallFailedTitle),
-                Some(&detail),
-                &[
-                    PromptButton::ok(t(language, Msg::DialogButtonDownloadManually)),
-                    PromptButton::cancel(t(language, Msg::DialogButtonLater)),
-                ],
-                cx,
-            )
-        }) else {
-            return;
-        };
-
-        cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
-                let _ = this.update(cx, |_, cx| cx.open_url(&manual_url));
-            }
-        })
-        .detach();
+        let detail = tf(
+            self.language,
+            Msg::DialogUpdateInstallFailedDetail,
+            &[&error],
+        );
+        self.prompt_update_failure(Msg::DialogUpdateInstallFailedTitle, detail, url, handle, cx);
     }
 
-    /// Follow-through after a successful signed install. Windows handed off
-    /// to the passive NSIS installer, which manages the app's exit itself. A
-    /// Linux AppImage update replaced the file under the running process, so
-    /// start the updated AppImage and quit this instance (documents are clean
-    /// by the pre-install gate; window bounds and preferences are persisted
-    /// first, mirroring the normal exit path). When relaunching fails the
-    /// update is already installed — keep running and ask the user to restart
-    /// Markion manually.
-    fn finish_signed_update(&mut self, window_handle: AnyWindowHandle, cx: &mut Context<Self>) {
+    fn finish_signed_update(&mut self, handle: AnyWindowHandle, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
         {
-            let language = self.language;
-            let relaunched = std::env::var("APPIMAGE")
+            if std::env::var("APPIMAGE")
                 .ok()
-                .filter(|path| !path.trim().is_empty())
-                .is_some_and(|appimage| std::process::Command::new(appimage).spawn().is_ok());
-            if relaunched {
-                if let Ok(bounds) = window_handle.update(cx, |_, window, _| window.window_bounds())
-                {
-                    self.apply_window_bounds(bounds);
-                }
-                self.flush_layout();
+                .filter(|p| !p.trim().is_empty())
+                .is_some_and(|p| std::process::Command::new(p).spawn().is_ok())
+            {
                 cx.quit();
                 return;
             }
-            self.status = t(language, Msg::StatusUpdateInstalledRestart).into();
-            cx.notify();
-            let _ = window_handle.update(cx, |_, window, cx| {
+            self.update_state.ready = None;
+            self.status = self.tr(Msg::StatusUpdateInstalledRestart).into();
+            let language = self.language;
+            let _ = handle.update(cx, |_, window, cx| {
                 std::mem::drop(window.prompt(
                     PromptLevel::Info,
                     t(language, Msg::DialogUpdateInstalledTitle),
@@ -405,95 +653,138 @@ impl MarkionApp {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            // Windows handed off to the passive installer; nothing to do.
-            let _ = (window_handle, cx);
+            let _ = handle;
+            cx.quit();
         }
     }
 }
 
-#[cfg(windows)]
-fn install_signed_update() -> Result<()> {
-    use cargo_packager_updater::{
-        Config, WindowsConfig, WindowsUpdateInstallMode, check_update, semver::Version, url::Url,
-    };
+#[cfg(any(windows, target_os = "linux"))]
+fn prepare_signed_update(expected_version: &str) -> Result<PreparedUpdate> {
+    use cargo_packager_updater::{Config, UpdaterBuilder, semver::Version, url::Url};
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
 
-    let public_key = configured_update_public_key()
-        .ok_or_else(|| anyhow!("this build does not contain an updater public key"))?;
-    let current_version =
-        Version::parse(env!("CARGO_PKG_VERSION")).context("parsing the running Markion version")?;
+    if current_update_primary_action() != UpdatePrimaryAction::SignedInstall {
+        return Err(anyhow!("this installation cannot apply signed updates"));
+    }
+    let public_key =
+        configured_update_public_key().ok_or_else(|| anyhow!("missing updater public key"))?;
+    let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
     let endpoints = signed_update_manifest_endpoints()
         .into_iter()
-        .map(|url| Url::parse(url).context("parsing the signed update manifest URL"))
+        .map(|u| Url::parse(u).context("parsing update manifest URL"))
         .collect::<Result<Vec<_>>>()?;
     let config = Config {
         endpoints,
-        pubkey: public_key.to_string(),
-        windows: Some(WindowsConfig {
-            installer_args: None,
-            install_mode: Some(WindowsUpdateInstallMode::Passive),
-        }),
+        pubkey: public_key.into(),
+        windows: None,
     };
-    let update = check_update(current_version, config)
-        .context("checking the signed update manifest")?
-        .ok_or_else(|| anyhow!("the signed update manifest contains no newer version"))?;
-    // cargo-packager-updater 0.2.3 returns ordinary network/signature errors,
-    // but its NSIS launcher uses `expect` if PowerShell cannot be spawned.
-    // Catch that library panic so the app can keep running and offer the
-    // immutable GitHub asset as a manual fallback.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        update.download_and_install()
-    })) {
-        Ok(result) => result.context("downloading, verifying, and launching the signed update"),
-        Err(_) => Err(anyhow!(
-            "the verified installer process could not be started"
-        )),
+    let mut update = UpdaterBuilder::new(current, config)
+        .timeout(Duration::from_secs(60))
+        .build()?
+        .check()
+        .context("checking signed update manifest")?
+        .ok_or_else(|| anyhow!("the signed manifest contains no newer version"))?;
+    ensure_update_version(expected_version, &update.version)?;
+    #[cfg(windows)]
+    if !matches!(update.format, cargo_packager_updater::UpdateFormat::Nsis) {
+        return Err(anyhow!(
+            "the signed Windows update is not an NSIS installer"
+        ));
     }
+    #[cfg(target_os = "linux")]
+    if !matches!(
+        update.format,
+        cargo_packager_updater::UpdateFormat::AppImage
+    ) {
+        return Err(anyhow!("the signed Linux update is not an AppImage"));
+    }
+    update.timeout = Some(Duration::from_secs(30 * 60));
+    let bytes = update
+        .download()
+        .context("downloading and authenticating update")?;
+    let digest = Sha256::digest(&bytes).into();
+    let mut file = tempfile::Builder::new()
+        .prefix("markion-update-")
+        .suffix(if cfg!(windows) { ".exe" } else { ".AppImage" })
+        .tempfile()?;
+    file.write_all(&bytes)
+        .context("staging authenticated update")?;
+    file.flush()?;
+    Ok(PreparedUpdate {
+        metadata: update,
+        file: file.into_temp_path(),
+        digest,
+    })
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
+fn ensure_update_version(expected: &str, actual: &str) -> Result<()> {
+    if parse_semver(expected).is_none() || parse_semver(expected) != parse_semver(actual) {
+        return Err(anyhow!(
+            "signed manifest version {actual} does not match discovered release {expected}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn read_verified_package(package: &PreparedUpdate) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(&package.file).context("reading staged update")?;
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    if digest != package.digest {
+        return Err(anyhow!("staged update changed after authentication"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn install_prepared_update(package: &PreparedUpdate, bytes: Vec<u8>) -> Result<()> {
+    use std::{io::Write, os::windows::process::CommandExt};
+    // Use authenticated bytes in a fresh executable, avoiding the library's
+    // PowerShell launcher and unconditional process::exit before state flush.
+    let _ = &package.metadata;
+    let mut file = tempfile::Builder::new()
+        .prefix("markion-install-")
+        .suffix(".exe")
+        .tempfile()?;
+    file.write_all(&bytes)?;
+    let (file, path) = file.keep()?;
+    drop(file);
+    if let Err(error) = std::process::Command::new(&path)
+        .args(["/P", "/R"])
+        .creation_flags(0x08000000)
+        .spawn()
+    {
+        let _ = fs::remove_file(&path);
+        return Err(error).context("starting verified NSIS installer");
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn install_signed_update() -> Result<()> {
-    use cargo_packager_updater::{Config, check_update, semver::Version, url::Url};
-
-    let public_key = configured_update_public_key()
-        .ok_or_else(|| anyhow!("this build does not contain an updater public key"))?;
-    // The updater replaces the file named by APPIMAGE in place; refuse rather
-    // than corrupt a deb/rpm install whose /usr/bin binary needs root.
-    std::env::var("APPIMAGE")
-        .ok()
-        .filter(|path| !path.trim().is_empty())
-        .ok_or_else(|| anyhow!("Markion is not running as an AppImage"))?;
-    let current_version =
-        Version::parse(env!("CARGO_PKG_VERSION")).context("parsing the running Markion version")?;
-    let endpoints = signed_update_manifest_endpoints()
-        .into_iter()
-        .map(|url| Url::parse(url).context("parsing the signed update manifest URL"))
-        .collect::<Result<Vec<_>>>()?;
-    let config = Config {
-        endpoints,
-        pubkey: public_key.to_string(),
-        windows: None,
-    };
-    let update = check_update(current_version, config)
-        .context("checking the signed update manifest")?
-        .ok_or_else(|| anyhow!("the signed update manifest contains no newer version"))?;
-    // download_and_install verifies the minisign signature against the
-    // manifest before replacing the AppImage and restores the previous file
-    // when the write fails, but like the Windows path it can `expect` inside;
-    // catch that panic so the app keeps running and can offer the immutable
-    // GitHub asset as a manual fallback.
+fn install_prepared_update(package: &PreparedUpdate, bytes: Vec<u8>) -> Result<()> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        update.download_and_install()
+        package.metadata.install(bytes)
     })) {
-        Ok(result) => result.context("downloading, verifying, and installing the signed update"),
+        Ok(result) => result.context("installing authenticated AppImage"),
         Err(_) => Err(anyhow!("the verified update could not be installed")),
     }
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn install_signed_update() -> Result<()> {
-    Err(anyhow!(
-        "signed automatic installation is not supported on this platform"
-    ))
+fn prepare_signed_update(_: &str) -> Result<PreparedUpdate> {
+    Err(anyhow!("signed updates unsupported"))
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn read_verified_package(_: &PreparedUpdate) -> Result<Vec<u8>> {
+    Err(anyhow!("signed updates unsupported"))
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn install_prepared_update(_: &PreparedUpdate, _: Vec<u8>) -> Result<()> {
+    Err(anyhow!("signed updates unsupported"))
 }
 
 /// Fetches and parses GitHub's latest published release. Runs on the shared
@@ -653,6 +944,266 @@ fn parse_semver(text: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_update_interval_handles_boundaries_and_invalid_clocks() {
+        use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+        let now = OffsetDateTime::parse("2026-11-17T12:00:00Z", &Rfc3339).unwrap();
+        for last in [
+            None,
+            Some("invalid"),
+            Some("2026-11-17T12:00:01Z"),
+            Some("2026-11-17T07:00:00Z"),
+        ] {
+            assert!(update_check_due(last, now), "should check for {last:?}");
+        }
+        for last in [
+            "2026-11-17T07:00:01Z",
+            "2026-11-17T12:00:00Z",
+            "2026-11-17T15:00:01+08:00",
+        ] {
+            assert!(!update_check_due(Some(last), now), "should wait for {last}");
+        }
+    }
+
+    #[test]
+    fn manifest_must_match_the_discovered_release() {
+        assert!(ensure_update_version("9.9.9", "9.9.9").is_ok());
+        for actual in ["9.9.8", "10.0.0", "bad", "9.9.9-beta.1"] {
+            assert!(ensure_update_version("9.9.9", actual).is_err());
+        }
+        assert!(ensure_update_version("bad", "bad").is_err());
+    }
+
+    #[test]
+    fn legacy_startup_override_bypasses_time_but_never_active_operations() {
+        let now = time::OffsetDateTime::now_utc();
+        let recent = now
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let mut state = UpdateState::default();
+        assert!(!state.should_check(Some(&recent), now, false));
+        assert!(state.should_check(Some(&recent), now, true));
+        state.busy = true;
+        assert!(!state.should_check(None, now, true));
+        state.busy = false;
+        state.prompt_open = true;
+        assert!(!state.should_check(None, now, true));
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    fn staged_fixture() -> ReadyUpdate {
+        use cargo_packager_updater::{Config, Update, UpdateFormat, url::Url};
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let bytes = b"offline authenticated-package stand-in; never execute";
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(bytes).unwrap();
+        ReadyUpdate {
+            version: "9.9.9".into(),
+            manual_url: GITHUB_LATEST_RELEASE_URL.into(),
+            package: PreparedUpdate {
+                file: file.into_temp_path(),
+                digest: Sha256::digest(bytes).into(),
+                metadata: Update {
+                    config: Config {
+                        endpoints: vec![],
+                        pubkey: String::new(),
+                        windows: None,
+                    },
+                    body: None,
+                    current_version: env!("CARGO_PKG_VERSION").into(),
+                    version: "9.9.9".into(),
+                    date: None,
+                    target: "fixture".into(),
+                    extract_path: PathBuf::new(),
+                    download_url: Url::parse(GITHUB_LATEST_RELEASE_URL).unwrap(),
+                    signature: String::new(),
+                    timeout: None,
+                    headers: Default::default(),
+                    format: if cfg!(windows) {
+                        UpdateFormat::Nsis
+                    } else {
+                        UpdateFormat::AppImage
+                    },
+                },
+            },
+        }
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn staged_update_rejects_tampering_and_cleans_up() {
+        let ready = staged_fixture();
+        let path = ready.package.file.to_path_buf();
+        assert!(read_verified_package(&ready.package).is_ok());
+        fs::write(&path, b"modified after authentication").unwrap();
+        assert!(read_verified_package(&ready.package).is_err());
+        drop(ready);
+        assert!(!path.exists());
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn active_operations_and_ready_payloads_prevent_duplicate_checks() {
+        let mut state = UpdateState::default();
+        assert!(state.can_check());
+        state.busy = true;
+        assert!(!state.can_check());
+        state.busy = false;
+        state.prompt_open = true;
+        assert!(!state.can_check());
+        state.prompt_open = false;
+        state.installing = true;
+        assert!(!state.can_check());
+        state.installing = false;
+        state.ready = Some(Arc::new(staged_fixture()));
+        assert!(!state.can_check());
+    }
+
+    #[gpui::test]
+    fn automatic_update_preference_persists_without_changing_documents(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+        app.update(cx, |app, cx| {
+            app.preferences_path = path.clone();
+            app.automatically_download_updates = true;
+            let version = app.active_tab().document.version();
+            let preview = app.active_tab().document.preview_blocks_shared();
+            let dirty = app.active_tab().is_dirty();
+            app.toggle_automatic_update_downloads(cx);
+            assert!(!app.automatically_download_updates);
+            assert!(!app.current_preferences().automatically_download_updates);
+            assert_eq!(app.active_tab().document.version(), version);
+            assert_eq!(app.active_tab().is_dirty(), dirty);
+            assert!(Arc::ptr_eq(
+                &preview,
+                &app.active_tab().document.preview_blocks_shared()
+            ));
+        });
+        assert!(
+            !load_app_preferences(&path)
+                .unwrap()
+                .automatically_download_updates
+        );
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.reset_preferences(&ResetPreferences, window, cx);
+            })
+        });
+        let label = app.update(cx, |app, _| app.tr(Msg::DialogButtonReset).to_string());
+        cx.simulate_prompt_answer(&label);
+        cx.run_until_parked();
+        app.update(cx, |app, _| assert!(app.automatically_download_updates));
+        assert!(
+            load_app_preferences(&path)
+                .unwrap()
+                .automatically_download_updates
+        );
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[gpui::test]
+    fn ready_update_survives_later_and_dirty_restart_rejection(cx: &mut gpui::TestAppContext) {
+        let ready = Arc::new(staged_fixture());
+        let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+        app.update(cx, |app, _| app.update_state.ready = Some(ready.clone()));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.check_for_updates(&CheckForUpdates, window, cx);
+            })
+        });
+        cx.run_until_parked();
+        let later = app.update(cx, |app, _| app.tr(Msg::DialogButtonLater).to_string());
+        cx.simulate_prompt_answer(&later);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert!(Arc::ptr_eq(
+                app.update_state.ready.as_ref().unwrap(),
+                &ready
+            ));
+            assert!(!app.update_state.busy);
+            assert!(!app.update_state.prompt_open);
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.check_for_updates(&CheckForUpdates, window, cx);
+            })
+        });
+        cx.run_until_parked();
+        let restart = app.update(cx, |app, _| {
+            app.active_tab_mut().document.insert(0, "unsaved");
+            app.tr(Msg::DialogButtonRestartAndUpdate).to_string()
+        });
+        cx.simulate_prompt_answer(&restart);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert!(app.active_tab().is_dirty());
+            assert!(Arc::ptr_eq(
+                app.update_state.ready.as_ref().unwrap(),
+                &ready
+            ));
+            assert!(!app.update_state.busy);
+            assert!(!app.update_state.installing);
+            assert!(read_verified_package(&ready.package).is_ok());
+        });
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[gpui::test]
+    fn edits_during_staged_read_block_installation(cx: &mut gpui::TestAppContext) {
+        let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+        app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("clean"))];
+            app.update_state.ready = Some(Arc::new(staged_fixture()));
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.install_ready_update(window.window_handle(), cx);
+                assert!(app.update_state.busy);
+                app.active_tab_mut()
+                    .document
+                    .insert(0, "typed during validation ");
+            });
+        });
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert!(!app.update_state.busy);
+            assert!(!app.update_state.installing);
+            assert!(app.update_state.ready.is_some());
+            assert!(
+                app.active_tab()
+                    .document
+                    .text()
+                    .starts_with("typed during validation")
+            );
+        });
+    }
+
+    #[test]
+    fn automatic_update_messages_are_localized_and_substitute_versions() {
+        for language in Language::all() {
+            for message in [
+                Msg::PrefPanelUpdatesSection,
+                Msg::PrefPanelAutomaticUpdateDownloads,
+                Msg::PrefPanelUpdateCheckHint,
+                Msg::PrefPanelManualUpdateHint,
+                Msg::StatusUpdateInstalling,
+                Msg::DialogUpdateReadyTitle,
+                Msg::DialogButtonRestartAndUpdate,
+            ] {
+                assert!(!t(*language, message).trim().is_empty());
+            }
+            for message in [Msg::StatusUpdateReady, Msg::DialogUpdateReadyDetail] {
+                let text = tf(*language, message, &["9.9.9"]);
+                assert!(text.contains("9.9.9"));
+                assert!(!text.contains("{0}"));
+            }
+        }
+    }
 
     fn release_with_version(version: &str) -> GitHubRelease {
         GitHubRelease {

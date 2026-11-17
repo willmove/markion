@@ -144,6 +144,7 @@ impl MarkionApp {
                     app.outline_position = preferences.outline_position;
                     app.outline_visible = preferences.outline_visible;
                     app.auto_save_preferences = preferences.auto_save;
+                    app.automatically_download_updates = preferences.automatically_download_updates;
                     app.image_preferences = preferences.images;
                     app.ai_preferences = preferences.ai;
                     app.ai_ui.invalidate();

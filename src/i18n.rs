@@ -1345,6 +1345,15 @@ pub enum Msg {
     StatusDeleteCanceled,
     StatusAboutMarkion,
     StatusMarkdownReference,
+    PrefPanelUpdatesSection,
+    PrefPanelAutomaticUpdateDownloads,
+    PrefPanelUpdateCheckHint,
+    PrefPanelManualUpdateHint,
+    StatusUpdateReady,
+    StatusUpdateInstalling,
+    DialogUpdateReadyTitle,
+    DialogUpdateReadyDetail,
+    DialogButtonRestartAndUpdate,
     StatusUpdateChecking,
     StatusUpdateUpToDate,
     StatusUpdateAvailable,
@@ -4437,6 +4446,22 @@ pub fn sidebar_tab_label(lang: Language, tab: SidebarTab) -> &'static str {
 
 fn en(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "Updates",
+        Msg::PrefPanelAutomaticUpdateDownloads => "Automatically download updates",
+        Msg::PrefPanelUpdateCheckHint => {
+            "Checks every 5 hours. Downloaded updates wait for your restart confirmation."
+        }
+        Msg::PrefPanelManualUpdateHint => {
+            "Checks every 5 hours. This installation uses manual downloads in your browser."
+        }
+        Msg::StatusUpdateReady => "Markion {0} is ready — restart to update",
+        Msg::StatusUpdateInstalling => "Installing update…",
+        Msg::DialogUpdateReadyTitle => "Update ready",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} has been downloaded and verified. Restart now to install, or continue working and update later."
+        }
+        Msg::DialogButtonRestartAndUpdate => "Restart and Update",
+
         Msg::PrefPanelLineSpacing => "Line spacing (100% = default)",
         Msg::StatusLineSpacing => "Line spacing: {0}",
         Msg::MenuFile => "File",
@@ -5131,6 +5156,22 @@ const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mod
 
 fn ja(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "アップデート",
+        Msg::PrefPanelAutomaticUpdateDownloads => "アップデートを自動ダウンロード",
+        Msg::PrefPanelUpdateCheckHint => {
+            "5 時間ごとに確認します。ダウンロード後、再起動する前に確認します。"
+        }
+        Msg::PrefPanelManualUpdateHint => {
+            "5 時間ごとに確認します。この環境ではブラウザーから手動でダウンロードします。"
+        }
+        Msg::StatusUpdateReady => "Markion {0} の準備完了 — 再起動して更新",
+        Msg::StatusUpdateInstalling => "アップデートをインストール中…",
+        Msg::DialogUpdateReadyTitle => "アップデートの準備完了",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} のダウンロードと検証が完了しました。今すぐ再起動してインストールするか、作業を続けて後で更新できます。"
+        }
+        Msg::DialogButtonRestartAndUpdate => "再起動して更新",
+
         Msg::PrefPanelLineSpacing => "行間（100% = 標準）",
         Msg::StatusLineSpacing => "行間: {0}",
         Msg::MenuFile => "ファイル",
@@ -5824,6 +5865,22 @@ const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタ�
 
 fn fr(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "Mises à jour",
+        Msg::PrefPanelAutomaticUpdateDownloads => "Télécharger automatiquement les mises à jour",
+        Msg::PrefPanelUpdateCheckHint => {
+            "Vérification toutes les 5 heures. Le redémarrage attend votre confirmation."
+        }
+        Msg::PrefPanelManualUpdateHint => {
+            "Vérification toutes les 5 heures. Cette installation nécessite un téléchargement manuel dans le navigateur."
+        }
+        Msg::StatusUpdateReady => "Markion {0} est prêt — redémarrez pour mettre à jour",
+        Msg::StatusUpdateInstalling => "Installation de la mise à jour…",
+        Msg::DialogUpdateReadyTitle => "Mise à jour prête",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} a été téléchargé et vérifié. Redémarrez pour l’installer ou continuez à travailler et mettez à jour plus tard."
+        }
+        Msg::DialogButtonRestartAndUpdate => "Redémarrer et mettre à jour",
+
         Msg::PrefPanelLineSpacing => "Interligne (100 % = valeur par défaut)",
         Msg::StatusLineSpacing => "Interligne : {0}",
         Msg::MenuFile => "Fichier",
@@ -6548,6 +6605,22 @@ const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode m
 
 fn de(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "Updates",
+        Msg::PrefPanelAutomaticUpdateDownloads => "Updates automatisch herunterladen",
+        Msg::PrefPanelUpdateCheckHint => {
+            "Prüfung alle 5 Stunden. Der Neustart wartet auf Ihre Bestätigung."
+        }
+        Msg::PrefPanelManualUpdateHint => {
+            "Prüfung alle 5 Stunden. Diese Installation erfordert einen manuellen Download im Browser."
+        }
+        Msg::StatusUpdateReady => "Markion {0} ist bereit — zum Aktualisieren neu starten",
+        Msg::StatusUpdateInstalling => "Update wird installiert…",
+        Msg::DialogUpdateReadyTitle => "Update bereit",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} wurde heruntergeladen und geprüft. Jetzt zum Installieren neu starten oder weiterarbeiten und später aktualisieren."
+        }
+        Msg::DialogButtonRestartAndUpdate => "Neu starten und aktualisieren",
+
         Msg::PrefPanelLineSpacing => "Zeilenabstand (100% = Standard)",
         Msg::StatusLineSpacing => "Zeilenabstand: {0}",
         Msg::MenuFile => "Datei",
@@ -7254,6 +7327,22 @@ const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschi
 
 fn es(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "Actualizaciones",
+        Msg::PrefPanelAutomaticUpdateDownloads => "Descargar actualizaciones automáticamente",
+        Msg::PrefPanelUpdateCheckHint => {
+            "Se comprueba cada 5 horas. El reinicio requiere tu confirmación."
+        }
+        Msg::PrefPanelManualUpdateHint => {
+            "Se comprueba cada 5 horas. Esta instalación requiere descargar la actualización manualmente en el navegador."
+        }
+        Msg::StatusUpdateReady => "Markion {0} está listo — reinicia para actualizar",
+        Msg::StatusUpdateInstalling => "Instalando actualización…",
+        Msg::DialogUpdateReadyTitle => "Actualización lista",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} se ha descargado y verificado. Reinicia para instalarlo o sigue trabajando y actualiza más tarde."
+        }
+        Msg::DialogButtonRestartAndUpdate => "Reiniciar y actualizar",
+
         Msg::PrefPanelLineSpacing => "Interlineado (100% = predeterminado)",
         Msg::StatusLineSpacing => "Interlineado: {0}",
         Msg::MenuFile => "Archivo",
@@ -7950,6 +8039,20 @@ const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo m
 
 fn zh(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "应用更新",
+        Msg::PrefPanelAutomaticUpdateDownloads => "自动下载更新",
+        Msg::PrefPanelUpdateCheckHint => "每 5 小时检查一次，下载完成后由你确认重启更新。",
+        Msg::PrefPanelManualUpdateHint => {
+            "每 5 小时检查一次。当前安装方式需通过浏览器手动下载更新。"
+        }
+        Msg::StatusUpdateReady => "Markion {0} 已就绪，重启即可更新",
+        Msg::StatusUpdateInstalling => "正在安装更新…",
+        Msg::DialogUpdateReadyTitle => "更新已就绪",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} 已下载并通过校验。现在重启安装，或继续工作，稍后再更新。"
+        }
+        Msg::DialogButtonRestartAndUpdate => "重启并更新",
+
         Msg::PrefPanelLineSpacing => "行间距（100% 为默认）",
         Msg::StatusLineSpacing => "行间距：{0}",
         Msg::MenuFile => "文件",
@@ -8609,6 +8712,20 @@ const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机
 
 fn zh_hant(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "應用程式更新",
+        Msg::PrefPanelAutomaticUpdateDownloads => "自動下載更新",
+        Msg::PrefPanelUpdateCheckHint => "每 5 小時檢查一次，下載完成後由你確認重新啟動更新。",
+        Msg::PrefPanelManualUpdateHint => {
+            "每 5 小時檢查一次。目前的安裝方式需透過瀏覽器手動下載更新。"
+        }
+        Msg::StatusUpdateReady => "Markion {0} 已就緒，重新啟動即可更新",
+        Msg::StatusUpdateInstalling => "正在安裝更新…",
+        Msg::DialogUpdateReadyTitle => "更新已就緒",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} 已下載並通過驗證。現在重新啟動安裝，或繼續工作，稍後再更新。"
+        }
+        Msg::DialogButtonRestartAndUpdate => "重新啟動並更新",
+
         Msg::PrefPanelLineSpacing => "行距（100% 為預設）",
         Msg::StatusLineSpacing => "行距：{0}",
         Msg::MenuFile => "檔案",

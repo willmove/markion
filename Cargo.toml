@@ -88,6 +88,7 @@ data-url = "0.3.2"
 # per document version). Workspace member crates stay GPUI-free; this is the
 # root package's direct use of the existing workspace `sha2` pin.
 sha2.workspace = true
+time = { version = "0.3", features = ["formatting", "parsing"] }
 # Diagram SVG is rasterized in-crate (src/app/diagram.rs) rather than through
 # `Image::from_bytes(ImageFormat::Svg, ..)`: gpui 0.2.2 uploads that path's
 # premultiplied-RGBA pixmap as BGRA without swapping channels and rasterizes it
@@ -170,6 +171,7 @@ cc = { path = "vendor/cc-rs" }
 # keeps the browser-download path, so the crate stays off its build graph.
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 cargo-packager-updater = "0.2.3"
+tempfile = "3.20"
 
 # Process footprint counters for memory diagnostics (matches gpui's windows 0.61).
 [target.'cfg(windows)'.dependencies]

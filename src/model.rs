@@ -503,12 +503,14 @@ pub struct AppPreferences {
     /// raw string (not a typed [`crate::i18n::Language`]) to keep `model`
     /// dependency-free; the UI layer interprets it via `Language::from_code`.
     pub language: String,
-    /// When enabled, `MarkionApp::new` schedules a silent update check
-    /// against the OSS manifest on startup; the dialog appears only if a
-    /// newer version is found. Default `false` - no unsolicited network call.
+    /// Legacy option requesting a startup check even before the regular
+    /// five-hour interval expires.
     pub check_for_updates_on_startup: bool,
+    /// Download authenticated updates in the background; installation always
+    /// requires confirmation. Defaults to true, including for older configs.
+    pub automatically_download_updates: bool,
     /// ISO-8601 timestamp of the most recent update check (manual or
-    /// startup). Used to throttle startup checks to at most once per 24h.
+    /// startup or periodic). Used to throttle automatic checks to every five hours.
     pub last_update_check: Option<String>,
     /// Auto-save behavior. Configurable only via the config file, not the
     /// Preferences panel.
@@ -564,6 +566,7 @@ impl Default for AppPreferences {
             outline_visible: true,
             language: "en".to_string(),
             check_for_updates_on_startup: false,
+            automatically_download_updates: true,
             last_update_check: None,
             auto_save: AutoSavePreferences::default(),
             git: GitPreferences::default(),

@@ -9483,6 +9483,7 @@ Intro.
             outline_visible: true,
             language: "zh".to_string(),
             check_for_updates_on_startup: true,
+            automatically_download_updates: false,
             last_update_check: Some("2026-07-27T10:30:00Z".to_string()),
             auto_save: AutoSavePreferences {
                 enabled: false,

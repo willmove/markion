@@ -3299,10 +3299,12 @@ struct MarkionApp {
     math_cache: MathCache,
     /// Active interface language. Persisted via `AppPreferences::language`.
     language: Language,
-    /// Whether `MarkionApp::new` should schedule a silent update check on
-    /// startup. Persisted via `AppPreferences::check_for_updates_on_startup`.
+    /// Legacy override requesting an early startup check regardless of the
+    /// regular five-hour interval.
     check_for_updates_on_startup: bool,
+    automatically_download_updates: bool,
+    update_state: update::UpdateState,
     /// ISO-8601 timestamp of the most recent update check. Persisted via
-    /// `AppPreferences::last_update_check`; used to throttle startup checks.
+    /// `AppPreferences::last_update_check`; used to throttle automatic checks.
     last_update_check: Option<String>,
 }

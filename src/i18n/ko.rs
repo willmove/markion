@@ -3,6 +3,22 @@ use super::{MarkdownReferenceSection, Msg};
 
 pub(super) fn t(msg: Msg) -> &'static str {
     match msg {
+        Msg::PrefPanelUpdatesSection => "업데이트",
+        Msg::PrefPanelAutomaticUpdateDownloads => "업데이트 자동 다운로드",
+        Msg::PrefPanelUpdateCheckHint => {
+            "5시간마다 확인합니다. 다운로드 후 다시 시작하기 전에 확인을 요청합니다."
+        }
+        Msg::PrefPanelManualUpdateHint => {
+            "5시간마다 확인합니다. 이 설치 방식은 브라우저에서 직접 다운로드해야 합니다."
+        }
+        Msg::StatusUpdateReady => "Markion {0} 준비 완료 — 다시 시작하여 업데이트",
+        Msg::StatusUpdateInstalling => "업데이트 설치 중…",
+        Msg::DialogUpdateReadyTitle => "업데이트 준비 완료",
+        Msg::DialogUpdateReadyDetail => {
+            "Markion {0} 다운로드 및 검증이 완료되었습니다. 지금 다시 시작하여 설치하거나 작업을 계속하고 나중에 업데이트하세요."
+        }
+        Msg::DialogButtonRestartAndUpdate => "다시 시작 및 업데이트",
+
         Msg::PrefPanelLineSpacing => "줄 간격 (100% = 기본값)",
         Msg::StatusLineSpacing => "줄 간격: {0}",
         Msg::MenuFile => "파일",

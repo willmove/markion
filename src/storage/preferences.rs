@@ -39,6 +39,8 @@ struct PreferencesFile {
     language: String,
     #[serde(default)]
     check_for_updates_on_startup: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    automatically_download_updates: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_update_check: Option<String>,
     focus_mode: bool,
@@ -440,6 +442,7 @@ impl From<&AppPreferences> for PreferencesFile {
             custom_theme: preferences.custom_theme.clone(),
             language: preferences.language.clone(),
             check_for_updates_on_startup: preferences.check_for_updates_on_startup,
+            automatically_download_updates: preferences.automatically_download_updates,
             last_update_check: preferences.last_update_check.clone(),
             focus_mode: preferences.focus_mode,
             typewriter_mode: preferences.typewriter_mode,
@@ -513,6 +516,7 @@ impl From<PreferencesFile> for AppPreferences {
             custom_theme: file.custom_theme.filter(|name| !name.is_empty()),
             language: file.language,
             check_for_updates_on_startup: file.check_for_updates_on_startup,
+            automatically_download_updates: file.automatically_download_updates,
             last_update_check: file.last_update_check,
             focus_mode: file.focus_mode,
             typewriter_mode: file.typewriter_mode,
@@ -1244,6 +1248,7 @@ mod tests {
     fn update_check_preferences_default_off_and_none() {
         let defaults = AppPreferences::default();
         assert!(!defaults.check_for_updates_on_startup);
+        assert!(defaults.automatically_download_updates);
         assert!(defaults.last_update_check.is_none());
     }
 
@@ -1278,7 +1283,28 @@ mod tests {
         let text = "theme = \"Paper\"\nlanguage = \"en\"\n";
         let parsed = parse_app_preferences(text).unwrap();
         assert!(!parsed.check_for_updates_on_startup);
+        assert!(parsed.automatically_download_updates);
         assert!(parsed.last_update_check.is_none());
+    }
+
+    #[test]
+    fn automatic_update_downloads_round_trip_and_tolerate_invalid_values() {
+        for enabled in [false, true] {
+            let preferences = AppPreferences {
+                automatically_download_updates: enabled,
+                ..AppPreferences::default()
+            };
+            let parsed = parse_app_preferences(&render_app_preferences(&preferences)).unwrap();
+            assert_eq!(parsed.automatically_download_updates, enabled);
+        }
+        for invalid in ["\"false\"", "123", "[]", "{}"] {
+            let parsed = parse_app_preferences(&format!(
+                "language = \"zh\"\nautomatically_download_updates = {invalid}\n"
+            ))
+            .unwrap();
+            assert!(parsed.automatically_download_updates);
+            assert_eq!(parsed.language, "zh");
+        }
     }
 
     #[test]

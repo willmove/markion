@@ -618,6 +618,7 @@ fn run_application(startup_intent: StartupOpenIntent) {
                 app.arm_git_background_checks(cx);
                 app.arm_git_details_refresh(window, cx);
                 app.start_native_visual_smoke(window, cx);
+                app.arm_update_checks(window, cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

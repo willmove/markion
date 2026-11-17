@@ -10,6 +10,19 @@ impl Focusable for MarkionApp {
 
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.update_state.installing {
+            // Remove editor input/action handlers during the final handoff.
+            let palette = self.palette();
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(palette.app_bg)
+                .text_color(palette.text)
+                .child(self.tr(Msg::StatusUpdateInstalling))
+                .into_any_element();
+        }
         self.note_visual_input_stage("render_begin");
         self.discard_stale_visual_menus();
         // Dropdown anchors follow the rendered labels; re-measure only when
@@ -1038,6 +1051,7 @@ impl Render for MarkionApp {
                 )
             })
             )
+            .into_any_element()
     }
 }
 
@@ -6851,6 +6865,40 @@ pub(super) fn preferences_panel_view(
                                                     },
                                                 ),
                                             )),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(palette.muted)
+                                                    .child(app.tr(Msg::PrefPanelUpdatesSection)),
+                                            )
+                                            .child(preference_boolean_row(
+                                                app.tr(Msg::PrefPanelAutomaticUpdateDownloads),
+                                                app.automatically_download_updates,
+                                                app.language,
+                                                palette,
+                                                cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                                    app.toggle_automatic_update_downloads(cx);
+                                                }),
+                                            ))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(palette.muted)
+                                                    .child(app.tr(
+                                                        if app.supports_signed_updates() {
+                                                            Msg::PrefPanelUpdateCheckHint
+                                                        } else {
+                                                            Msg::PrefPanelManualUpdateHint
+                                                        },
+                                                    )),
+                                            ),
                                     )
                                     .child(git_panel::preferences_view(app, cx)),
                             )
