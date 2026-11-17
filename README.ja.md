@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>ダウンロード</strong></a> · <a href="#new-in-v060">新機能</a> · <a href="#performance">実測性能</a> · <a href="docs/user-guide.md">使い方</a></p>
+<p align="center"><a href="#install"><strong>ダウンロード</strong></a> · <a href="#new-in-v061">新機能</a> · <a href="#performance">実測性能</a> · <a href="docs/user-guide.md">使い方</a></p>
 
 ![Windows版Markionの実機画面：ファイルツリーと独立した右側アウトラインの間にMarkdown、タスク、表を表示](docs/images/markion-workspace-windows.png)
 
@@ -22,35 +22,36 @@
 | --- | --- | --- |
 | ビジュアル編集では必要に応じて構文を隠し、いつでもソースや分割プレビューへ切り替えられます。 | 通常のローカルMarkdownファイル。アカウント不要。Electronや内蔵WebViewを使わないRust + GPUI製エディターです。 | Wordを取り込み、コード・数式・図を書いて、PDF、Word、HTML、画像に書き出せます。 |
 
-<a id="new-in-v060"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a>
 
-## v0.6.0の新機能
+## v0.6.1の新機能
 
 | 注目機能 | 書きやすくなるポイント |
 | --- | --- |
-| **ファイルとアウトラインを同時表示** | 左にファイル、右に幅を調節できるアウトライン。 |
-| **コンパクトな `/` と絵文字パレット** | 構造をすばやく挿入。スラッシュメニューの自動表示は任意で、絵文字候補は最大36個。 |
-| **ブロックと表を直接操作** | コンパクトなメニュー、画像プロパティ、行・列の操作、セル内のShift+Enter改行。 |
-| **オフラインガイド5本・テンプレート12種** | **ヘルプ → サンプルとテンプレート**から議事録、計画書、記事を始められます。 |
+| **韓国語 UI** | 8 言語の完全な UI。設定で **한국어** を選択できます。 |
+| **好みの行間・段落間隔** | **設定 → 外観**で行間を 75–300%、段落間隔を 0–128px に調整できます。 |
+| **バックグラウンド更新準備** | 5 時間ごとに確認し、自動ダウンロードは既定で有効。確認後にインストールし、未保存の編集を保護します。 |
+| **内容を保持するブロック挿入** | コンパクトな挿入メニューと表・区切り線の下への追加で既存内容を保持。区切り線の後も入力を続けられます。 |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Markionの実機ブロックメニュー：見出し、リスト、ブロック操作、インライン書式"></p>
+<p align="center"><sub>v0.6.0</sub></p>
 
-[リリースノート](docs/release-notes/release-notes-v0.6.0.md) · [開発状況と検証記録](docs/project-status.md)
+[リリースノート](docs/release-notes/release-notes-v0.6.1.md) · [開発状況と検証記録](docs/project-status.md)
 
 <a id="install"></a>
 
 ## ダウンロードして書き始める
 
-| 環境 | v0.6.0のダウンロード | ダウンロード容量 |
-| --- | --- | --- |
-| **Windows x64** | [インストーラー](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-setup.exe) · [ポータブルZIP](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-portable.zip) | インストーラー 22.0 MiB |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x64.dmg) | arm64 DMG 27.1 MiB |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x86_64.rpm) | AppImage 52.4 MiB |
+| 環境 | v0.6.1のダウンロード |
+| --- | --- |
+| **Windows x64** | [インストーラー](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-setup.exe) · [ポータブルZIP](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.rpm) |
 
-[全リリースと検証情報](https://github.com/willmove/markion/releases) · 容量はダウンロードサイズで、使用メモリではありません。
+[全リリースと検証情報](https://github.com/willmove/markion/releases)
 
 - **Windows：**インストーラーを実行、またはZIPを展開します。Authenticode署名は未対応のため、SmartScreenで**詳細情報 → 実行**が必要な場合があります。
-- **macOS：**Markionをアプリケーションへ移動します。**v0.6.0はad-hoc署名で、公証されていません。**ブラウザーから入手した信頼できるコピーは、インストール後に次を実行してください：
+- **macOS：**Markionをアプリケーションへ移動します。**v0.6.1はad-hoc署名で、公証されていません。**ブラウザーから入手した信頼できるコピーは、インストール後に次を実行してください：
 
   ```bash
   xattr -cr /Applications/Markion.app
@@ -94,14 +95,14 @@ Markdownファイルかフォルダーを開くだけで始められます。サ
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-別の1 MiB文書で**1080回のシステムキー入力**を測定した結果、アプリの入力コールバック → キャレットpaintは**P50 26.63 ms / P95 33.14 ms**でした。ハードウェア/OSの入力伝達とGPU表示は除きます。既存の記録であり、v0.6.0の新規測定や競合順位ではありません。[方法・生データ・再現手順](docs/performance.md)。
+別の1 MiB文書で**1080回のシステムキー入力**を測定した結果、アプリの入力コールバック → キャレットpaintは**P50 26.63 ms / P95 33.14 ms**でした。ハードウェア/OSの入力伝達とGPU表示は除きます。既存の記録であり、v0.6.1の新規測定や競合順位ではありません。[方法・生データ・再現手順](docs/performance.md)。
 
 ## 使い始める前に
 
 - Markdownが文書の正本です。未対応またはバイト境界が曖昧な構文は慎重なソース編集を使います。GFMの結合セルと画像のピクセル切り抜きは未対応。[対応範囲と残る課題](docs/visual-editing-quality.md)。
 - 内蔵PDF/DOCXに外部変換器は不要。任意のPandocが失敗すると内蔵へ戻り、再現度は形式により異なります。ブラウザーのMarkNiceは固定版の編集画面に沿っています。Word取り込みはセッション内のみでMarkionへ書き戻さず、戻すには**Copy MD**か明示的なMarkdown保存が必要です。ブラウザーのWordとテーマ付き印刷PDFはネイティブ書き出しとは異なります。このワークスペースではMarkdown/PDF/画像の取り込みやサンプル操作は提供しません。
 - Windowsインストール版とLinux AppImageはMinisign検証後のアプリ内更新に対応。macOSとDEB/RPMはダウンロードを開きます。更新検証とOSのコード署名は別です。
-- **現在のソースはREADME・UIともに8言語対応**：英語、簡体字/繁体字中国語、日本語、韓国語、フランス語、ドイツ語、スペイン語。環境設定で **한국어** を選択できます。公開済みv0.6.0バイナリーのUIは7言語です。韓国語UIは現在のソースをビルドして利用してください。
+- **README と UI は 8 言語**：英語、簡体字/繁体字中国語、日本語、韓国語、フランス語、ドイツ語、スペイン語。設定で **한국어** を選択すると韓国語 UI を使用できます。
 
 ## ビルドと貢献
 

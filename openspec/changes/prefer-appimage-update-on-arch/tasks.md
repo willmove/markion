@@ -2,7 +2,7 @@
 
 ## 1. Sequencing
 
-- [ ] 1.1 Before archiving this change, archive `add-updater-manifest-fallback` — its synced requirement text (endpoint-list language and scenario set) is the base this delta modifies
+- [x] 1.1 Before archiving this change, archive `add-updater-manifest-fallback` — verified archived and synced on 2026-11-18. Rebase the delta on the current requirement, including archived background-update behavior, without dropping existing scenarios.
 
 ## 2. Implementation
 
@@ -14,3 +14,7 @@
 
 - [x] 3.1 Run `openspec validate prefer-appimage-update-on-arch`
 - [ ] 3.2 On the Omarchy machine, confirm "Check for Updates…" on a newer release offers the AppImage asset (may be verified during the next release's manual checks)
+
+## Release validation repair — 2026-11-18
+
+The v0.6.1 preflight initially failed strict validation because this older MODIFIED block omitted five scenarios added by the archived background-update change. Rebased the block on the current stable requirement while preserving the distribution-family rule and all existing scenarios. `openspec validate prefer-appimage-update-on-arch --strict` passes; no application code or stable specs changed. Native Omarchy verification remains pending.

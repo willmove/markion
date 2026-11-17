@@ -1,0 +1,54 @@
+{
+  "date": "2026-11-18",
+  "timezone": "Asia/Shanghai",
+  "platform": "Windows 11 Pro 10.0.26300 x86_64",
+  "rust": "1.98.1",
+  "cargo": "1.98.1",
+  "powershell": "7.6.9",
+  "openspec": "1.13.0",
+  "version": "0.6.1",
+  "base_commit": "ade570d41623176314402a5c05d8834e6838e8ce",
+  "source_diff_sha256": "39d60694c03e26228bbbc2f85eda4a99328c24ee42fd514d0393be703d725bbc",
+  "untracked_manifest_sha256": "8c6d832cbdffe7e2717226d13e5a5635605a4d2c5e88eb0abc25cdbacdd0d83a",
+  "command": "cargo test --workspace",
+  "suite_results": 51,
+  "passed": 2238,
+  "failed": 0,
+  "ignored": 5,
+  "cargo_check": "passed",
+  "format": "passed",
+  "clippy": "passed with existing warnings",
+  "workspace_versions": "10 packages resolve to 0.6.1",
+  "bundle": {
+    "files": 23,
+    "bytes": 3140387
+  },
+  "examples_markdown_files": 18,
+  "fixture_files": 160,
+  "fixture_manifest_sha256": "f2ea48d67f62b383cdc92dce5772fa379cbb495f0dd93dc050ccae3b303723aa",
+  "strict_openspec": {
+    "initial_passed": 95,
+    "initial_failed": 1,
+    "failure": "older Arch update delta omitted five newly archived scenarios",
+    "final_passed": 96,
+    "final_failed": 0
+  },
+  "docs": {
+    "files": 12,
+    "local_links_checked": 359,
+    "errors": []
+  },
+  "raw_log_sha256": {
+    "cargo-check.log": "0fa1666f0bc1d04973a52ef8870255432e62839c3d8394fb3881b7fa0482839a",
+    "quality.log": "13b7b5f7af5e36c81a478a701b89b42d5c1d75e39c3d5caa051cbdfce3db6285",
+    "openspec-final.log": "a7fb79a9558b2c57874c07b3b1043b63012306b28bf3d9cd0d33f66123cbbfb3"
+  },
+  "native_development_precheck": {
+    "exe_sha256": "2E80B7B385E56DF0E8F9A463E88D8E5A87004C3E1EBFDFD5927F2B161823C052",
+    "spacing_105_persisted": true,
+    "ui_save_matches_independent_expected_bytes": true,
+    "single_undo_save_matches_baseline": true,
+    "installed_package_acceptance": false
+  },
+  "manual_matrix": "Full candidate/final native matrix NOT_RUN/BLOCKED; release-specific exception not yet authorized."
+}

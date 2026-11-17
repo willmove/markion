@@ -2,6 +2,8 @@
 
 ## Context
 
+Release-preflight reconciliation (2026-11-18): this change's delta now uses the current archived update requirement as its base, retaining five-hour discovery, automatic authenticated staging, Later/reopen and explicit clean-document installation consent. The distribution-family mapping only affects the browser-download path; it does not replace authenticated AppImage self-updates.
+
 `browser_download_url` in `src/app/update.rs` maps `("linux", "x86_64")` to the `_amd64.deb` asset suffix unconditionally. Every release also ships a portable `_x86_64.AppImage`, which is the only artifact pacman-based systems (Arch, Omarchy, Manjaro, EndeavourOS, …) can use without forcing a foreign package format through the distro's package manager. The update-available dialog and its "Download Update" action are the only places this mapping applies.
 
 ## Goals / Non-Goals

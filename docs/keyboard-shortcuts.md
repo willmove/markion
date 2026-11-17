@@ -154,7 +154,7 @@ Find searches authored Markdown in Edit, Visual Edit, and Split modes. In Read m
 
 ## Notes
 
-- The default view mode is **Split** (source + preview side by side). Cycle through Edit → Visual Edit → Split → Read with Ctrl+Shift+V, or jump straight to a mode with Ctrl+/, Ctrl+E, Ctrl+P, or Ctrl+R. Preview width in Read mode follows the "adaptive preview width" preference (File → Preferences).
+- The default view mode is **Visual Edit**. Cycle through Edit → Visual Edit → Split → Read with Ctrl+Shift+V, or jump straight to a mode with Ctrl+/, Ctrl+E, Ctrl+P, or Ctrl+R. Preview width in Read mode follows the "adaptive preview width" preference (File → Preferences).
 - Opening a file — from the file tree, drag-and-drop, Open Recent, or File → Open — targets the current tab when that is safe (an image tab, the untitled document, or an unmodified document) and otherwise opens a new tab, following the "Open documents in current tab" preference (File → Preferences, on by default). A dirty document is never silently replaced, and Ctrl+click in the file tree always opens a new tab.
 - Focus mode dims paragraphs outside the current one; typewriter mode keeps the cursor line vertically centered.
 - A few bindings combine `Ctrl` with an `Alt` modifier (for example Ctrl+Alt+N for "new file in tree"); on macOS these are **Cmd+Option**.

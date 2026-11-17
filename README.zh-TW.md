@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>立即下載</strong></a> · <a href="#new-in-v060">新版亮點</a> · <a href="#performance">實測效能</a> · <a href="docs/user-guide.md#simplified-chinese">使用指南</a></p>
+<p align="center"><a href="#install"><strong>立即下載</strong></a> · <a href="#new-in-v061">新版亮點</a> · <a href="#performance">實測效能</a> · <a href="docs/user-guide.md#simplified-chinese">使用指南</a></p>
 
 ![Windows 實機截圖：檔案樹、視覺化 Markdown、任務列表與表格，以及獨立的右側大綱](docs/images/markion-workspace-windows.png)
 
@@ -22,35 +22,36 @@
 | --- | --- | --- |
 | 視覺化編輯按需隱藏語法，隨時切換原始碼或分欄預覽。 | 普通本地 Markdown 檔案，無需帳號。Rust + GPUI 原生編輯器，無 Electron 或內嵌 WebView。 | 匯入 Word，編寫程式碼、公式與圖表，再匯出 PDF、Word、HTML 或圖片。 |
 
-<a id="new-in-v060"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a>
 
-## v0.6.0 新亮點
+## v0.6.1 新亮點
 
 | 亮點 | 帶來的改變 |
 | --- | --- |
-| **檔案樹與大綱同時可見** | 左側找檔案，右側看結構，大綱寬度可自由調整。 |
-| **緊湊斜槓命令與 emoji 面板** | 輸入 `/` 快速插入結構，可關閉自動彈出；emoji 一次最多展示 36 個候選。 |
-| **直接操作塊與表格** | 緊湊選單完成格式設定、圖片屬性與行列操作；Shift+Enter 在單元格內換行。 |
-| **5 篇離線指南 · 12 份模板** | 透過**幫助 → 樣例與模板**，快速開始會議紀要、專案計劃或文章。 |
+| **韓語介面** | 八種完整介面語言，在偏好設定中選擇 **한국어**。 |
+| **依習慣調整間距** | 在**偏好設定 → 外觀**中設定 75–300% 行距與 0–128px 段距。 |
+| **背景準備更新** | 每五小時檢查，預設自動下載；確認後才安裝，並保護尚未儲存的編輯。 |
+| **插入時保留原內容** | 精簡插入選單與「在下方新增表格/分隔線」保留既有文字及表格，插入分隔線後可繼續輸入。 |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Markion 實機塊選單：標題層級、列表、塊操作與行內格式"></p>
+<p align="center"><sub>v0.6.0</sub></p>
 
-[完整發布說明](docs/release-notes/release-notes-v0.6.0.md) · [專案進展與驗證記錄](docs/project-status.md)
+[完整發布說明](docs/release-notes/release-notes-v0.6.1.md) · [專案進展與驗證記錄](docs/project-status.md)
 
 <a id="install"></a>
 
 ## 下載，即刻開始
 
-| 平臺 | v0.6.0 下載 | 下載體積 |
-| --- | --- | --- |
-| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-portable.zip) | 安裝程式 22.0 MiB |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x64.dmg) | arm64 DMG 27.1 MiB |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x86_64.rpm) | AppImage 52.4 MiB |
+| 平臺 | v0.6.1 下載 |
+| --- | --- |
+| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.rpm) |
 
-[全部版本與資源校驗資訊](https://github.com/willmove/markion/releases) · 以上為下載大小，並非執行記憶體。
+[全部版本與資源校驗資訊](https://github.com/willmove/markion/releases)
 
 - **Windows：**執行安裝程式或解壓 ZIP。暫未提供 Authenticode 簽名，SmartScreen 可能需要選擇**更多資訊 → 仍要執行**。
-- **macOS：**將 Markion 拖入“應用程式”。**v0.6.0 為 ad-hoc 簽名，尚未公證。**確認瀏覽器下載的副本可信後，安裝完成執行：
+- **macOS：**將 Markion 拖入“應用程式”。**v0.6.1 為 ad-hoc 簽名，尚未公證。**確認瀏覽器下載的副本可信後，安裝完成執行：
 
   ```bash
   xattr -cr /Applications/Markion.app
@@ -94,14 +95,14 @@
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-另一輪 1 MiB 文件的 **1080 次系統按鍵**實測中，應用輸入回撥 → 游標 paint 為 **P50 26.63 ms / P95 33.14 ms**，不含硬體/系統輸入傳輸與 GPU 呈現。這些是既有記錄，不是 v0.6.0 的重新跑分或競品排名。[測試方法、原始資料與復現命令](docs/performance.md)。
+另一輪 1 MiB 文件的 **1080 次系統按鍵**實測中，應用輸入回撥 → 游標 paint 為 **P50 26.63 ms / P95 33.14 ms**，不含硬體/系統輸入傳輸與 GPU 呈現。這些是既有記錄，不是 v0.6.1 的重新跑分或競品排名。[測試方法、原始資料與復現命令](docs/performance.md)。
 
 ## 開始前瞭解這些
 
 - Markdown 始終是文件源資料；不支援或無法精確定位的語法保留原始碼編輯路徑。暫不支援 GFM 合併單元格與圖片畫素裁剪。[覆蓋範圍與已知缺口](docs/visual-editing-quality.md)。
 - 內建 PDF/DOCX 無需外部轉換器；可選 Pandoc，失敗時回退內建匯出，不同格式保真度不同。MarkNice 瀏覽器工作區沿用固定版本的編輯器外觀；Word 匯入僅在當前會話生效、不寫回 Markion，需**複製 MD**或顯式儲存 Markdown 帶回。其 Word 匯出和主題化列印 PDF 有別於原生匯出；該工作區不提供 Markdown/PDF/圖片匯入與樣例操作。
 - Windows 安裝版與 Linux AppImage 支援 Minisign 驗證的一鍵更新；macOS 與 DEB/RPM 開啟下載連結。更新驗證與作業系統程式碼簽名不同。
-- **目前原始碼提供 8 種 README 與 8 種介面語言**：英語、簡體/繁體中文、日語、韓語、法語、德語和西班牙語。在偏好設定中選擇 **한국어** 即可。已發布的 v0.6.0 安裝包仍為 7 種介面語言；使用韓語介面請建置目前原始碼。
+- **8 種 README 與 8 種介面語言**：英語、簡體/繁體中文、日語、韓語、法語、德語和西班牙語。在偏好設定中選擇 **한국어** 即可使用韓語介面。
 
 ## 構建與貢獻
 

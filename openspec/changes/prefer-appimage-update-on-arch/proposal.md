@@ -19,7 +19,7 @@ The "Check for Updates…" dialog maps every Linux x86_64 machine to the `.deb` 
 
 ### Modified Capabilities
 
-- `release-packaging`: the update-check requirement's platform-asset mapping gains the Linux distribution-family rule — pacman-based systems are offered the AppImage asset, deb-based systems the DEB asset, and anything else the Release page.
+- `release-packaging`: the browser-download mapping gains the Linux distribution-family rule — pacman-based Linux systems are offered AppImage, other Linux systems default to DEB, and unrecognized platforms retain the Release-page fallback. Existing periodic checks, automatic staging and consent-based installation are preserved.
 
 ## Impact
 

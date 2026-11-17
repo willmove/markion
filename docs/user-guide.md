@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [简体中文概览](../README.zh-CN.md)
 
-Detailed workflows and configuration, retained from the project README. For a quick tour, start with the overview above. **Current release: v0.6.0; both macOS DMGs are ad-hoc signed and not notarized.**
+Detailed workflows and configuration, retained from the project README. For a quick tour, start with the overview above. **Release candidate: v0.6.1; both macOS DMGs are ad-hoc signed and not notarized.**
 
 <a id="english"></a>
 
@@ -11,7 +11,7 @@ Detailed workflows and configuration, retained from the project README. For a qu
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="#simplified-chinese">简体中文</a> · <a href="../README.zh-TW.md">繁體中文</a> · <a href="../README.ja.md">日本語</a> · <a href="../README.fr.md">Français</a> · <a href="../README.de.md">Deutsch</a> · <a href="../README.es.md">Español</a>
+  <strong>English</strong> · <a href="#simplified-chinese">简体中文</a> · <a href="../README.zh-TW.md">繁體中文</a> · <a href="../README.ja.md">日本語</a> · <a href="../README.ko.md">한국어</a> · <a href="../README.fr.md">Français</a> · <a href="../README.de.md">Deutsch</a> · <a href="../README.es.md">Español</a>
 </p>
 
 # Markion
@@ -47,12 +47,15 @@ xattr -cr /Applications/Markion.app
 
 Repeat the `xattr` command after each browser-downloaded update of a non-notarized build; prefix `sudo` if your install location requires it. The download itself is intact either way — the OSS mirror provides `sha256sums.txt`, and GitHub asset metadata also exposes SHA-256 digests.
 
+
+Background checks run every five hours, including an overdue check after startup. **Preferences → General** enables automatic update downloads by default. Signed Windows/AppImage packages are staged first; choose **Restart and Update** or **Later**. Installation requires confirmation and rechecks unsaved documents. macOS and DEB/RPM keep their browser-download path.
+
 ## Editing modes
 
 Markion has four view modes. Visual Edit is the default.
 
 - **Edit** — a focused raw Markdown source editor.
-- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, registered diagrams (Mermaid), image Properties fields, and GFM table cells have exact direct editors. YAML front matter has a collapsible header editor, indented code has an indentation-preserving payload editor, and proven HTML entities render decoded text. Use whole-document Source mode for multiline/malformed images and byte-ambiguous image syntax; other unsupported syntax keeps conservative source-backed editing paths, tracked in the [Visual Edit WYSIWYG coverage matrix and roadmap](visual-editing-quality.md). A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; selection-contextual formatting commands and a visual link editor perform one exact source-backed mutation per action. Markdown delimiters auto-pair by default, `:shortcode` opens emoji completion, task-list boxes can be toggled directly, and leaving a heading, list, task, or quote row returns it immediately to its rendered form. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, registered diagrams (Mermaid), image Properties fields, and GFM table cells have exact direct editors. YAML front matter has a collapsible header editor, indented code has an indentation-preserving payload editor, and proven HTML entities render decoded text. Use whole-document Source mode for multiline/malformed images and byte-ambiguous image syntax; other unsupported syntax keeps conservative source-backed editing paths, tracked in the [Visual Edit WYSIWYG coverage matrix and roadmap](visual-editing-quality.md). A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code), content-preserving table/divider insertion below the current block, duplicate, move up/down, source-safe drag reorder, and delete; selection-contextual formatting commands and a visual link editor perform one exact source-backed mutation per action. Markdown delimiters auto-pair by default, `:shortcode` opens emoji completion, task-list boxes can be toggled directly, and leaving a heading, list, task, or quote row returns it immediately to its rendered form. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
 - **Split Preview** — source and rendered preview side by side, with an optional source-mapped Sync scroll setting that keeps both panes on the same document location rather than scrolling by whole-document percentage.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
@@ -109,7 +112,7 @@ Rendered preview supports:
 
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
 - Custom themes use `.toml` files in Markion's local themes directory. On first use a `typewriter.toml` sample — including the optional `[fonts]` table (`editor`, `rendered`, `code`) that supplies font families for the Markdown source editor, rendered body text, and code surfaces whenever the user has no explicit preference — is installed there as a starting point. Legacy `.theme` files migrate automatically when first loaded.
-- Eight interface languages in current source: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, French, German, and Spanish. Select 한국어 in Preferences; published v0.6.0 binaries predate Korean UI support.
+- Eight interface languages in current source: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, French, German, and Spanish. Select 한국어 in Preferences; v0.6.1 includes the Korean interface.
 - The in-app Preferences panel covers language, sidebar visibility, Preview adaptive width, focus/typewriter modes, Markdown auto-pairing, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth on **General**; theme, per-plane font families (source, reading, code), font sizes, and paragraph spacing on **Appearance**.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
@@ -263,7 +266,7 @@ Markion is available under the [MIT License](../LICENSE).
 </p>
 
 <p align="center">
-  <a href="#english">English</a> · <strong>简体中文</strong> · <a href="../README.zh-TW.md">繁體中文</a> · <a href="../README.ja.md">日本語</a> · <a href="../README.fr.md">Français</a> · <a href="../README.de.md">Deutsch</a> · <a href="../README.es.md">Español</a>
+  <a href="#english">English</a> · <strong>简体中文</strong> · <a href="../README.zh-TW.md">繁體中文</a> · <a href="../README.ja.md">日本語</a> · <a href="../README.ko.md">한국어</a> · <a href="../README.fr.md">Français</a> · <a href="../README.de.md">Deutsch</a> · <a href="../README.es.md">Español</a>
 </p>
 
 # Markion
@@ -296,12 +299,15 @@ xattr -cr /Applications/Markion.app
 
 未公证的构建每次通过浏览器下载更新后需重新执行 `xattr` 命令；安装位置需要权限时在命令前加 `sudo`。无论哪种方式，下载文件本身都完好——每个 Release 都附有 `sha256sums.txt` 可供校验。
 
+
+后台每五小时检查更新，启动后补做已到期的检查。**偏好设置 → 通用**默认启用自动下载更新。Windows/AppImage 会先下载并验证签名，再由用户选择“重启并更新”或“稍后”；安装前再次检查未保存文档。macOS 与 DEB/RPM 仍通过浏览器下载。
+
 ## 编辑模式
 
 Markion 提供四种视图模式，默认使用可视化编辑。
 
 - **编辑** — 专注的原始 Markdown 源码编辑器。
-- **可视化编辑** — 所见即所得优先、基于源码的编辑界面。正文保持渲染并渐进显示必要语法；普通围栏代码正文、块级数学公式、已注册的图表（Mermaid）、图片属性字段与 GFM 表格单元格提供精确的直接编辑器。YAML 前言已有可折叠文档头，缩进代码已有保留缩进的正文编辑器，已证明的 HTML 实体可显示解码文字。多行或畸形图片以及字节映射不明确的语法保留精确源码编辑路径，并登记在[可视化编辑 WYSIWYG 覆盖矩阵与路线图](visual-editing-quality.md)中等待逐步关闭。斜杠命令面板与紧凑的右键块级菜单提供精确的块级转换（段落、标题、列表、引用、围栏代码、分隔线、表格）、复制、上移/下移、源码安全的拖拽重排与删除；选区上下文格式命令与可视化链接编辑器对每次操作执行一次精确的源码变更。Markdown 分隔符默认自动配对，输入 `:shortcode` 会打开 emoji 补全，任务列表复选框可直接点击切换；光标离开标题、列表、任务或引用行后，该行会立即恢复为渲染形态。它不是独立的富文本文档模型——底层 Markdown 始终是唯一数据源。
+- **可视化编辑** — 所见即所得优先、基于源码的编辑界面。正文保持渲染并渐进显示必要语法；普通围栏代码正文、块级数学公式、已注册的图表（Mermaid）、图片属性字段与 GFM 表格单元格提供精确的直接编辑器。YAML 前言已有可折叠文档头，缩进代码已有保留缩进的正文编辑器，已证明的 HTML 实体可显示解码文字。多行或畸形图片以及字节映射不明确的语法保留精确源码编辑路径，并登记在[可视化编辑 WYSIWYG 覆盖矩阵与路线图](visual-editing-quality.md)中等待逐步关闭。斜杠命令面板与紧凑的右键块级菜单提供精确的块级转换（段落、标题、列表、引用、围栏代码）、保留原内容的下方表格/分隔线插入、复制、上移/下移、源码安全的拖拽重排与删除；选区上下文格式命令与可视化链接编辑器对每次操作执行一次精确的源码变更。Markdown 分隔符默认自动配对，输入 `:shortcode` 会打开 emoji 补全，任务列表复选框可直接点击切换；光标离开标题、列表、任务或引用行后，该行会立即恢复为渲染形态。它不是独立的富文本文档模型——底层 Markdown 始终是唯一数据源。
 - **分栏预览** — 左右同时显示源码和渲染预览，可选择启用同步滚动：基于源码映射按文档位置对齐两个面板，而非按整篇滚动百分比同步。
 - **阅读** — 不可编辑的渲染视图，默认居中并限制为适合阅读的 860 px 最大宽度；启用“预览自适应宽度”后可使用整个面板。
 
@@ -358,7 +364,7 @@ Markion 提供四种视图模式，默认使用可视化编辑。
 
 - 十四款内置主题：Paper、Ink、Solar、Forest、Rose、Graphite、GitHub Light/Dark、Solarized Light/Dark、One Light/Dark 和 Tokyo Night/Light。
 - 自定义主题使用 Markion 本地主题目录中的 `.toml` 文件；首次使用时会安装 `typewriter.toml` 示范文件(含可选的 `[fonts]` 表——`editor`、`rendered`、`code`,在用户没有显式偏好时为源码编辑器、正文和代码平面提供字体)。旧版 `.theme` 文件会在首次加载时自动迁移。
-- 当前源码支持八种界面语言：英语、简体中文、繁體中文、日语、韩语、法语、德语和西班牙语。在偏好设置中选择 한국어；已发布的 v0.6.0 安装包尚不含韩语界面。
+- 当前源码支持八种界面语言：英语、简体中文、繁體中文、日语、韩语、法语、德语和西班牙语。在偏好设置中选择 한국어；v0.6.1 包含韩语界面。
 - 应用内偏好设置面板在**通用**中可配置语言、侧边栏显示、预览自适应宽度、专注/打字机模式、Markdown 自动配对、代码行号、同步滚动、显示隐藏文件和标题菜单层级；在**外观**中可配置主题、按平面的字体（源码/阅读/代码，默认跟随主题）、字号和段落间距。
 - 偏好设置保存在 `config.toml`；旧版 `preferences.conf` 会自动迁移。
 

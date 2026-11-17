@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>Download</strong></a> · <a href="#new-in-v060">What's new</a> · <a href="#performance">Performance</a> · <a href="docs/user-guide.md">User guide</a></p>
+<p align="center"><a href="#install"><strong>Download</strong></a> · <a href="#new-in-v061">What's new</a> · <a href="#performance">Performance</a> · <a href="docs/user-guide.md">User guide</a></p>
 
 ![Markion on Windows: rendered Markdown, tasks and a table between the file tree and independent right outline](docs/images/markion-workspace-windows.png)
 
@@ -24,35 +24,36 @@
 | --- | --- | --- |
 | Visual Edit hides syntax as you write; switch to source or split preview whenever you need. | Ordinary local Markdown files, no account required. Native Rust + GPUI editor, without Electron or an embedded WebView. | Import Word, work with code, math and diagrams, then export to PDF, Word, HTML or images. |
 
-<a id="new-in-v060"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a>
 
-## New in v0.6.0
+## New in v0.6.1
 
 | Highlight | What it means for your writing |
 | --- | --- |
-| **Files + Outline, together** | Keep files on the left and a resizable outline on the right. |
-| **Compact `/` and emoji palettes** | Insert structure quickly; optional automatic slash popup and up to 36 emoji candidates. |
-| **Direct block and table controls** | Compact menus, Image Properties, row/column actions and Shift+Enter inside cells. |
-| **5 offline guides · 12 templates** | Start a meeting note, project plan or article from **Help → Examples and Templates**. |
+| **Korean UI** | Eight complete interface languages; choose **한국어** in Preferences. |
+| **Your preferred spacing** | Set line spacing to 75–300% and paragraph spacing to 0–128px in **Preferences → Appearance**. |
+| **Updates prepared in the background** | Check every five hours; automatic downloads are on by default. Install only after confirmation, with unsaved edits protected. |
+| **Safer block insertion** | Compact Insert controls and direct Add Table/Divider Below keep existing text and tables intact; continue typing after a divider. |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Actual Markion block menu: heading levels, lists, block actions and inline formatting"></p>
+<p align="center"><sub>v0.6.0</sub></p>
 
-[Release notes](docs/release-notes/release-notes-v0.6.0.md) · [Project status and verification](docs/project-status.md)
+[Release notes](docs/release-notes/release-notes-v0.6.1.md) · [Project status and verification](docs/project-status.md)
 
 <a id="install"></a><a id="安装"></a>
 
 ## Download and start writing
 
-| Platform | v0.6.0 downloads | Download size |
-| --- | --- | --- |
-| **Windows x64** | [Installer](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-setup.exe) · [Portable ZIP](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x64-portable.zip) | 22.0 MiB installer |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x64.dmg) | 27.1 MiB arm64 DMG |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.0/Markion_0.6.0_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.0/markion_0.6.0_x86_64.rpm) | 52.4 MiB AppImage |
+| Platform | v0.6.1 downloads |
+| --- | --- |
+| **Windows x64** | [Installer](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-setup.exe) · [Portable ZIP](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.rpm) |
 
-[All releases and verification](https://github.com/willmove/markion/releases) · Download sizes are not memory use.
+[All releases and verification](https://github.com/willmove/markion/releases)
 
 - **Windows:** run the installer or extract the ZIP. No Authenticode signature yet; SmartScreen may require **More info → Run anyway**.
-- **macOS:** drag Markion into Applications. **v0.6.0 is ad-hoc signed and not notarized.** For a trusted browser-downloaded copy, clear quarantine after installation:
+- **macOS:** drag Markion into Applications. **v0.6.1 is ad-hoc signed and not notarized.** For a trusted browser-downloaded copy, clear quarantine after installation:
 
   ```bash
   xattr -cr /Applications/Markion.app
@@ -108,7 +109,7 @@ Switch modes while keeping your place, selection and undo history. [Shortcuts](d
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-In a separate **1080-system-key-event** run on a 1 MiB document, application callback → caret paint was **26.63 ms P50 / 33.14 ms P95**. It excludes hardware/OS delivery and GPU presentation. These are earlier recorded results, not a fresh v0.6.0 benchmark or a competitor ranking. [Method, raw data and reproduction](docs/performance.md).
+In a separate **1080-system-key-event** run on a 1 MiB document, application callback → caret paint was **26.63 ms P50 / 33.14 ms P95**. It excludes hardware/OS delivery and GPU presentation. These are earlier recorded results, not a fresh v0.6.1 benchmark or a competitor ranking. [Method, raw data and reproduction](docs/performance.md).
 
 <a id="current-limitations"></a><a id="当前限制"></a>
 
@@ -117,7 +118,7 @@ In a separate **1080-system-key-event** run on a 1 MiB document, application cal
 - Visual Edit keeps Markdown canonical; unsupported or byte-ambiguous syntax uses conservative source editing. GFM merged cells and image pixel cropping are unsupported. [Coverage and remaining gaps](docs/visual-editing-quality.md).
 - Built-in PDF/DOCX need no external converter; optional Pandoc falls back to built-in export. Fidelity varies by format. The MarkNice browser workspace follows its pinned editor skin; Word import is session-local, never writes back, and requires **Copy MD** or an explicit Markdown save to bring work back. Its Word export and themed print-to-PDF differ from native export; Markdown/PDF/image import and sample actions are unavailable there.
 - Windows installers and Linux AppImages support Minisign-verified in-app installation; macOS and DEB/RPM updates open a download. Update verification is separate from OS code signing.
-- **Current source: 8 README and 8 UI languages**, including Korean alongside English, Simplified/Traditional Chinese, Japanese, French, German and Spanish. Select **한국어** in Preferences. Published v0.6.0 binaries still have 7 UI languages; build the current source to use Korean.
+- **8 README and 8 UI languages:** English, Simplified/Traditional Chinese, Japanese, Korean, French, German and Spanish. Choose **한국어** in Preferences for the Korean UI.
 
 <a id="development"></a><a id="开发"></a>
 

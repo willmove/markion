@@ -4,6 +4,8 @@ Updated / 更新：2026-11-17。This snapshot describes repository implementatio
 
 ## Release state / 发布状态
 
+- v0.6.1 preparation / 准备中：韩语界面、可调行距与段距、后台更新准备，以及保留内容的表格/分隔线插入。README 已同步；当前源码和原生验收、构建、签名、镜像仍按 [v0.6.1 preflight](verification/release-v0.6.1-preflight.md) 逐项验证，尚未宣称发布完成。
+
 - v0.6.0 published / 已发布：紧凑上下文菜单、表格与图片属性、斜杠/emoji 补全、独立右侧大纲及离线样例库；Windows workspace **2,216 passed / 5 ignored / 0 failed**。四个平台打包、AppImage 冒烟、签名、发布、镜像及哈希验证均完成；未验证人工项按维护者授权明确跳过，见 [v0.6.0 preflight](verification/release-v0.6.0-preflight.md)。
 
 - Latest verified public stable tag / 当前公开稳定版本：[`v0.6.0`](https://github.com/willmove/markion/releases/tag/v0.6.0).
