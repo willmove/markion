@@ -6004,7 +6004,7 @@ fn block_menu_item_button(
     let label = block_menu_item_label(language, item, state.context);
     let color = if matches!(item, BlockMenuItem::Delete | BlockMenuItem::DeleteSelection) && enabled
     {
-        rgb(0xdc2626)
+        palette.destructive_text
     } else if (selected || current) && enabled {
         palette.active_text
     } else {
@@ -7006,14 +7006,15 @@ fn visual_html_editor(
     }
     let presentation =
         html_preview_block_view_with_parts(app, &parts, images, block_index, document_dir, cx);
+    let palette = app.palette();
     let bordered = !parts
         .iter()
         .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
         div()
             .border_t_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
+            .border_color(palette.table_border)
+            .bg(palette.table_header_bg)
             .p_2()
             .font(code_slot_font(&app.resolved_font_families.code))
             .text_size(px(typography.source_island_font_size))
@@ -7239,6 +7240,7 @@ fn visual_collapsible_source_block(
     payload_editor: impl FnOnce(&mut Context<MarkionApp>) -> gpui::AnyElement,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
+    let palette = app.palette();
     let tab = app.active_tab();
     let cursor = tab.cursor_offset();
     let caret_in_payload =
@@ -7273,7 +7275,7 @@ fn visual_collapsible_source_block(
         .when(bordered, |chrome| {
             chrome
                 .border_1()
-                .border_color(rgb(0xcbd5e1))
+                .border_color(palette.table_border)
                 .rounded_md()
                 .overflow_hidden()
         })
@@ -7309,13 +7311,17 @@ fn visual_collapsible_source_block(
                     .py(px(2.))
                     .rounded_sm()
                     .border_1()
-                    .border_color(rgb(0xcbd5e1))
-                    .bg(rgb(0xffffff))
+                    .border_color(palette.table_border)
+                    .bg(palette.table_control_bg)
                     .text_size(px(11.))
                     .line_height(px(14.))
-                    .text_color(rgb(0x475569))
+                    .text_color(palette.table_control_text)
                     .cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(rgb(0xf1f5f9)).text_color(rgb(0x0f172a)))
+                    .hover(move |style| {
+                        style
+                            .bg(palette.table_control_hover_bg)
+                            .text_color(palette.table_control_hover_text)
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |app, _: &MouseDownEvent, window, cx| {
@@ -7557,7 +7563,6 @@ const VISUAL_TABLE_GRIP_LENGTH_PX: f32 = 18.;
 /// strips. Reserved permanently so hovering never changes layout.
 const VISUAL_TABLE_EDGE_GUTTER_PX: f32 = 12.;
 const VISUAL_TABLE_EDGE_STRIP_PX: f32 = 10.;
-const VISUAL_TABLE_DROP_TARGET_BG: u32 = 0xdbeafe;
 
 /// Flex recipe matching `.flex_1().min_w_0()` with a content-based grow weight.
 /// GPUI's public `flex_grow()` helper only sets `1.0`, so the weight is applied
@@ -7644,7 +7649,7 @@ pub(super) fn visual_table_view(
     let grid = div()
         .debug_selector(move || format!("visual-table-chrome-{block_index}"))
         .border_1()
-        .border_color(palette.border)
+        .border_color(palette.table_border)
         .rounded_md()
         .overflow_hidden()
         .children(rows.iter().enumerate().map(|(row_index, row)| {
@@ -7658,12 +7663,12 @@ pub(super) fn visual_table_view(
                 .flex()
                 .bg(background)
                 .when(!is_last_row, |style| {
-                    style.border_b_1().border_color(palette.border)
+                    style.border_b_1().border_color(palette.table_border)
                 })
                 .when(cells.is_some() && row_index >= 1, |row| {
                     row.drag_over::<DraggedTableRow>(move |style, dragged, _, _| {
                         if visual_table_drop_edit(dragged.target, block_id, row_drop).is_some() {
-                            style.bg(rgb(VISUAL_TABLE_DROP_TARGET_BG))
+                            style.bg(palette.table_drop_target_bg)
                         } else {
                             style
                         }
@@ -7700,9 +7705,9 @@ pub(super) fn visual_table_view(
                         .p_2()
                         .when(selected_cells.as_ref().is_some_and(|(rows, columns)|
                             rows.contains(&row_index) && columns.contains(&cell_index)),
-                            |style| style.bg(app.palette().active_bg))
+                            |style| style.bg(palette.table_selected_bg))
                         .when(!is_last_cell, |style| {
-                            style.border_r_1().border_color(palette.border)
+                            style.border_r_1().border_color(palette.table_border)
                         })
                         .text_size(px(typography.table_font_size))
                         .cursor(CursorStyle::IBeam)
@@ -7779,7 +7784,7 @@ pub(super) fn visual_table_view(
                                 if visual_table_drop_edit(dragged.target, block_id, column_drop)
                                     .is_some()
                                 {
-                                    style.bg(rgb(VISUAL_TABLE_DROP_TARGET_BG))
+                                    style.bg(palette.table_drop_target_bg)
                                 } else {
                                     style
                                 }
@@ -7970,9 +7975,9 @@ fn visual_table_grip(
     };
     let draggable = !matches!(target.axis, VisualTableAxis::Row(0));
     let pill_color = if menu_open {
-        palette.active_text
+        palette.table_control_hover_text
     } else {
-        palette.muted
+        mix_rgba(palette.muted, palette.text, 0.25)
     };
     let grip = div()
         .id(ElementId::from((
@@ -7990,7 +7995,8 @@ fn visual_table_grip(
         } else {
             CursorStyle::PointingHand
         })
-        .hover(|style| style.bg(palette.active_bg))
+        .when(menu_open, |style| style.bg(palette.table_control_hover_bg))
+        .hover(move |style| style.bg(palette.table_control_hover_bg))
         .child(
             div()
                 .rounded_full()
@@ -8054,11 +8060,15 @@ fn visual_table_edge_strip(
         .items_center()
         .justify_center()
         .rounded_sm()
-        .bg(palette.panel_bg)
-        .hover(|style| style.bg(palette.active_bg).text_color(palette.active_text))
+        .bg(palette.table_control_bg)
+        .hover(move |style| {
+            style
+                .bg(palette.table_control_hover_bg)
+                .text_color(palette.table_control_hover_text)
+        })
         .text_size(px(10.))
         .line_height(px(10.))
-        .text_color(palette.text)
+        .text_color(palette.table_control_text)
         .cursor_pointer()
         .child("+")
         .on_mouse_down(
@@ -8266,7 +8276,7 @@ fn html_table_grid_view(
 ) -> Div {
     let columns = grid.columns.max(1).min(u16::MAX as usize) as u16;
     let palette = app.palette();
-    let border = palette.border;
+    let border = palette.table_border;
     let font_size = typography.table_font_size;
     let padding = 8.0f32;
 
@@ -8374,6 +8384,7 @@ fn html_table_grid_view(
         }
     }
     div()
+        .debug_selector(move || format!("preview-html-table-{block_index}-{part_index}"))
         .w_full()
         .grid()
         // Content-proportional column tracks approximate browser auto table
@@ -8389,38 +8400,189 @@ fn html_table_grid_view(
 
 fn table_cell_background(palette: ThemePalette, header: bool) -> Rgba {
     if header {
-        palette.panel_bg
+        palette.table_header_bg
     } else {
-        palette.surface_bg
+        palette.table_body_bg
     }
+}
+
+#[cfg(test)]
+pub(super) fn assert_accessible_table_palette(name: &str, palette: ThemePalette, is_dark: bool) {
+    let header_bg = table_cell_background(palette, true);
+    let body_bg = table_cell_background(palette, false);
+    assert_eq!(header_bg, palette.table_header_bg);
+    assert_eq!(body_bg, palette.table_body_bg);
+
+    for (surface_name, bg) in [
+        ("header", palette.table_header_bg),
+        ("body", palette.table_body_bg),
+        ("selected", palette.table_selected_bg),
+        ("drop_target", palette.table_drop_target_bg),
+        ("control", palette.table_control_bg),
+    ] {
+        let ratio = contrast_ratio(palette.text, bg);
+        assert!(
+            ratio >= 4.5,
+            "{name} {surface_name} text contrast {ratio:.2} < 4.5"
+        );
+        if is_dark {
+            assert!(
+                rgba_luminance(bg) < 0.45,
+                "{name} dark theme {surface_name} background luminance {:.3} leaked light",
+                rgba_luminance(bg)
+            );
+        } else {
+            assert!(
+                rgba_luminance(bg) > 0.45,
+                "{name} light theme {surface_name} background luminance {:.3} looks dark",
+                rgba_luminance(bg)
+            );
+        }
+    }
+
+    assert!(
+        contrast_ratio(palette.table_control_text, palette.table_control_bg) >= 4.5,
+        "{name} control text contrast < 4.5"
+    );
+    assert!(
+        contrast_ratio(
+            palette.table_control_hover_text,
+            palette.table_control_hover_bg
+        ) >= 4.5,
+        "{name} control hover text contrast < 4.5"
+    );
+    assert!(
+        contrast_ratio(palette.destructive_text, palette.table_control_bg) >= 4.5,
+        "{name} destructive text contrast on menu panel < 4.5"
+    );
+    assert!(
+        contrast_ratio(palette.destructive_text, palette.table_header_bg) >= 4.5,
+        "{name} destructive text contrast on header bg < 4.5"
+    );
+    assert!(
+        contrast_ratio(palette.table_border, palette.table_body_bg) >= 1.12,
+        "{name} border contrast against body < 1.12"
+    );
+    assert!(
+        contrast_ratio(palette.table_border, palette.table_header_bg) >= 1.12,
+        "{name} border contrast against header < 1.12"
+    );
+    assert!(
+        rgb_distance(palette.table_header_bg, palette.table_body_bg) >= 0.025,
+        "{name} header and body backgrounds collapsed"
+    );
+    assert!(
+        rgb_distance(palette.table_selected_bg, palette.table_body_bg) >= 0.055,
+        "{name} selection background not distinct from body"
+    );
+    assert!(
+        rgb_distance(palette.table_selected_bg, palette.table_header_bg) >= 0.055,
+        "{name} selection background not distinct from header"
+    );
+    assert!(
+        rgb_distance(palette.table_drop_target_bg, palette.table_body_bg) >= 0.055,
+        "{name} drop target background not distinct from body"
+    );
+    assert!(
+        rgb_distance(palette.table_drop_target_bg, palette.table_selected_bg) >= 0.035,
+        "{name} drop target background not distinct from selection"
+    );
+    assert!(
+        rgb_distance(palette.table_control_hover_bg, palette.table_control_bg) >= 0.04,
+        "{name} control hover background collapsed"
+    );
 }
 
 #[cfg(test)]
 #[test]
 fn issue_27_table_text_contrasts_with_both_backgrounds_in_light_and_dark_themes() {
-    fn luminance(color: Rgba) -> f32 {
-        fn linear(channel: f32) -> f32 {
-            if channel <= 0.04045 {
-                channel / 12.92
-            } else {
-                ((channel + 0.055) / 1.055).powf(2.4)
-            }
-        }
-        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    let themes = markion::builtin_theme_definitions();
+    for required in [
+        "Ink",
+        "GitHub Dark",
+        "Solarized Dark",
+        "One Dark",
+        "Tokyo Night",
+        "Paper",
+        "One Light",
+        "GitHub Light",
+        "Solarized Light",
+        "Tokyo Night Light",
+    ] {
+        assert!(
+            themes.iter().any(|theme| theme.name == required),
+            "missing required built-in theme {required}"
+        );
     }
 
-    let themes = markion::builtin_theme_definitions();
-    for name in ["One Light", "One Dark"] {
-        let theme = themes.iter().find(|theme| theme.name == name).unwrap();
+    for theme in &themes {
         let palette = theme_palette_from_definition(theme);
-        for header in [false, true] {
-            let background = luminance(table_cell_background(palette, header));
-            let foreground = luminance(palette.text);
-            assert!(
-                (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05) >= 4.5
-            );
-        }
+        assert_accessible_table_palette(&theme.name, palette, theme.is_dark);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn issue_27_custom_full_and_sparse_themes_inherit_table_palette() {
+    let custom_full_dark = markion::parse_theme_definition(
+        r##"
+name = "Custom Slate Dark"
+is_dark = true
+[colors]
+app_bg = "#11161f"
+panel_bg = "#19202c"
+surface_bg = "#1f2736"
+text = "#e2e8f0"
+muted = "#94a3b8"
+border = "#334155"
+active_bg = "#26354a"
+active_text = "#7dd3fc"
+"##,
+    )
+    .expect("valid full custom dark theme");
+    assert_accessible_table_palette(
+        &custom_full_dark.name,
+        theme_palette_from_definition(&custom_full_dark),
+        true,
+    );
+
+    let custom_sparse_dark = markion::parse_theme_definition(
+        r##"
+name = "Custom Sparse Dark"
+is_dark = true
+[colors]
+app_bg = "#0f172a"
+text = "#f1f5f9"
+"##,
+    )
+    .expect("valid sparse custom dark theme");
+    assert_accessible_table_palette(
+        &custom_sparse_dark.name,
+        theme_palette_from_definition(&custom_sparse_dark),
+        true,
+    );
+
+    let custom_light = markion::parse_theme_definition(
+        r##"
+name = "Custom Cream Light"
+is_dark = false
+[colors]
+app_bg = "#fcfaf5"
+panel_bg = "#f2eee4"
+surface_bg = "#fffdf8"
+text = "#1e293b"
+muted = "#64748b"
+border = "#d6d0c4"
+active_bg = "#e4decb"
+active_text = "#1e3a8a"
+"##,
+    )
+    .expect("valid custom light theme");
+    assert_accessible_table_palette(
+        &custom_light.name,
+        theme_palette_from_definition(&custom_light),
+        false,
+    );
 }
 
 /// Small "Copy" button rendered in the header of every code block. Clicking it
@@ -9268,9 +9430,10 @@ pub(super) fn preview_block_view(
                 preview_table_column_weights(rows, &typography, authored.as_deref());
             let palette = app.palette();
             div()
+                .debug_selector(move || format!("preview-table-{block_index}"))
                 .mb_3()
                 .border_1()
-                .border_color(palette.border)
+                .border_color(palette.table_border)
                 .rounded_md()
                 .overflow_hidden()
                 .children(rows.iter().enumerate().map(|(row_index, row)| {
@@ -9280,7 +9443,7 @@ pub(super) fn preview_block_view(
                         .flex()
                         .bg(background)
                         .when(!is_last_row, |style| {
-                            style.border_b_1().border_color(palette.border)
+                            style.border_b_1().border_color(palette.table_border)
                         })
                         .children(row.iter().enumerate().map(|(cell_index, cell)| {
                             let is_last_cell = cell_index + 1 == row.len();
@@ -9295,7 +9458,7 @@ pub(super) fn preview_block_view(
                             )
                             .p_2()
                             .when(!is_last_cell, |style| {
-                                style.border_r_1().border_color(palette.border)
+                                style.border_r_1().border_color(palette.table_border)
                             })
                             .text_size(px(font_size))
                             .child(
@@ -9492,7 +9655,7 @@ pub(super) fn visual_table_menu_view(
                 .rounded_sm()
                 .text_size(px(12.))
                 .text_color(if destructive && enabled {
-                    rgb(0xdc2626)
+                    palette.destructive_text
                 } else {
                     palette.text
                 })
@@ -9514,8 +9677,32 @@ pub(super) fn visual_table_menu_view(
                         .child(if current { "✓" } else { "" }),
                 )
                 .when(enabled, |row| {
+                    let hover_bg = if rgb_distance(palette.surface_bg, palette.panel_bg) >= 0.03
+                        && (!destructive
+                            || contrast_ratio(palette.destructive_text, palette.surface_bg) >= 4.5)
+                    {
+                        palette.surface_bg
+                    } else if rgb_distance(palette.table_header_bg, palette.panel_bg) >= 0.03
+                        && (!destructive
+                            || contrast_ratio(palette.destructive_text, palette.table_header_bg)
+                                >= 4.5)
+                    {
+                        palette.table_header_bg
+                    } else {
+                        palette.table_control_hover_bg
+                    };
+                    let hover_destructive_text = (destructive
+                        && contrast_ratio(palette.destructive_text, hover_bg) < 4.5)
+                        .then(|| resolve_destructive_text(hover_bg, hover_bg));
                     row.cursor_pointer()
-                        .hover(move |style| style.bg(palette.surface_bg))
+                        .hover(move |style| {
+                            let style = style.bg(hover_bg);
+                            if let Some(color) = hover_destructive_text {
+                                style.text_color(color)
+                            } else {
+                                style
+                            }
+                        })
                         .on_mouse_up(
                             MouseButton::Left,
                             cx.listener(move |app, _: &MouseUpEvent, _, cx| {
