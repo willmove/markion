@@ -27652,3 +27652,217 @@ fn typing_suppresses_block_chrome_until_pointer_move(cx: &mut TestAppContext) {
     });
     app.update(cx, |app, _| assert!(!app.typing_chrome_suppressed));
 }
+
+#[gpui::test]
+fn issue_27_markdown_and_html_tables_adapt_across_themes_and_view_modes(cx: &mut TestAppContext) {
+    let source = "| Feature | Status |\n| --- | --- |\n| Dark tables | Ready |\n\n<table>\n  <tr><th>Column A</th><th>Column B</th></tr>\n  <tr><td>Alpha</td><td>Beta</td></tr>\n</table>\n";
+    let theme_cases = [
+        ("Ink", true),
+        ("GitHub Dark", true),
+        ("Solarized Dark", true),
+        ("One Dark", true),
+        ("Tokyo Night", true),
+        ("Paper", false),
+    ];
+
+    for mode in [ViewMode::VisualEdit, ViewMode::Read, ViewMode::Split] {
+        let (app, vcx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.view_mode = mode;
+            app.sidebar_visible = false;
+            app
+        });
+        vcx.simulate_resize(size(px(1200.), px(900.)));
+        vcx.run_until_parked();
+        let initial_state = visual_table_document_state(&app, vcx);
+
+        for (theme_name, expected_dark) in theme_cases {
+            app.update(vcx, |app, cx| app.apply_theme_by_name(theme_name, cx));
+            vcx.run_until_parked();
+
+            let (active_name, palette, is_dark) = app.update(vcx, |app, _| {
+                let def = app.active_theme_definition();
+                (def.name, app.palette(), def.is_dark)
+            });
+            assert_eq!(active_name, theme_name);
+            assert_eq!(is_dark, expected_dark);
+            preview::assert_accessible_table_palette(theme_name, palette, is_dark);
+
+            let html_table = (0..8).find_map(|block_index| {
+                (0..4).find_map(|part_index| {
+                    vcx.debug_bounds(test_debug_selector(format!(
+                        "preview-html-table-{block_index}-{part_index}"
+                    )))
+                })
+            });
+            assert!(
+                html_table.is_some_and(|bounds| bounds.size.width > px(0.) && bounds.size.height > px(0.)),
+                "{mode:?} HTML table missing under {theme_name}"
+            );
+
+            match mode {
+                ViewMode::VisualEdit => {
+                    let md_table = vcx.debug_bounds("visual-table-chrome-0");
+                    assert!(
+                        md_table.is_some_and(
+                            |bounds| bounds.size.width > px(0.) && bounds.size.height > px(0.)
+                        ),
+                        "Visual Edit Markdown table missing under {theme_name}"
+                    );
+                }
+                ViewMode::Read | ViewMode::Split => {
+                    let md_table = (0..8).find_map(|block_index| {
+                        vcx.debug_bounds(test_debug_selector(format!(
+                            "preview-table-{block_index}"
+                        )))
+                    });
+                    assert!(
+                        md_table.is_some_and(
+                            |bounds| bounds.size.width > px(0.) && bounds.size.height > px(0.)
+                        ),
+                        "{mode:?} Markdown table missing under {theme_name}"
+                    );
+                }
+                ViewMode::Edit => unreachable!(),
+            }
+            assert_eq!(
+                visual_table_document_state(&app, vcx),
+                initial_state,
+                "theme switching must not mutate document or undo history"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn issue_27_visual_table_interactive_states_and_html_source_respect_dark_themes(
+    cx: &mut TestAppContext,
+) {
+    let source = "| Name | Role |\n| --- | --- |\n| Ada | Author |\n| Lin | Reviewer |\n\n<table>\n  <tr><th>Key</th><th>Value</th></tr>\n  <tr><td>Mode</td><td>Dark</td></tr>\n</table>\n";
+    let custom_dark = markion::parse_theme_definition(
+        r##"
+name = "Custom Midnight"
+is_dark = true
+[colors]
+app_bg = "#0b1120"
+text = "#e2e8f0"
+"##,
+    )
+    .expect("custom sparse dark theme");
+
+    let (app, vcx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.custom_themes.push(custom_dark.clone());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app
+    });
+    vcx.simulate_resize(size(px(1200.), px(900.)));
+    vcx.run_until_parked();
+    let initial_state = visual_table_document_state(&app, vcx);
+
+    for theme_name in ["GitHub Dark", "Solarized Dark", "Custom Midnight"] {
+        app.update(vcx, |app, cx| app.apply_theme_by_name(theme_name, cx));
+        vcx.run_until_parked();
+
+        let palette = app.update(vcx, |app, _| app.palette());
+        preview::assert_accessible_table_palette(theme_name, palette, true);
+
+        // Select body cells and verify selection state renders cleanly without mutating source.
+        app.update(vcx, |app, cx| {
+            app.select_table_cells(
+                0,
+                (1, 0),
+                markion::selection::CellSelectionAxis::Rectangle,
+                false,
+                cx,
+            );
+            app.select_table_cells(
+                0,
+                (2, 1),
+                markion::selection::CellSelectionAxis::Rectangle,
+                true,
+                cx,
+            );
+        });
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("visual-table-chrome-0").is_some());
+
+        // Hover a cell so row/column grips and edge add strips mount under the dark theme.
+        hover_visual_table_cell(&app, vcx, 0, 1, 0);
+        let row_grip = vcx
+            .debug_bounds("visual-table-row-grip-0-1")
+            .unwrap_or_else(|| panic!("row grip missing under {theme_name}"));
+        assert!(
+            vcx.debug_bounds("visual-table-column-grip-0-0").is_some(),
+            "column grip missing under {theme_name}"
+        );
+        assert!(
+            vcx.debug_bounds("visual-table-add-row-0").is_some(),
+            "add-row strip missing under {theme_name}"
+        );
+        assert!(
+            vcx.debug_bounds("visual-table-add-column-0").is_some(),
+            "add-column strip missing under {theme_name}"
+        );
+
+        // Open row grip menu (including destructive Delete action) and verify bounds, then dismiss.
+        vcx.simulate_click(row_grip.center(), Modifiers::none());
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("visual-table-menu").is_some(),
+            "table grip menu missing under {theme_name}"
+        );
+        assert!(
+            vcx.debug_bounds("visual-table-menu-delete").is_some(),
+            "destructive delete menu item missing under {theme_name}"
+        );
+        app.update(vcx, |app, cx| {
+            app.visual_table_menu = None;
+            app.active_tab_mut().hovered_visual_table_cell = None;
+            app.active_tab_mut().hovered_visual_table_block = None;
+            cx.notify();
+        });
+        vcx.run_until_parked();
+
+        // Toggle HTML table block source expansion in Visual Edit mode.
+        let html_block_id = app.update(vcx, |app, _| {
+            let blocks = app.active_tab().document.visual_blocks();
+            blocks
+                .iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Html { .. }))
+                .expect("HTML table block")
+                .id
+        });
+        app.update(vcx, |app, cx| {
+            app.active_tab_mut()
+                .toggle_visual_source_expanded(html_block_id);
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        assert!(app.update(vcx, |app, _| {
+            app.active_tab().is_visual_source_expanded(html_block_id)
+        }));
+        let html_table = (0..8).find_map(|block_index| {
+            (0..4).find_map(|part_index| {
+                vcx.debug_bounds(test_debug_selector(format!(
+                    "preview-html-table-{block_index}-{part_index}"
+                )))
+            })
+        });
+        assert!(
+            html_table.is_some(),
+            "expanded HTML table missing under {theme_name}"
+        );
+        app.update(vcx, |app, cx| {
+            app.active_tab_mut()
+                .toggle_visual_source_expanded(html_block_id);
+            cx.notify();
+        });
+        vcx.run_until_parked();
+    }
+
+    assert_eq!(visual_table_document_state(&app, vcx), initial_state);
+}
