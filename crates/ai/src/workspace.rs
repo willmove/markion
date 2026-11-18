@@ -428,11 +428,16 @@ pub fn search(
     Ok((hits, listing.next.map(|next| next * STRIDE)))
 }
 #[cfg(test)]
+pub(crate) fn workspace_tempdir() -> tempfile::TempDir {
+    tempfile::tempdir_in(dunce::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn policies_containment_and_exact_ranges() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         let root = dir.path().join("root");
         fs::create_dir(&root).unwrap();
         fs::write(root.join("note.md"), "中文😀\r\ncontent").unwrap();
@@ -479,7 +484,7 @@ mod tests {
     }
     #[test]
     fn larger_input_budget_reads_complete_file_but_disk_ceiling_stays_finite() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         let text = "文".repeat(30_000);
         fs::write(dir.path().join("large.md"), &text).unwrap();
         let grant = ReadGrant::new(dir.path(), dir.path()).unwrap();
@@ -505,7 +510,7 @@ mod tests {
     }
     #[test]
     fn child_directories_do_not_invalidate_directory_grants() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         let scope = dir.path().join("scope");
         fs::create_dir(&scope).unwrap();
         fs::write(scope.join("n.md"), "note").unwrap();
@@ -530,7 +535,7 @@ mod tests {
     }
     #[test]
     fn replaced_scope_and_sibling_prefix_fail() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         let root = dir.path().join("a");
         let sibling = dir.path().join("ab");
         fs::create_dir(&root).unwrap();
@@ -544,7 +549,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinks_are_denied() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         fs::write(dir.path().join("n.md"), "hi").unwrap();
         std::os::unix::fs::symlink(dir.path().join("n.md"), dir.path().join("alias.md")).unwrap();
         let grant = ReadGrant::new(dir.path(), dir.path()).unwrap();
@@ -552,7 +557,7 @@ mod tests {
     }
     #[test]
     fn pagination_resumes_inside_dense_dirty_file_and_listing_is_bounded() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         for i in 0..215 {
             fs::write(dir.path().join(format!("n{i:03}.md")), "ordinary").unwrap();
         }
@@ -602,7 +607,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_junctions_and_reparse_roots_are_denied() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("n.md"), "outside").unwrap();
         let link = dir.path().join("junction");

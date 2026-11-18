@@ -545,3 +545,10 @@ Built-in exports SHALL label every GFM alert with its title: the custom title wh
 #### Scenario: Untitled alert label in HTML and LaTeX
 - **WHEN** a document containing `> [!TIP]` followed by a body line is exported to HTML or LaTeX
 - **THEN** the alert shows the default label "Tip" as its title
+
+### Requirement: PDF font fallback excludes rejected faces
+When the built-in PDF writer selects a font face it cannot load for embedding, it SHALL resolve the text using compatible fallback faces before emitting glyphs.
+
+#### Scenario: Incompatible host font has a compatible fallback
+- **WHEN** shaping selects a host face the PDF writer rejects and another face can render the text
+- **THEN** the PDF is exported with glyphs shaped and embedded from the compatible fallback

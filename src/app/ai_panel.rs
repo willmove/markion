@@ -5139,14 +5139,14 @@ mod tests {
                 a.ai_ui.composer.update(cx, |i, cx| i.set("hello", cx));
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_keystrokes("backspace");
         a.update(cx, |a, cx| {
             assert_eq!(a.ai_ui.composer.read(cx).text(), "");
             assert!(a.active_tab().document.text().contains("original"));
         });
-        cx.simulate_keystrokes("ctrl-z");
-        cx.simulate_keystrokes("ctrl-b");
+        cx.simulate_keystrokes("secondary-z");
+        cx.simulate_keystrokes("secondary-b");
         cx.simulate_keystrokes("shift-enter");
         a.update(cx, |a, cx| {
             assert!(a.ai_ui.composer.read(cx).text().contains('\n'));
@@ -5213,7 +5213,7 @@ mod tests {
                 assert_eq!(a.active_tab().document.text(), "# 中文😀\r\n\noriginal");
                 assert!(a.active_tab().undo_stack.is_empty());
             });
-            cx.simulate_keystrokes("ctrl-a backspace ctrl-z");
+            cx.simulate_keystrokes("secondary-a backspace secondary-z");
             a.update(cx, |a, cx| {
                 let input = if settings {
                     &a.ai_ui.settings.model
@@ -6347,7 +6347,8 @@ mod tests {
     fn cancel_resumed_batch_keeps_applied_prefix_without_replay(cx: &mut TestAppContext) {
         let work = tempfile::tempdir().unwrap();
         let recovery = tempfile::tempdir().unwrap();
-        let grant = markion_ai::workspace::ReadGrant::new(work.path(), work.path()).unwrap();
+        let root = dunce::canonicalize(work.path()).unwrap();
+        let grant = markion_ai::workspace::ReadGrant::new(&root, &root).unwrap();
         let mut plan = markion_ai::proposals::Plan::default();
         for path in ["a.md", "b.md"] {
             plan.host_call(
@@ -6403,7 +6404,8 @@ mod tests {
         let recovery = tempfile::tempdir().unwrap();
         fs::write(work.path().join("a.md"), "alpha").unwrap();
         fs::write(work.path().join("b.md"), "beta").unwrap();
-        let grant = markion_ai::workspace::ReadGrant::new(work.path(), work.path()).unwrap();
+        let root = dunce::canonicalize(work.path()).unwrap();
+        let grant = markion_ai::workspace::ReadGrant::new(&root, &root).unwrap();
         let (a, cx) = setup(cx);
         a.update(cx, |a, cx| {
             a.preferences_path = recovery.path().join("config.toml");

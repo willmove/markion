@@ -463,10 +463,11 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::workspace_tempdir;
     use serde_json::json;
     #[test]
     fn proposals_are_pure_and_edits_merge_safely() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         fs::write(dir.path().join("n.md"), "abc😀def").unwrap();
         let grant = ReadGrant::new(dir.path(), dir.path()).unwrap();
         let mut p = Plan::default();
@@ -527,7 +528,7 @@ mod tests {
     }
     #[test]
     fn edited_destinations_need_fresh_dependencies_and_baselines() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         fs::write(dir.path().join("a.md"), "alpha").unwrap();
         let grant = ReadGrant::new(dir.path(), dir.path()).unwrap();
         let mut plan = Plan::default();
@@ -580,7 +581,7 @@ mod tests {
     }
     #[test]
     fn selected_dependencies_are_required() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = workspace_tempdir();
         let g = ReadGrant::new(dir.path(), dir.path()).unwrap();
         let mut p = Plan::default();
         p.host_call(

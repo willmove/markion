@@ -90,6 +90,7 @@ fn build_font_system(system: bool) -> FontSystem {
 }
 
 static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
+static PDF_FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
 
 /// Run `f` with the process-wide font system. The system scan happens once;
 /// the bundled fallback faces are always registered.
@@ -97,6 +98,19 @@ pub fn with_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
     let mutex = FONT_SYSTEM.get_or_init(|| Mutex::new(build_font_system(true)));
     // A poisoned mutex still holds a usable font system; keep exporting.
     let mut guard = mutex.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut guard)
+}
+
+pub fn with_pdf_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
+    let mutex = PDF_FONT_SYSTEM.get_or_init(|| {
+        with_font_system(|fs| {
+            Mutex::new(FontSystem::new_with_locale_and_db(
+                fs.locale().to_owned(),
+                fs.db().clone(),
+            ))
+        })
+    });
+    let mut guard = mutex.lock().unwrap_or_else(|error| error.into_inner());
     f(&mut guard)
 }
 

@@ -1390,7 +1390,7 @@ fn table_menu_lifecycle_new_tab_shortcut_preserves_original_document(cx: &mut Te
     });
     cx.run_until_parked();
     assert!(cx.debug_bounds("visual-block-menu-panel").is_some());
-    cx.simulate_keystrokes("ctrl-shift-n");
+    cx.simulate_keystrokes(menu_shortcuts::NEW_TAB.binding.expect("bound"));
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.tabs.len(), 2);
