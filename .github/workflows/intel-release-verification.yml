@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  SIGNED_RUN_ID: ""
+  SIGNED_RUN_ID: "44283630532"
 
 jobs:
   verify:
