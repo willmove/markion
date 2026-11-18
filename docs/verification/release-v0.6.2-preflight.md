@@ -19,10 +19,12 @@ The macOS checks remain required. An Apple Silicon runner and an Intel runner mu
 
 The signed rehearsal and native smoke tests above cover their recorded artifacts. Final release assets are verified separately and carry their own hashes.
 
-## Apple Silicon browser installation on the candidate source
+## Apple Silicon browser installation before the final editor changes
 
-A macOS 27.2.1 Apple Silicon host independently built the v0.6.2 application from the candidate application source. The application and DMG both passed Developer ID and Gatekeeper checks. Apple approved the DMG after the initial one-hour wait expired, so the original submission was resumed by ID and stapled successfully. Its finished SHA-256 was `0f8323481d05d76266407ae2dae9ec4cd50cad4a97a3da170ab9999002027a50`.
+A macOS 27.2.1 Apple Silicon host independently built v0.6.2 from rehearsal commit `585f174938aa`. The rehearsal preceded the additional list editing, rich import, and export fixes on main and does not qualify their installers. The application and DMG both passed Developer ID and Gatekeeper checks. Apple approved the DMG after the initial one-hour wait expired, so the original submission was resumed by ID and stapled successfully. Its finished SHA-256 was `0f8323481d05d76266407ae2dae9ec4cd50cad4a97a3da170ab9999002027a50`.
 
 Safari downloaded the candidate DMG from a loopback test URL, retaining macOS quarantine. Finder mounted the image and copied Markion to an isolated Applications folder. macOS showed its normal first-open confirmation stating that Apple had checked the app. Confirming it opened `Markion - Untitled.md` with the isolated profile. Both signatures and both stapled tickets were also validated on disk.
 
 The release workflow now allows up to three hours for an individual disk-image verdict. The longer wait only affects how long CI waits for Apple. It leaves the application sources, resources, and package configuration unchanged.
+
+The same host also downloaded the [GitHub rehearsal's arm64 artifact](https://github.com/willmove/markion/actions/runs/44308180701), verified its archive checksum, assessed the exact DMG and installed application, and opened the Markion window. The rehearsal DMG SHA-256 was `ba9eac4355e4f1a94a9e2f52e786f5ef4f483182c1fb1191a842e121cbe8287d`.
