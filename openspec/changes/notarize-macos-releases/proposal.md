@@ -6,6 +6,8 @@ Developer ID signing plus Apple notarization is the only supported way for a dow
 
 ## What Changes
 
+- Allow a bounded three-hour DMG notarization wait. The first successful Apple Silicon candidate DMG required more than one hour.
+
 - Public `v*` tags and manual signing rehearsals require the complete Apple credential set. A missing credential blocks publication. Pushes to the main branch and pull requests continue to produce ad-hoc CI packages without accessing Apple credentials.
 - Verification mounts the final DMG read-only and checks the signed, stapled app inside it, including its architecture. Maintainers can run the same check against the public download.
 - Before release publication, launch the app installed from each final signed DMG on a runner with the matching CPU architecture. Both apps must open a visible window.

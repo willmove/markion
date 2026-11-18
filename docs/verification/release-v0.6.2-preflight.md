@@ -18,3 +18,11 @@ The macOS checks remain required. An Apple Silicon runner and an Intel runner mu
 - A synthetic [acceptance fixture run](../testing/fixtures/README.md) verified 160 source and working files. Its fixture manifest SHA-256 was `ed19e977d4f540a1ff60f4f32149985bf6a59bc2edea6f88db46a7708b886ab2`.
 
 The signed rehearsal and native smoke tests above cover their recorded artifacts. Final release assets are verified separately and carry their own hashes.
+
+## Apple Silicon browser installation on the candidate source
+
+A macOS 27.2.1 Apple Silicon host independently built the v0.6.2 application from the candidate application source. The application and DMG both passed Developer ID and Gatekeeper checks. Apple approved the DMG after the initial one-hour wait expired, so the original submission was resumed by ID and stapled successfully. Its finished SHA-256 was `0f8323481d05d76266407ae2dae9ec4cd50cad4a97a3da170ab9999002027a50`.
+
+Safari downloaded the candidate DMG from a loopback test URL, retaining macOS quarantine. Finder mounted the image and copied Markion to an isolated Applications folder. macOS showed its normal first-open confirmation stating that Apple had checked the app. Confirming it opened `Markion - Untitled.md` with the isolated profile. Both signatures and both stapled tickets were also validated on disk.
+
+The release workflow now allows up to three hours for an individual disk-image verdict. The longer wait only affects how long CI waits for Apple. It leaves the application sources, resources, and package configuration unchanged.

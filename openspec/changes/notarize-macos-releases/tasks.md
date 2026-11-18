@@ -9,7 +9,7 @@
 ## 2. Workflow integration
 
 - [x] 2.1 In `.github/workflows/release.yml`, run the configuration script in both macOS jobs before packaging. Map the secrets in through step-level `env:` only.
-- [x] 2.2 Add `scripts/notarize-macos-dmg.sh` and a **Notarize and staple DMG** step gated on `notarize == 'true'`. The step submits with `notarytool --wait --timeout 1h`, requires `Accepted` (printing the notary log otherwise), and staples.
+- [x] 2.2 Add `scripts/notarize-macos-dmg.sh` and a **Notarize and staple DMG** step gated on `notarize == 'true'`. The step submits with `notarytool --wait --timeout 3h`, requires `Accepted` (printing the notary log otherwise), and staples.
 - [x] 2.3 Verify ad-hoc signatures in development CI and require Developer ID signatures plus notarization in release jobs.
 - [x] 2.4 Update the `packager.toml` signing comments. The committed identity stays `"-"`, and the comments note that CI rewrites it.
 
@@ -36,3 +36,5 @@
 - [x] 5.3 Update the signing and release runbooks to match the gate.
 
 - [x] 5.4 Gate GitHub release and OSS mirroring on installed-app launch from each final DMG. The [Intel rehearsal](https://github.com/willmove/markion/actions/runs/44307203859) validated the gate against a signed and notarized disk image on a native x86_64 runner.
+
+- [x] 5.5 Allow up to three hours for Apple’s DMG verdict while retaining the release failure on timeout.
