@@ -42,22 +42,16 @@
 
 ## 下載，即刻開始
 
-| 平臺 | v0.6.1 下載 |
+| 平臺 | v0.6.2 下載 |
 | --- | --- |
-| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.rpm) |
+| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
 
 [全部版本與資源校驗資訊](https://github.com/willmove/markion/releases)
 
 - **Windows：**執行安裝程式或解壓 ZIP。暫未提供 Authenticode 簽名，SmartScreen 可能需要選擇**更多資訊 → 仍要執行**。
-- **macOS：**將 Markion 拖入“應用程式”。**v0.6.1 為 ad-hoc 簽名，尚未公證。**確認瀏覽器下載的副本可信後，安裝完成執行：
-
-  ```bash
-  xattr -cr /Applications/Markion.app
-  ```
-
-  每次透過瀏覽器下載更新後需重複執行。[首次啟動詳情](docs/user-guide.md#安装)。
+- **macOS。**下載與晶片對應的 Apple Silicon 或 Intel DMG，開啟後把 Markion 拖到「應用程式」，再按兩下啟動。兩個安裝檔皆已通過 Developer ID 簽署與 Apple 公證。[首次啟動說明](docs/user-guide.md#安装)。
 - **Linux：**為 AppImage 新增執行許可權（`chmod +x markion*.AppImage`）後執行，或安裝 DEB/RPM。無 FUSE 時可用 `--appimage-extract-and-run`。
 
 開啟 Markdown 檔案或資料夾即可寫作。試用內建樣例時，請**先複製整個 examples 資料夾及其中的圖片，再開始編輯**。[上手與模板](assets/examples/README.md)。

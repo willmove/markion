@@ -49,22 +49,16 @@
 
 ## 다운로드하고 바로 시작하세요
 
-| 플랫폼 | v0.6.1 다운로드 |
+| 플랫폼 | v0.6.2 다운로드 |
 | --- | --- |
-| **Windows x64** | [설치 프로그램](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-setup.exe) · [포터블 ZIP](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.rpm) |
+| **Windows x64** | [설치 프로그램](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [포터블 ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
 
 [모든 릴리스와 검증 정보](https://github.com/willmove/markion/releases)
 
 - **Windows:** 설치 프로그램을 실행하거나 ZIP을 풀어 주세요. 아직 Authenticode 서명이 없어 SmartScreen에서 **추가 정보 → 실행**이 필요할 수 있습니다.
-- **macOS:** Markion을 응용 프로그램 폴더로 옮기세요. **v0.6.1은 ad-hoc 서명만 있으며 Apple 공증을 받지 않았습니다.** 브라우저로 받은 신뢰할 수 있는 복사본은 설치 후 다음 명령으로 격리 속성을 해제하세요:
-
-  ```bash
-  xattr -cr /Applications/Markion.app
-  ```
-
-  브라우저로 업데이트를 받을 때마다 다시 실행해야 합니다. [첫 실행 안내](docs/user-guide.md#install).
+- **macOS.** Mac에 맞는 Apple Silicon 또는 Intel DMG를 열고 Markion을 응용 프로그램 폴더로 옮긴 다음 두 번 클릭하세요. 두 DMG 모두 Developer ID 서명과 Apple 공증을 받았습니다. [첫 실행 안내](docs/user-guide.md#install).
 - **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x markion*.AppImage`) 실행하거나 DEB/RPM을 설치하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
 
 Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 예제를 수정하기 전에는 **이미지를 포함한 examples 폴더 전체를 먼저 복사하세요**. [시작 안내와 템플릿](assets/examples/README.md).

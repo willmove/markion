@@ -548,6 +548,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: Select release notes
+        id: notes
+        shell: bash
+        run: |
+          notes="docs/release-notes/release-notes-${GITHUB_REF_NAME}.md"
+          if [[ -f "$notes" ]]; then
+            echo "body_path=$notes" >> "$GITHUB_OUTPUT"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # The pattern includes installers and updater metadata. Smoke-test
       # logs and screenshots have their own artifact names.
       - name: Download all artifacts
@@ -564,7 +577,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
           fail_on_unmatched_files: true
 
   # Mirrors the tagged release's installers and packaging config to a domestic
