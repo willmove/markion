@@ -1,4 +1,5 @@
 use super::*;
+use markion::block_edit::source_block_unit;
 use markion::selection::{BlockSelection, CellSelection, CellSelectionAxis, SelectionState};
 
 impl MarkionApp {
@@ -109,21 +110,37 @@ impl MarkionApp {
         else {
             return;
         };
-        let blocks = self.active_tab().document.visual_blocks_shared();
-        let Ok(indices) = selection.indices(&self.active_tab().document, &blocks) else {
+        let document = &self.active_tab().document;
+        let blocks = document.visual_blocks_shared();
+        let Ok(indices) = selection.indices(document, &blocks) else {
             return;
         };
-        let next = if forward {
-            (indices.end..blocks.len()).find(|&i| block_can_reorder_at(&blocks, i))
+        let first = &blocks[indices.start];
+        let target = if matches!(first.kind, VisualBlockKind::ListItem { .. })
+            && source_block_unit(document.text(), &blocks, indices.start)
+                .is_ok_and(|unit| unit.blocks == indices)
+        {
+            adjacent_reorder_target(
+                document.text(),
+                document.version(),
+                &blocks,
+                &BlockTarget::from_block(document.version(), first),
+                forward,
+            )
+            .ok()
         } else {
-            (0..indices.start)
-                .rev()
-                .find(|&i| block_can_reorder_at(&blocks, i))
+            let next = if forward {
+                (indices.end..blocks.len()).find(|&i| block_can_reorder_at(&blocks, i))
+            } else {
+                (0..indices.start)
+                    .rev()
+                    .find(|&i| block_can_reorder_at(&blocks, i))
+            };
+            next.map(|index| BlockTarget::from_block(document.version(), &blocks[index]))
         };
-        let Some(next) = next else {
+        let Some(target) = target else {
             return;
         };
-        let target = BlockTarget::from_block(self.active_tab().document.version(), &blocks[next]);
         if let Ok(edit) = selection.move_to(&self.active_tab().document, &target, forward) {
             let text = self.active_tab().document.text();
             let len = selection

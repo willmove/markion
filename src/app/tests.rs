@@ -27248,6 +27248,33 @@ fn baseline_word_actions_and_progressive_select_all_work_on_source(cx: &mut Test
 }
 
 #[gpui::test]
+fn issue_53_visual_move_shortcuts_keep_sibling_subtrees_intact(cx: &mut TestAppContext) {
+    let source = "# Garden plan\n\n- East beds\n  - Carrots\n- West beds\n  - Beans\n\nWater after sunset.\n";
+    let moved = "# Garden plan\n\n- West beds\n  - Beans\n- East beds\n  - Carrots\n\nWater after sunset.\n";
+    let (app, cx) = visual_table_handle_app(source, cx);
+    app.update(cx, |app, cx| {
+        app.move_to(source.find("East beds").unwrap(), cx)
+    });
+
+    cx.dispatch_action(MoveBlocksDown);
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), moved);
+        assert_eq!(tab.undo_stack.len(), 1);
+        assert_eq!(
+            tab.document.text()[tab.selected_range.clone()].trim_end(),
+            "- East beds\n  - Carrots"
+        );
+    });
+
+    cx.dispatch_action(MoveBlocksUp);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().undo_stack.len(), 2);
+    });
+}
+
+#[gpui::test]
 fn visual_list_tab_uses_legal_source_backed_indentation(cx: &mut TestAppContext) {
     let source = "- parent\n- sibling";
     let (app, cx) = cx.add_window_view(|_, cx| {
