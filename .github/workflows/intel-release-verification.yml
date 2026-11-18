@@ -1,4 +1,4 @@
-name: AppImage candidate installation verification
+name: Intel release verification
 on:
   push:
     branches: [codex/macos-intel-verification]
@@ -8,76 +8,39 @@ permissions:
   actions: read
   contents: read
 
-
+env:
+  SIGNED_RUN_ID: "44339741078"
 
 jobs:
-  appimage-smoke:
-    name: AppImage smoke test (no GPU, no Vulkan driver)
-    runs-on: ubuntu-22.04
+  verify:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download Linux packages
+      - uses: actions/checkout@v4
+      - name: Inspect Intel launch environment
+        run: |
+          uname -m
+          sw_vers
+          test "$(uname -m)" = x86_64
+          spctl --status
+          swift -e 'import Metal; print("Metal device:", MTLCreateSystemDefaultDevice()?.name ?? "unavailable")'
+      - name: Download signed Intel DMG
+        if: env.SIGNED_RUN_ID != ''
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: '44339741078'
-          name: markion-linux-x86_64
-          path: dist
-
-      - name: Install the catalog test environment
+          run-id: ${{ env.SIGNED_RUN_ID }}
+          name: markion-macos-x86_64
+          path: signed
+      - name: Exercise the release workflow launch gate on Intel
+        if: env.SIGNED_RUN_ID != ''
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb \
-            icewm \
-            x11-utils \
-            xdotool \
-            imagemagick \
-            libfuse2 \
-            fuse \
-            libgl1-mesa-dri \
-            libosmesa6 \
-            mesa-utils \
-            libvulkan1
-          # Same firejail build and install steps as the catalog's code/worker.sh.
-          mkdir -p "$RUNNER_TEMP/firejail" && cd "$RUNNER_TEMP/firejail"
-          wget -q https://github.com/AppImage/appimage.github.io/releases/download/deps/alpine-firejail-git20230825.tar.gz
-          musl="$(wget -q https://dl-cdn.alpinelinux.org/alpine/v3.13/main/x86_64/ -O - | grep -o 'musl-1[^"]*\.apk' | head -n 1)"
-          wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.13/main/x86_64/$musl"
-          tar xf alpine-firejail-git20230825.tar.gz
-          mkdir -p firejail
-          tar xf musl-*.apk -C ./firejail/ 2>/dev/null || true
-          tar xf firejail-0*.apk -C ./firejail/ 2>/dev/null || true
-          sudo cp -Rf ./firejail/etc/* /etc/
-          sudo cp -Rf ./firejail/lib/* /lib/
-          sudo cp -Rf ./firejail/usr/* /usr/
-          sudo chown root:root /usr/bin/firejail
-          sudo chmod u+s /usr/bin/firejail
-          firejail --version | head -n 1
-
-      # Hosted runners may ship Mesa's Vulkan drivers; move their manifests
-      # away so the test reproduces a machine without any Vulkan driver.
-      - name: Remove system Vulkan drivers
-        run: |
-          for dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d /usr/local/share/vulkan/icd.d; do
-            if [ -d "$dir" ]; then
-              sudo mkdir -p "$RUNNER_TEMP/disabled-icd$dir"
-              sudo find "$dir" -name '*.json' -exec mv -t "$RUNNER_TEMP/disabled-icd$dir" {} +
-            fi
-          done
-
-      - name: Start the AppImage under firejail and wait for its window
-        env:
-          MARKION_SMOKE_REQUIRE_NO_VULKAN_DRIVER: '1'
-        run: bash scripts/smoke-test-appimage.sh dist/*.AppImage "$RUNNER_TEMP/appimage-smoke"
-
-      - name: Upload smoke test screenshot and log
-        if: always()
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          bash scripts/smoke-test-macos-release.sh signed/Markion_0.6.2_x64.dmg x86_64 "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        if: always() && env.SIGNED_RUN_ID != ''
         with:
-          name: appimage-smoke-test
-          path: ${{ runner.temp }}/appimage-smoke
+          name: macos-launch-x86_64
+          path: ${{ runner.temp }}/smoke
           if-no-files-found: ignore
-          retention-days: 14
