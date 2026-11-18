@@ -48,31 +48,32 @@ impl FamilyKind {
 #[derive(Default)]
 pub struct FontCache {
     fonts: HashMap<fontdb::ID, KrillaFont>,
+    pub(crate) rejected_face: Option<fontdb::ID>,
 }
 
 impl FontCache {
-    fn get(
-        &mut self,
-        fs: &mut FontSystem,
-        id: fontdb::ID,
-        weight: fontdb::Weight,
-    ) -> Result<KrillaFont, PdfError> {
+    fn get(&mut self, fs: &FontSystem, id: fontdb::ID) -> Result<KrillaFont, PdfError> {
         if let Some(font) = self.fonts.get(&id) {
             return Ok(font.clone());
         }
         let face = fs.db().face(id).ok_or_else(|| {
             PdfError::Fonts("cosmic-text used a face fontdb does not know".into())
         })?;
-        let face_index = face.index;
-        let cosmic_font = fs.get_font(id, weight).ok_or_else(|| {
-            PdfError::Fonts(format!(
-                "cosmic-text resolved face {face_index} but cannot load it"
-            ))
-        })?;
-        let font = KrillaFont::new(Data::from(cosmic_font.data().to_vec()), face_index)
-            .ok_or_else(|| PdfError::Fonts(format!("krilla rejects face {face_index}")))?;
-        self.fonts.insert(id, font.clone());
-        Ok(font)
+        let Some(embedded) = fs
+            .db()
+            .with_face_data(id, |bytes, index| {
+                KrillaFont::new(Data::from(bytes.to_vec()), index)
+            })
+            .flatten()
+        else {
+            self.rejected_face = Some(id);
+            return Err(PdfError::Fonts(format!(
+                "krilla cannot load {} face {}",
+                face.post_script_name, face.index
+            )));
+        };
+        self.fonts.insert(id, embedded.clone());
+        Ok(embedded)
     }
 }
 
@@ -370,7 +371,7 @@ pub fn shape_paragraph(
             let group = &glyphs[first..=i];
             let font_size = group[0].font_size;
             let info = &run_infos[group[0].metadata];
-            let font = cache.get(fs, group[0].font_id, group[0].font_weight)?;
+            let font = cache.get(fs, group[0].font_id)?;
 
             let shift = if info.footnote.is_some() || info.style.superscript {
                 spec.size * 0.33
