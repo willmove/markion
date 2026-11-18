@@ -553,3 +553,10 @@ Preview and built-in exports SHALL preserve the destination of an authored link 
 - **WHEN** the link label is a URL different from its authored destination
 - **THEN** the label remains visible and the link leads to the authored destination
 - **AND** generated HTML contains a single anchor for the link
+
+### Requirement: PDF font fallback excludes rejected faces
+When the built-in PDF writer selects a font face it cannot load for embedding, it SHALL resolve the text using compatible fallback faces before emitting glyphs.
+
+#### Scenario: Incompatible host font has a compatible fallback
+- **WHEN** shaping selects a host face the PDF writer rejects and another face can render the text
+- **THEN** the PDF is exported with glyphs shaped and embedded from the compatible fallback

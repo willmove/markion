@@ -613,6 +613,10 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeMap;
+    fn workspace_grant(work: &tempfile::TempDir) -> ReadGrant {
+        let root = dunce::canonicalize(work.path()).unwrap();
+        ReadGrant::new(&root, &root).unwrap()
+    }
     fn propose(plan: &mut Plan, name: &str, args: serde_json::Value, grant: &ReadGrant) {
         plan.host_call(name, args, grant, &BTreeMap::new(), 65536, 20)
             .unwrap();
@@ -622,7 +626,7 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let recovery = tempfile::tempdir().unwrap();
         fs::write(work.path().join("n.md"), "before").unwrap();
-        let grant = ReadGrant::new(work.path(), work.path()).unwrap();
+        let grant = workspace_grant(&work);
         let mut plan = Plan::default();
         propose(
             &mut plan,
@@ -667,7 +671,7 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let recovery = tempfile::tempdir().unwrap();
         fs::write(work.path().join("a.md"), "text").unwrap();
-        let grant = ReadGrant::new(work.path(), work.path()).unwrap();
+        let grant = workspace_grant(&work);
         let mut plan = Plan::default();
         propose(
             &mut plan,
@@ -695,7 +699,7 @@ mod tests {
     fn partial_failure_cancel_and_preparation_fail_closed() {
         let work = tempfile::tempdir().unwrap();
         let recovery = tempfile::tempdir().unwrap();
-        let grant = ReadGrant::new(work.path(), work.path()).unwrap();
+        let grant = workspace_grant(&work);
         let mut plan = Plan::default();
         propose(
             &mut plan,
@@ -725,7 +729,7 @@ mod tests {
     fn unchanged_prepared_is_unapplied_and_unknown_versions_are_retained() {
         let work = tempfile::tempdir().unwrap();
         let recovery = tempfile::tempdir().unwrap();
-        let grant = ReadGrant::new(work.path(), work.path()).unwrap();
+        let grant = workspace_grant(&work);
         let mut plan = Plan::default();
         propose(
             &mut plan,
@@ -749,7 +753,7 @@ mod tests {
         fs::write(work.path().join("a.md"), "[B](b.md)").unwrap();
         fs::write(work.path().join("b.md"), "[A](a.md#x)").unwrap();
         fs::create_dir(work.path().join("folder")).unwrap();
-        let grant = ReadGrant::new(work.path(), work.path()).unwrap();
+        let grant = workspace_grant(&work);
         let mut plan = Plan::default();
         propose(
             &mut plan,
@@ -795,7 +799,7 @@ mod tests {
     fn duplicate_review_destinations_budget_and_partial_move_fail_closed() {
         let work = tempfile::tempdir().unwrap();
         let recovery = tempfile::tempdir().unwrap();
-        let grant = ReadGrant::new(work.path(), work.path()).unwrap();
+        let grant = workspace_grant(&work);
         let mut plan = Plan::default();
         propose(
             &mut plan,
