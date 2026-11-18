@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  SIGNED_RUN_ID: "44283630532"
+  SIGNED_RUN_ID: ""
 
 jobs:
   verify:
@@ -55,7 +55,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: '44283630532'
+          run-id: '44308180701'
           name: markion-windows-x86_64
           path: signed
       - name: Smoke-test native and portable packages
