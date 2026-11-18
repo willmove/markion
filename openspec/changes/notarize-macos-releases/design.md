@@ -48,7 +48,7 @@ The workflow uses the same publish/preflight condition for setting up signing, n
 
 When `notarize == true`, this step runs after packaging and before verification:
 
-1. It submits `dist/*.dmg` (exactly one per job) with `notarytool submit --wait --timeout 1h --output-format json` using the same API key.
+1. It submits `dist/*.dmg` (exactly one per job) with `notarytool submit --wait --timeout 3h --output-format json` using the same API key.
 2. It parses `status` and requires `Accepted`. On any other status it prints the notary log and fails.
 3. It staples the DMG with `xcrun stapler staple`.
 
@@ -70,10 +70,14 @@ The gate requires `codesign --verify --deep --strict` for the app and checks the
 
 The release verifier can also run directly against the public asset. A failed check stops the build before any artifact upload.
 
+## Installed-app launch gate
+
+Each signing rehearsal and tagged release runs a launch check with its final DMG on both Apple Silicon and Intel macOS. Each check validates the disk image and applies Gatekeeper’s distribution policy to a copy installed from that image. LaunchServices starts the installed app with isolated preferences and recovery directories. The runner checks that the Markion process owns a visible window and retains its launch log. Tagged GitHub publication and the OSS mirror both depend on the launch results.
+
 ## Compatibility and risk
 
 - The hardened runtime already ships today (flags `0x10002`), and v0.4.9 runs once its quarantine is cleared, so Developer ID signing adds no new runtime restriction. Markion has no JIT engine, no unsigned plug-in loading and no `DYLD_*` use, so it needs no entitlements file.
 - The x86_64 bundle is cross-built and stapled on the arm64 runner. `codesign`, `notarytool`, `stapler` and `spctl` assessments are architecture-independent.
 - The OSS mirror copies the GitHub artifacts byte for byte, so mirrored DMGs are the notarized, stapled ones. `sha256sums.txt` is computed after stapling, because stapling happens before the artifact upload.
-- A notary outage or a stuck submission fails the tag build (`--timeout 1h`) instead of shipping an un-notarized DMG. The workflow can be re-run on the same tag.
+- A notary outage or a stuck submission fails the tag build (`--timeout 3h`) instead of shipping an un-notarized DMG. The workflow can be re-run on the same tag.
 - A certificate expiry or revocation fails `codesign`, which fails the build. Rotation is documented in `docs/macos-signing.md`.

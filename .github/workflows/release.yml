@@ -356,6 +356,44 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  macos-smoke:
+    name: macOS installed-app smoke test (${{ matrix.arch }})
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.mirror_tag == '')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            artifact: markion-macos-arm64
+          - os: macos-15-intel
+            arch: x86_64
+            artifact: markion-macos-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: signed
+      - name: Verify and launch the packaged app
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          shopt -s nullglob
+          dmgs=(signed/*.dmg)
+          test "${#dmgs[@]}" -eq 1
+          bash scripts/smoke-test-macos-release.sh "${dmgs[0]}" "$ARCH" "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-launch-${{ matrix.arch }}
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
+
   prepare-update:
     name: Sign updater installers and build metadata
     needs: build
@@ -504,14 +542,27 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build, appimage-smoke, prepare-update]
+    needs: [build, appimage-smoke, macos-smoke, prepare-update]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # The pattern keeps the appimage-smoke-test screenshot and log out of
-      # the published Release files.
+      - uses: actions/checkout@v4
+      - name: Select release notes
+        id: notes
+        shell: bash
+        run: |
+          notes="docs/release-notes/release-notes-${GITHUB_REF_NAME}.md"
+          if [[ -f "$notes" ]]; then
+            echo "body_path=$notes" >> "$GITHUB_OUTPUT"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The pattern includes installers and updater metadata. Smoke-test
+      # logs and screenshots have their own artifact names.
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -526,7 +577,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
           fail_on_unmatched_files: true
 
   # Mirrors the tagged release's installers and packaging config to a domestic
@@ -547,7 +599,7 @@ jobs:
   # 200, so a "successful" job always means the mirror actually works.
   mirror-oss:
     name: Mirror installers to Aliyun OSS
-    needs: [build, appimage-smoke, prepare-update]
+    needs: [build, appimage-smoke, macos-smoke, prepare-update]
     if: >-
       ${{
         always() &&
@@ -555,6 +607,7 @@ jobs:
           (startsWith(github.ref, 'refs/tags/v') &&
             needs.build.result == 'success' &&
             needs.appimage-smoke.result == 'success' &&
+            needs.macos-smoke.result == 'success' &&
             needs.prepare-update.result == 'success') ||
           (github.event_name == 'workflow_dispatch' && inputs.mirror_tag != '')
         )

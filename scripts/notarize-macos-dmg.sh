@@ -31,7 +31,7 @@ auth=(
 echo "Submitting $(basename "$dmg") for notarization..."
 # --wait returns once Apple has a verdict; a non-Accepted status is checked
 # below because notarytool may still exit 0 for an Invalid submission.
-result="$(xcrun notarytool submit "$dmg" "${auth[@]}" --wait --timeout 1h --output-format json)"
+result="$(xcrun notarytool submit "$dmg" "${auth[@]}" --wait --timeout 3h --output-format json)"
 echo "$result"
 
 read -r submission_id status < <(python3 -c '

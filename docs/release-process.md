@@ -111,7 +111,7 @@ Change all Markion-controlled version fields to `X.Y.Z` in one release change:
 - `[workspace.package].version` in `Cargo.toml`.
 - `[package].version` in `Cargo.toml`.
 - Top-level `version` in `packager.toml`.
-- The `export`, `markdown`, `markion`, and `markion-diagram` workspace package entries in `Cargo.lock`.
+- All Markion workspace package versions in `Cargo.lock`.
 
 Let Cargo refresh the lockfile instead of blindly replacing every matching version string; third-party packages can legitimately use the old or new version number.
 
@@ -176,6 +176,7 @@ All of these jobs must succeed:
 - Build and package on `ubuntu-22.04` (the AppImage includes the lavapipe software Vulkan fallback from `scripts/build-lavapipe.sh`, bundled before the permission fix).
 - AppImage smoke test (no GPU, no Vulkan driver): starts the AppImage like the AppImage catalog test (Xvfb, icewm, `firejail --appimage`) and requires a non-blank window. `release` and `mirror-oss` wait for it; its screenshot is the `appimage-smoke-test` artifact.
 - Sign the updater installers (Windows NSIS + Linux AppImage) and build metadata.
+- Open the installed app from each final notarized DMG on an Apple Silicon or Intel runner. Both macOS smoke jobs must report a visible window before GitHub or OSS publication.
 - Publish GitHub Release.
 - Mirror installers to Aliyun OSS.
 
@@ -270,8 +271,8 @@ Confirm that:
 - The curated notes and full comparison link are present.
 - The assets include `markion_X.Y.Z_x64-setup.exe`, `markion_X.Y.Z_x64-portable.zip`, `Markion_X.Y.Z_aarch64.dmg`, `Markion_X.Y.Z_x64.dmg`, `markion_X.Y.Z_amd64.deb`, `markion_X.Y.Z_x86_64.rpm`, and `markion_X.Y.Z_x86_64.AppImage`.
 - The assets also include `markion_X.Y.Z_x64-setup.exe.sig`, `markion_X.Y.Z_x86_64.AppImage.sig`, and `update.json`; the Release's `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"` and the GitHub asset URL `https://github.com/willmove/markion/releases/download/vX.Y.Z/markion_X.Y.Z_x64-setup.exe` as the installer URL, and a `linux-x86_64` entry with `format: "appimage"`, its full signature, and the GitHub AppImage asset URL as the installer URL.
-- The tag workflow succeeded on all native build jobs (Windows, macOS arm64, macOS x86_64 cross, Linux) and in the publish job.
-- Both public macOS DMGs pass `scripts/verify-macos-release.sh` with the matching architecture. Record a browser download, drag-to-Applications install and first launch on a Mac with Gatekeeper enabled in the native acceptance report.
+- The tag workflow succeeded on all native build jobs, both macOS installed-app smoke jobs, and the publish job.
+- Both public macOS DMGs match the SHA-256 digests from their successful native launch jobs and pass `scripts/verify-macos-release.sh` with the matching architecture. Record a browser download and first launch on a Mac with Gatekeeper enabled in the native acceptance report.
 - The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the seven packages, both installer `.sig` files, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`, the mirrored `update.json` names the OSS URL for both the NSIS installer and the AppImage, and both manifests carry identical signature content.
 - From a clean Windows x86_64 installation of the previous version, the updater accepts the signature, starts the passive NSIS installer, and refuses to begin while any document is dirty. Manual download remains available when the signed path fails.
 - From a previous-version Linux AppImage (launch it so the AppImage runtime is active), the updater accepts the signature, replaces the `.AppImage` in place, relaunches the new version, and also refuses to begin while any document is dirty. A `.deb`-installed Linux build keeps the browser-download flow.

@@ -23,6 +23,8 @@ In signing runs, cargo-packager signs `Markion.app` with the hardened runtime an
 - The embedded app's team identifier, hardened runtime, timestamp and expected executable architecture
 - `spctl` reporting `source=Notarized Developer ID` for the DMG and its embedded app when Gatekeeper assessments are enabled
 
+Both tagged releases and signing rehearsals run an installed-app smoke test on Apple Silicon and Intel macOS. Each job downloads its architecture’s final DMG, applies Gatekeeper’s distribution assessment, and checks for a visible Markion window after opening the installed app. The tag jobs block GitHub and OSS publication until both checks pass.
+
 Branch pushes and pull requests build ad-hoc without reading Apple secrets.
 
 ## One-time setup
@@ -96,4 +98,4 @@ Follow the [release process](release-process.md) for the stable tag and repeat v
 - **Certificate expiry.** Check the expiry shown in Apple Developer and rotate before that date. Create a new G2 certificate and update `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` and, if the name changed, `APPLE_SIGNING_IDENTITY`. A secure timestamp preserves the validity of existing signatures after the signing certificate expires. [Apple’s Developer ID renewal guidance](https://developer.apple.com/news/?id=w4atic4c).
 - **API key rotation:** revoke the key in App Store Connect, generate a new one, and update `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_PRIVATE_KEY`.
 - **Notarization rejected.** The job prints the notary log. If the problem was credentials or an Apple service outage, correct the issue and re-run the failed jobs. If it requires a repository change, fix it in a subsequent release commit under a fresh tag.
-- **Apple service outage:** a stalled notarization fails the job (the DMG submission gives up after one hour) instead of publishing an un-notarized DMG. Re-run the failed jobs once Apple's [system status](https://developer.apple.com/system-status/) is green.
+- **Apple service outage:** a stalled notarization fails the job (the DMG submission waits up to three hours) instead of publishing an un-notarized DMG. Re-run the failed jobs once Apple's [system status](https://developer.apple.com/system-status/) is green.

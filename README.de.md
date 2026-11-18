@@ -42,22 +42,16 @@
 
 ## Herunterladen und losschreiben
 
-| Plattform | Downloads für v0.6.1 |
+| Plattform | Downloads für v0.6.2 |
 | --- | --- |
-| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.1/Markion_0.6.1_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.1/markion_0.6.1_x86_64.rpm) |
+| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
 
 [Alle Versionen und Prüfinformationen](https://github.com/willmove/markion/releases)
 
 - **Windows:** Installer ausführen oder ZIP entpacken. Noch keine Authenticode-Signatur; SmartScreen erfordert gegebenenfalls **Weitere Informationen → Trotzdem ausführen**.
-- **macOS:** Markion in „Programme“ ziehen. **v0.6.1 ist ad-hoc signiert und nicht notarisiert.** Bei einer vertrauenswürdigen Browser-Downloadkopie nach der Installation die Quarantäne entfernen:
-
-  ```bash
-  xattr -cr /Applications/Markion.app
-  ```
-
-  Nach jedem per Browser geladenen Update wiederholen. [Erster Start](docs/user-guide.md#install).
+- **macOS.** Öffnen Sie die passende DMG für Apple Silicon oder Intel, ziehen Sie Markion in „Programme“ und starten Sie es per Doppelklick. Beide DMGs sind mit Developer ID signiert und von Apple notarisiert. [Erster Start](docs/user-guide.md#install).
 - **Linux:** AppImage ausführbar machen (`chmod +x markion*.AppImage`) und starten oder DEB/RPM installieren. Ohne FUSE: `--appimage-extract-and-run`.
 
 Eine Markdown-Datei oder einen Ordner öffnen. Vor dem Bearbeiten der Beispiele **den gesamten examples-Ordner einschließlich Bildern kopieren**. [Einstieg und Vorlagen](assets/examples/README.md).

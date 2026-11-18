@@ -1,6 +1,6 @@
 ## 0. Prerequisite
 
-- [ ] 0.1 Archive `improve-macos-distribution`, whose renamed release-packaging requirement this delta modifies, before archiving this change.
+- [ ] 0.1 Archive `improve-macos-distribution` without syncing its superseded historical delta. The signing delta carries forward Intel packaging, curated release metadata and mirroring requirements.
 
 ## 1. Signing-mode selection
 
@@ -9,7 +9,7 @@
 ## 2. Workflow integration
 
 - [x] 2.1 In `.github/workflows/release.yml`, run the configuration script in both macOS jobs before packaging. Map the secrets in through step-level `env:` only.
-- [x] 2.2 Add `scripts/notarize-macos-dmg.sh` and a **Notarize and staple DMG** step gated on `notarize == 'true'`. The step submits with `notarytool --wait --timeout 1h`, requires `Accepted` (printing the notary log otherwise), and staples.
+- [x] 2.2 Add `scripts/notarize-macos-dmg.sh` and a **Notarize and staple DMG** step gated on `notarize == 'true'`. The step submits with `notarytool --wait --timeout 3h`, requires `Accepted` (printing the notary log otherwise), and staples.
 - [x] 2.3 Verify ad-hoc signatures in development CI and require Developer ID signatures plus notarization in release jobs.
 - [x] 2.4 Update the `packager.toml` signing comments. The committed identity stays `"-"`, and the comments note that CI rewrites it.
 
@@ -24,8 +24,9 @@
 
 - [x] 4.1 `openspec validate notarize-macos-releases --strict` and `openspec validate --all --strict --no-interactive`. Parse `release.yml` as YAML. Run `bash -n` on both scripts.
 - [x] 4.2 Verify Apple Developer Program enrollment and issue the G2 Developer ID Application certificate. Verify the certificate and its matching private key by producing a timestamped code signature in a temporary keychain.
-- [ ] 4.2a Obtain App Store Connect API access and create the team key for notarization.
-- [ ] 4.3 Maintainer: add the six repository secrets. Run the release workflow manually on `main` with an empty `mirror_tag`. Confirm that both macOS jobs log `notarize: true` and pass verification, and that a browser-downloaded artifact opens on a Mac without Terminal commands.
+- [x] 4.2a Create a Developer-role App Store Connect team key and verify authentication against Apple’s notary service.
+- [x] 4.3 Add the six repository secrets and dispatch a [manual signing rehearsal](https://github.com/willmove/markion/actions/runs/44283630532). Both application submissions reached the Apple notary service.
+- [ ] 4.3a Verify signing, stapled notarization and installed startup on both release candidate DMGs.
 - [ ] 4.4 After the first notarized tag release, drop the "every release up to v0.4.9" qualifiers where they no longer help, then archive this change.
 
 ## 5. Required public signing and verification
@@ -33,3 +34,7 @@
 - [x] 5.1 Require all Apple credentials for tags and manual signing rehearsals. Keep branch and pull request packages ad-hoc. Verify missing credentials, invalid credentials, and the full configuration path with test values.
 - [x] 5.2 Verify the final DMG and its embedded app signatures, tickets and architecture. The new verifier rejected the release's SHA-256-matched v0.6.1 Apple Silicon DMG on macOS with Gatekeeper enabled. The existing app seal passed verification, but Gatekeeper rejected it and the app had no stapled ticket.
 - [x] 5.3 Update the signing and release runbooks to match the gate.
+
+- [x] 5.4 Gate GitHub release and OSS mirroring on installed-app launch from each final DMG. The [Intel rehearsal](https://github.com/willmove/markion/actions/runs/44307203859) validated the gate against a signed and notarized disk image on a native x86_64 runner.
+
+- [x] 5.5 Allow up to three hours for Apple’s DMG verdict while retaining the release failure on timeout.

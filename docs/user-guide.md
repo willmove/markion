@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [简体中文概览](../README.zh-CN.md)
 
-Detailed workflows and configuration, retained from the project README. For a quick tour, start with the overview above. **Current release: v0.6.1; both macOS DMGs are ad-hoc signed and not notarized.**
+Detailed workflows and configuration, retained from the project README. For a quick tour, start with the overview above. **The v0.6.2 macOS DMGs for Apple Silicon and Intel are Developer ID signed and Apple notarized.**
 
 <a id="english"></a>
 
