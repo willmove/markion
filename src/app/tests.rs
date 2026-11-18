@@ -28315,3 +28315,742 @@ text = "#e2e8f0"
 
     assert_eq!(visual_table_document_state(&app, vcx), initial_state);
 }
+
+fn wait_for_code_format(app: &Entity<MarkionApp>, cx: &mut TestAppContext) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if app.read_with(cx, |app, _| app.code_format_cancellation.is_none())
+            || Instant::now() >= deadline
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_code_formatter_probe(app: &Entity<MarkionApp>, cx: &mut TestAppContext) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if app.read_with(cx, |app, _| {
+            app.code_formatter_availability_cached.is_some()
+        }) || Instant::now() >= deadline
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn write_mock_code_formatter(
+    dir: &std::path::Path,
+    stem: &str,
+    stdout_body: &str,
+    sleep_ms: u64,
+    fail_stderr: Option<&str>,
+) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let path = dir.join(format!("{stem}.ps1"));
+        let mut script = String::from("$null = [Console]::In.ReadToEnd()\r\n");
+        if sleep_ms > 0 {
+            script.push_str(&format!("Start-Sleep -Milliseconds {sleep_ms}\r\n"));
+        }
+        if let Some(err) = fail_stderr {
+            let escaped = err.replace('\'', "''");
+            script.push_str(&format!(
+                "[Console]::Error.WriteLine('{escaped}')\r\nexit 2\r\n"
+            ));
+        } else {
+            let escaped = stdout_body.replace('\'', "''");
+            script.push_str(&format!(
+                "[Console]::Out.Write('{escaped}')\r\n[Console]::Out.Flush()\r\n"
+            ));
+        }
+        std::fs::write(&path, script).unwrap();
+        path
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(format!("{stem}.sh"));
+        let mut script = String::from("#!/bin/sh\ncat >/dev/null\n");
+        if sleep_ms > 0 {
+            let secs = format!("{:.3}", sleep_ms as f64 / 1000.0);
+            script.push_str(&format!("sleep {secs}\n"));
+        }
+        if let Some(err) = fail_stderr {
+            let escaped = err.replace('\'', "'\"'\"'");
+            script.push_str(&format!("printf '%s\\n' '{escaped}' >&2\nexit 2\n"));
+        } else {
+            let escaped = stdout_body.replace('\'', "'\"'\"'");
+            script.push_str(&format!("printf '%s' '{escaped}'\n"));
+        }
+        std::fs::write(&path, script).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+}
+
+#[gpui::test]
+fn code_block_format_json_valid_invalid_undo_redo_and_fidelity(cx: &mut TestAppContext) {
+    let valid_source = "```json title=\"cfg\"\n{\"b\":2,\"a\":[1,2]}\n```\n";
+    let expected_formatted =
+        "```json title=\"cfg\"\n{\n  \"b\": 2,\n  \"a\": [\n    1,\n    2\n  ]\n}\n```\n";
+    let offset = valid_source.find("{\"b\":2").unwrap() + 2;
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(valid_source))];
+        app.active_tab_mut().selected_range = offset..offset;
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), expected_formatted);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_tf(
+                app.language,
+                markion::CodeFormatMsg::StatusFormatted,
+                &[markion::code_format_t(
+                    app.language,
+                    markion::CodeFormatMsg::LangJson
+                )]
+            )
+        );
+    });
+
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), valid_source);
+    });
+    cx.dispatch_action(Redo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), expected_formatted);
+    });
+
+    // Invalid JSON preserves original document cleanly and sets failure status.
+    let invalid_source = "```json\n{\"b\":\n```\n";
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(invalid_source))];
+        app.active_tab_mut().selected_range = 9..9;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), invalid_source);
+        assert!(app.active_tab().undo_stack.is_empty());
+        assert!(app.status.contains("JSON"));
+    });
+
+    // CRLF + list indentation + tilde fence + info string preservation + cursor clamp.
+    let crlf_source = "- item\r\n\r\n  ~~~json keep=1\r\n  {\"x\":1,\"y\":2}\r\n  ~~~\r\n";
+    let crlf_expected = "- item\r\n\r\n  ~~~json keep=1\r\n  {\r\n    \"x\": 1,\r\n    \"y\": 2\r\n  }\r\n  ~~~\r\n";
+    let crlf_cursor = crlf_source.find("{\"x\":1").unwrap() + 1;
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(crlf_source))];
+        app.active_tab_mut().selected_range = crlf_cursor..crlf_cursor;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), crlf_expected);
+        let sel = app.active_tab().safe_selected_range();
+        assert!(sel.start >= crlf_expected.find("  {").unwrap());
+        assert!(sel.end <= crlf_expected.rfind("  ~~~").unwrap());
+    });
+
+    // Missing language, unsupported language, and Read mode guardrails.
+    let no_lang = "```\n{\"x\":1}\n```\n";
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(no_lang))];
+        app.active_tab_mut().selected_range = 5..5;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), no_lang);
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_t(app.language, markion::CodeFormatMsg::StatusMissingLanguage)
+        );
+    });
+
+    let unsupported = "```ruby\nputs 1\n```\n";
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(unsupported))];
+        app.active_tab_mut().selected_range = 9..9;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), unsupported);
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_tf(
+                app.language,
+                markion::CodeFormatMsg::StatusUnsupportedLanguage,
+                &["ruby"]
+            )
+        );
+    });
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(valid_source))];
+        app.active_tab_mut().selected_range = offset..offset;
+        app.view_mode = ViewMode::Read;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), valid_source);
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_t(app.language, markion::CodeFormatMsg::StatusReadOnly)
+        );
+    });
+}
+
+#[gpui::test]
+fn code_block_format_on_paste_toggle_and_exclusions(cx: &mut TestAppContext) {
+    let fence = "```json\n\n```\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(fence))];
+        app.active_tab_mut().selected_range = 8..8;
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Default format_on_paste is false: paste keeps raw plain text (ignores HTML) without auto-formatting.
+    app.read_with(cx, |app, _| {
+        assert!(!app.code_block_preferences.format_on_paste);
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "{\"b\":2,\"a\":1}".to_string(),
+            "<p><strong>not-markdown</strong></p>".to_string(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```json\n{\"b\":2,\"a\":1}\n```\n"
+        );
+    });
+    // Manual format still works even when format_on_paste is false.
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```json\n{\n  \"b\": 2,\n  \"a\": 1\n}\n```\n"
+        );
+    });
+
+    // Enable format_on_paste: pasting inside fenced code auto-formats asynchronously.
+    app.update(cx, |app, _| {
+        app.code_block_preferences.format_on_paste = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(fence))];
+        app.active_tab_mut().selected_range = 8..8;
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("{\"z\":9,\"a\":1}".to_string()));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```json\n{\n  \"z\": 9,\n  \"a\": 1\n}\n```\n"
+        );
+    });
+
+    // Non-paste typing inside fenced code block must NOT auto-format.
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(fence))];
+        app.active_tab_mut().selected_range = 8..8;
+    });
+    cx.simulate_input("{\"k\":1}");
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```json\n{\"k\":1}\n```\n"
+        );
+    });
+
+    // Exclusions even when format_on_paste == true: paragraph, inline code, indented code, untagged fence, Read mode.
+    let excluded_cases = [
+        ("hello ", 6, "{\"b\":2}", "hello {\"b\":2}"),
+        ("inline `` end", 8, "{\"b\":2}", "inline `{\"b\":2}` end"),
+        ("    ", 4, "{\"b\":2}", "    {\"b\":2}"),
+        ("```\n\n```\n", 4, "{\"b\":2}", "```\n{\"b\":2}\n```\n"),
+    ];
+    for (doc_text, pos, clip, expected) in excluded_cases {
+        app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(doc_text))];
+            app.active_tab_mut().selected_range = pos..pos;
+        });
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(clip.to_string()));
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+        });
+        wait_for_code_format(&app, cx);
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), expected);
+        });
+    }
+
+    // Read mode never triggers code formatting on paste or manual format.
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(fence))];
+        app.active_tab_mut().selected_range = 8..8;
+        app.set_view_mode(ViewMode::Read, cx);
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("{\"b\":2}".to_string()));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.read_with(cx, |app, _| {
+        assert!(app.code_format_cancellation.is_none());
+        assert!(!app.active_tab().document.text().contains("\"b\": 2"));
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert!(!app.active_tab().document.text().contains("\"b\": 2"));
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_t(app.language, markion::CodeFormatMsg::StatusReadOnly)
+        );
+    });
+}
+
+#[gpui::test]
+fn code_block_format_external_languages_and_missing_formatter_ui(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let spaced = dir.path().join("my tools");
+    std::fs::create_dir_all(&spaced).unwrap();
+
+    let biome = write_mock_code_formatter(&spaced, "mock-biome", "const x = \"biome\";\n", 0, None);
+    let prettier = write_mock_code_formatter(
+        &spaced,
+        "mock-prettier",
+        "const x = \"prettier\";\n",
+        0,
+        None,
+    );
+    let java_bin =
+        write_mock_code_formatter(&spaced, "mock-java", "class A {\n  int x;\n}\n", 0, None);
+    let java_runtime =
+        write_mock_code_formatter(&spaced, "mock-jvm", "class Jar {\n  int y;\n}\n", 0, None);
+    let java_jar = spaced.join("google-java-format.jar");
+    std::fs::write(&java_jar, b"stub-jar").unwrap();
+    let rustfmt = write_mock_code_formatter(
+        &spaced,
+        "mock-rustfmt",
+        "fn main() {\n    let a = 1;\n}\n",
+        0,
+        None,
+    );
+    let ruff = write_mock_code_formatter(&spaced, "mock-ruff", "x = 1 + 2\n", 0, None);
+    let fail = write_mock_code_formatter(&spaced, "mock-fail", "", 0, Some("bad syntax"));
+
+    let prefs = markion::CodeBlockFormatPreferences {
+        js_ts_backend: markion::JsTsFormatterBackend::Auto,
+        biome_path: Some(biome.display().to_string()),
+        prettier_path: Some(prettier.display().to_string()),
+        google_java_format_path: Some(java_bin.display().to_string()),
+        java_path: Some(java_runtime.display().to_string()),
+        rustfmt_path: Some(rustfmt.display().to_string()),
+        ruff_path: Some(ruff.display().to_string()),
+        ..markion::CodeBlockFormatPreferences::default()
+    };
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.code_block_preferences = prefs.clone();
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let cases = [
+        (
+            "```js\nconst x=1\n```\n",
+            "```js\nconst x = \"biome\";\n```\n",
+        ),
+        (
+            "```ts\nconst x:number=1\n```\n",
+            "```ts\nconst x = \"biome\";\n```\n",
+        ),
+        (
+            "```java\nclass A{int x;}\n```\n",
+            "```java\nclass A {\n  int x;\n}\n```\n",
+        ),
+        (
+            "```rust\nfn main(){let a=1;}\n```\n",
+            "```rust\nfn main() {\n    let a = 1;\n}\n```\n",
+        ),
+        ("```python\nx=1+2\n```\n", "```python\nx = 1 + 2\n```\n"),
+    ];
+    for (input, expected) in cases {
+        app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(input))];
+            let pos = input.find('\n').unwrap() + 1;
+            app.active_tab_mut().selected_range = pos..pos;
+        });
+        cx.dispatch_action(FormatCodeBlock);
+        wait_for_code_format(&app, cx);
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), expected);
+        });
+    }
+
+    // Switching JS/TS backend to Prettier routes JS through Prettier.
+    app.update(cx, |app, _| {
+        app.code_block_preferences.js_ts_backend = markion::JsTsFormatterBackend::Prettier;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "```javascript\nconst x=1\n```\n",
+        ))];
+        app.active_tab_mut().selected_range = 15..15;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```javascript\nconst x = \"prettier\";\n```\n"
+        );
+    });
+
+    // Java via .jar + configured java_path.
+    app.update(cx, |app, _| {
+        app.code_block_preferences.google_java_format_path = Some(java_jar.display().to_string());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "```java\nclass Jar{int y;}\n```\n",
+        ))];
+        app.active_tab_mut().selected_range = 10..10;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```java\nclass Jar {\n  int y;\n}\n```\n"
+        );
+    });
+
+    // Unavailable formatter reports clear status without altering text.
+    let py_raw = "```python\nx=1\n```\n";
+    app.update(cx, |app, _| {
+        app.code_block_preferences.ruff_path =
+            Some(spaced.join("missing-ruff").display().to_string());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(py_raw))];
+        app.active_tab_mut().selected_range = 11..11;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), py_raw);
+        assert!(app.status.contains("Python"));
+    });
+
+    // Non-zero formatter exit preserves original payload and reports error status.
+    let js_raw = "```js\nbroken()\n```\n";
+    app.update(cx, |app, _| {
+        app.code_block_preferences.prettier_path = Some(fail.display().to_string());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(js_raw))];
+        app.active_tab_mut().selected_range = 7..7;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), js_raw);
+        assert!(app.status.contains("bad syntax"));
+    });
+}
+
+#[gpui::test]
+fn code_block_format_manual_buttons_and_context_menus(cx: &mut TestAppContext) {
+    let raw = "```json\n{\"b\":2,\"a\":1}\n```\n";
+    let formatted = "```json\n{\n  \"b\": 2,\n  \"a\": 1\n}\n```\n";
+
+    // 1. Visual Edit header button ("visual-code-format-0")
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(raw))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(640.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let visual_btn = cx
+        .debug_bounds("visual-code-format-0")
+        .expect("visual code format button");
+    cx.simulate_click(visual_btn.center(), Modifiers::none());
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), formatted);
+    });
+
+    // 2. Visual Edit block context menu ("visual-code-format-block")
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(raw))];
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let target = BlockTarget::from_block(tab.document.version(), &blocks[0]);
+        app.open_visual_block_menu(target, point(px(120.), px(120.)), cx);
+    });
+    cx.run_until_parked();
+    let block_menu_item = cx
+        .debug_bounds("visual-code-format-block")
+        .expect("visual block format menu item");
+    cx.simulate_click(block_menu_item.center(), Modifiers::none());
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), formatted);
+    });
+
+    // 3. Split Preview header button ("preview-code-format-0") & hidden in Read mode
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(raw))];
+        app.set_view_mode(ViewMode::Split, cx);
+    });
+    cx.run_until_parked();
+    let split_btn = cx
+        .debug_bounds("preview-code-format-0")
+        .expect("split preview code format button");
+    cx.simulate_click(split_btn.center(), Modifiers::none());
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), formatted);
+    });
+    // Verify in a fresh window (since GPUI Frame::clear retains prior debug_bounds)
+    // that Read mode never renders the Split-only format button.
+    let (_read_app, read_cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(raw))];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+    read_cx.simulate_resize(size(px(900.), px(640.)));
+    read_cx.run_until_parked();
+    assert!(read_cx.debug_bounds("preview-code-format-0").is_none());
+
+    // 4. Source editor context menu ("editor-context-format-code")
+    let with_prose = "Intro paragraph\n\n```json\n{\"b\":2,\"a\":1}\n```\n";
+    let in_code_pos = with_prose.find("{\"b\":2").unwrap() + 1;
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(with_prose))];
+        app.active_tab_mut().selected_range = 2..2;
+        app.view_mode = ViewMode::Edit;
+        app.show_editor_context_menu(point(px(40.), px(40.)), cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("editor-context-format-code").is_none());
+
+    app.update(cx, |app, cx| {
+        app.editor_context_menu = None;
+        app.active_tab_mut().selected_range = in_code_pos..in_code_pos;
+        app.show_editor_context_menu(point(px(40.), px(40.)), cx);
+    });
+    cx.run_until_parked();
+    let ctx_btn = cx
+        .debug_bounds("editor-context-format-code")
+        .expect("editor context format item");
+    cx.simulate_click(ctx_btn.center(), Modifiers::none());
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "Intro paragraph\n\n```json\n{\n  \"b\": 2,\n  \"a\": 1\n}\n```\n"
+        );
+    });
+}
+
+#[gpui::test]
+fn code_block_format_stale_typing_tab_switch_and_timeout_safety(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let slow = write_mock_code_formatter(dir.path(), "slow-fmt", "const slow = 1;\n", 450, None);
+    let hang = write_mock_code_formatter(dir.path(), "hang-fmt", "", 15_000, None);
+
+    let js_doc = "```js\nconst a=1\n```\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.code_block_preferences.js_ts_backend = markion::JsTsFormatterBackend::Prettier;
+        app.code_block_preferences.prettier_path = Some(slow.display().to_string());
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text(js_doc)),
+            EditorTab::new(MarkdownDocument::from_text("# Second\n")),
+        ];
+        app.active_tab_mut().selected_range = 6..6;
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // 1. Continued typing during in-flight async formatting discards stale output.
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(FormatCodeBlock), cx);
+    });
+    app.read_with(cx, |app, _| {
+        assert!(app.code_format_cancellation.is_some());
+    });
+    cx.update(|window, cx| {
+        window.dispatch_keystroke(gpui::Keystroke::parse("k").unwrap(), cx);
+    });
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "```js\nkconst a=1\n```\n");
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_t(app.language, markion::CodeFormatMsg::StatusFormatStale)
+        );
+    });
+
+    // 2. Switching active tab while formatting is in flight discards stale result.
+    app.update(cx, |app, cx| {
+        app.tabs[0] = EditorTab::new(MarkdownDocument::from_text(js_doc));
+        app.tabs[0].selected_range = 6..6;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(FormatCodeBlock), cx);
+    });
+    app.read_with(cx, |app, _| {
+        assert!(app.code_format_cancellation.is_some());
+    });
+    app.update(cx, |app, cx| app.switch_active_tab(1, cx));
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs[0].document.text(), js_doc);
+        assert_eq!(app.tabs[1].document.text(), "# Second\n");
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_t(app.language, markion::CodeFormatMsg::StatusFormatStale)
+        );
+    });
+
+    // 3. Formatter timeout kills child process and preserves document safely.
+    app.update(cx, |app, cx| {
+        app.switch_active_tab(0, cx);
+        app.code_block_preferences.prettier_path = Some(hang.display().to_string());
+        app.tabs[0].selected_range = 6..6;
+    });
+    cx.dispatch_action(FormatCodeBlock);
+    wait_for_code_format(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs[0].document.text(), js_doc);
+        assert_eq!(
+            app.status.as_ref(),
+            markion::code_format_tf(
+                app.language,
+                markion::CodeFormatMsg::StatusFormatTimedOut,
+                &[markion::code_format_t(
+                    app.language,
+                    markion::CodeFormatMsg::LangJavaScript
+                )]
+            )
+        );
+    });
+}
+
+#[gpui::test]
+fn preferences_editor_tab_toggles_format_on_paste_and_probes_availability(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = preferences_path.clone();
+        app.preferences_panel_open = true;
+        app
+    });
+    cx.simulate_resize(size(px(960.), px(720.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::Editor, cx);
+    });
+    wait_for_code_formatter_probe(&app, cx);
+    app.read_with(cx, |app, _| {
+        let avail = app
+            .code_formatter_availability_cached
+            .as_ref()
+            .expect("availability probe cached");
+        let json = avail
+            .status_for(markion::code_format::CodeLanguage::Json)
+            .expect("json status");
+        assert!(json.available);
+        assert!(!app.code_block_preferences.format_on_paste);
+    });
+
+    let toggle_row = cx
+        .debug_bounds("preferences-code-format-on-paste")
+        .expect("format on paste toggle row");
+    // The boolean toggle button sits on the right side of the justified row.
+    let toggle_btn_point = point(toggle_row.right() - px(14.), toggle_row.center().y);
+    cx.simulate_click(toggle_btn_point, Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(app.code_block_preferences.format_on_paste);
+    });
+    let saved = load_app_preferences(&preferences_path).unwrap();
+    assert!(saved.code_blocks.format_on_paste);
+
+    cx.simulate_click(toggle_btn_point, Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(!app.code_block_preferences.format_on_paste);
+    });
+    let saved_after = load_app_preferences(&preferences_path).unwrap();
+    assert!(!saved_after.code_blocks.format_on_paste);
+}

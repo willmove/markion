@@ -515,6 +515,8 @@ pub struct AppPreferences {
     /// Auto-save behavior. Configurable only via the config file, not the
     /// Preferences panel.
     pub auto_save: AutoSavePreferences,
+    /// Code block formatting defaults ([code_blocks] table).
+    pub code_blocks: CodeBlockFormatPreferences,
     /// Git executable discovery and optional remote-check defaults. Repository
     /// bindings and approved paths live in the separate `git-sync.toml` file.
     pub git: GitPreferences,
@@ -569,6 +571,7 @@ impl Default for AppPreferences {
             automatically_download_updates: true,
             last_update_check: None,
             auto_save: AutoSavePreferences::default(),
+            code_blocks: CodeBlockFormatPreferences::default(),
             git: GitPreferences::default(),
             export: ExportPreferences::default(),
             images: ImagePreferences::default(),
@@ -1008,6 +1011,53 @@ pub struct AutoSavePreferences {
     pub silent_save: bool,
     /// Inactivity interval before an auto-save fires, in seconds.
     pub delay_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum JsTsFormatterBackend {
+    #[default]
+    Auto,
+    Biome,
+    Prettier,
+}
+
+impl JsTsFormatterBackend {
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Biome => "biome",
+            Self::Prettier => "prettier",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "biome" => Self::Biome,
+            "prettier" => Self::Prettier,
+            _ => Self::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodeBlockFormatPreferences {
+    /// Auto-format fenced code blocks after pasting code when a recognized
+    /// language has an available formatter. Disabled by default.
+    pub format_on_paste: bool,
+    /// Preferred formatter backend for JavaScript and TypeScript fences.
+    pub js_ts_backend: JsTsFormatterBackend,
+    /// Optional explicit Biome executable path (`None` auto-detects `biome`).
+    pub biome_path: Option<String>,
+    /// Optional explicit Prettier executable path (`None` auto-detects `prettier`).
+    pub prettier_path: Option<String>,
+    /// Optional explicit `google-java-format` binary or `.jar` path.
+    pub google_java_format_path: Option<String>,
+    /// Optional explicit `java` runtime executable used when launching a `.jar`.
+    pub java_path: Option<String>,
+    /// Optional explicit `rustfmt` executable path (`None` auto-detects `rustfmt`).
+    pub rustfmt_path: Option<String>,
+    /// Optional explicit `ruff` executable path (`None` auto-detects `ruff`).
+    pub ruff_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

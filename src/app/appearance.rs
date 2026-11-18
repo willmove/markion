@@ -150,6 +150,11 @@ impl MarkionApp {
                     app.outline_visible = preferences.outline_visible;
                     app.auto_save_preferences = preferences.auto_save;
                     app.automatically_download_updates = preferences.automatically_download_updates;
+                    app.code_block_preferences = preferences.code_blocks;
+                    app.code_formatter_availability_cached = None;
+                    if app.preferences_panel_open && app.preferences_tab == PreferencesTab::Editor {
+                        app.refresh_code_formatter_availability(cx);
+                    }
                     app.image_preferences = preferences.images;
                     app.ai_preferences = preferences.ai;
                     app.ai_ui.invalidate();
@@ -893,6 +898,7 @@ impl MarkionApp {
             | PaneScrollTarget::PreferencesShortcutCategories
             | PaneScrollTarget::PreferencesShortcutActions
             | PaneScrollTarget::PreferencesExport
+            | PaneScrollTarget::PreferencesEditor
             | PaneScrollTarget::FileTree
             | PaneScrollTarget::Outline
             | PaneScrollTarget::MarkdownReference => return,

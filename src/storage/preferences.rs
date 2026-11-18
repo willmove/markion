@@ -12,12 +12,12 @@ use std::{collections::BTreeMap, fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AppPreferences, AutoSavePreferences, ClipboardImagePolicy, CodeTheme,
-    CustomImageCommandPreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
+    AppPreferences, AutoSavePreferences, ClipboardImagePolicy, CodeBlockFormatPreferences,
+    CodeTheme, CustomImageCommandPreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
     DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
     ExportBackendPreference, ExportPreferences, GitPreferences, ImagePreferences,
-    ImageUploaderKind, LocalImagePolicy, OutlinePosition, PdfExportOptions, PdfPageSize,
-    PicGoCorePreferences, PicGoHttpPreferences, RemoteImagePolicy, SidebarTab,
+    ImageUploaderKind, JsTsFormatterBackend, LocalImagePolicy, OutlinePosition, PdfExportOptions,
+    PdfPageSize, PicGoCorePreferences, PicGoHttpPreferences, RemoteImagePolicy, SidebarTab,
     normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
     normalize_image_transfer_timeout_secs, normalize_paragraph_spacing,
     normalize_rendered_font_size,
@@ -109,6 +109,7 @@ struct PreferencesFile {
     #[serde(default, deserialize_with = "deserialize_optional_bool")]
     outline_visible: Option<bool>,
     auto_save: AutoSaveFile,
+    code_blocks: CodeBlocksFile,
     git: GitFile,
     export: ExportFile,
     images: ImagesFile,
@@ -262,6 +263,91 @@ struct AutoSaveFile {
     #[serde(deserialize_with = "deserialize_bool_or_true")]
     silent_save: bool,
     delay_secs: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct CodeBlocksFile {
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    format_on_paste: bool,
+    #[serde(deserialize_with = "deserialize_string_or_default_js_ts_backend")]
+    js_ts_backend: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    biome_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    prettier_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    google_java_format_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    java_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    rustfmt_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    ruff_path: Option<String>,
+}
+
+impl Default for CodeBlocksFile {
+    fn default() -> Self {
+        Self::from(&CodeBlockFormatPreferences::default())
+    }
+}
+
+impl From<&CodeBlockFormatPreferences> for CodeBlocksFile {
+    fn from(preferences: &CodeBlockFormatPreferences) -> Self {
+        Self {
+            format_on_paste: preferences.format_on_paste,
+            js_ts_backend: preferences.js_ts_backend.config_value().to_string(),
+            biome_path: crate::model::normalize_font_family(preferences.biome_path.as_deref()),
+            prettier_path: crate::model::normalize_font_family(
+                preferences.prettier_path.as_deref(),
+            ),
+            google_java_format_path: crate::model::normalize_font_family(
+                preferences.google_java_format_path.as_deref(),
+            ),
+            java_path: crate::model::normalize_font_family(preferences.java_path.as_deref()),
+            rustfmt_path: crate::model::normalize_font_family(preferences.rustfmt_path.as_deref()),
+            ruff_path: crate::model::normalize_font_family(preferences.ruff_path.as_deref()),
+        }
+    }
+}
+
+impl From<CodeBlocksFile> for CodeBlockFormatPreferences {
+    fn from(file: CodeBlocksFile) -> Self {
+        Self {
+            format_on_paste: file.format_on_paste,
+            js_ts_backend: JsTsFormatterBackend::from_config(&file.js_ts_backend),
+            biome_path: file.biome_path,
+            prettier_path: file.prettier_path,
+            google_java_format_path: file.google_java_format_path,
+            java_path: file.java_path,
+            rustfmt_path: file.rustfmt_path,
+            ruff_path: file.ruff_path,
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -486,6 +572,7 @@ impl From<&AppPreferences> for PreferencesFile {
                 silent_save: preferences.auto_save.silent_save,
                 delay_secs: preferences.auto_save.delay_secs,
             },
+            code_blocks: CodeBlocksFile::from(&preferences.code_blocks),
             git: GitFile {
                 executable: crate::model::normalize_font_family(
                     preferences.git.executable.as_deref(),
@@ -564,6 +651,7 @@ impl From<PreferencesFile> for AppPreferences {
                     file.auto_save.delay_secs as i64,
                 ),
             },
+            code_blocks: file.code_blocks.into(),
             git: GitPreferences {
                 executable: file.git.executable,
                 background_check: file.git.background_check,
@@ -890,6 +978,19 @@ where
 /// Path-like config strings (`export.pandoc_path`, `export.reference_doc`):
 /// a string value is kept (trimmed; empty treated as unset), any other value
 /// type degrades to unset rather than blocking startup.
+fn deserialize_string_or_default_js_ts_backend<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .map(JsTsFormatterBackend::from_config)
+        .unwrap_or_default()
+        .config_value()
+        .to_string())
+}
+
 fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -901,6 +1002,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_blocks_preferences_round_trip_and_default_safely() {
+        let missing = parse_app_preferences("theme = 'Paper'\n").unwrap();
+        assert!(!missing.code_blocks.format_on_paste);
+        assert_eq!(
+            missing.code_blocks.js_ts_backend,
+            JsTsFormatterBackend::Auto
+        );
+        assert_eq!(missing.code_blocks.biome_path, None);
+
+        let malformed = parse_app_preferences(
+            "[code_blocks]\nformat_on_paste = 'yes'\njs_ts_backend = 42\nbiome_path = '   '\n",
+        )
+        .unwrap();
+        assert!(!malformed.code_blocks.format_on_paste);
+        assert_eq!(
+            malformed.code_blocks.js_ts_backend,
+            JsTsFormatterBackend::Auto
+        );
+        assert_eq!(malformed.code_blocks.biome_path, None);
+
+        let prefs = AppPreferences {
+            code_blocks: CodeBlockFormatPreferences {
+                format_on_paste: true,
+                js_ts_backend: JsTsFormatterBackend::Biome,
+                biome_path: Some("C:/Tools With Space/biome.exe".into()),
+                prettier_path: Some("prettier.cmd".into()),
+                google_java_format_path: Some("D:/jars/google-java-format.jar".into()),
+                java_path: Some("C:/Java/bin/java.exe".into()),
+                rustfmt_path: Some("rustfmt".into()),
+                ruff_path: Some("ruff".into()),
+            },
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&prefs);
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.code_blocks, prefs.code_blocks);
+    }
 
     #[test]
     fn ai_defaults_and_malformed_fields_preserve_other_preferences() {
