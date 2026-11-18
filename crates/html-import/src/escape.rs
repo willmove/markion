@@ -7,7 +7,19 @@ pub(crate) fn escape_markdown_text(value: &str) -> String {
     for character in value.chars() {
         if matches!(
             character,
-            '\\' | '\u{0060}' | '*' | '_' | '{' | '}' | '[' | ']' | '<' | '>' | '#'
+            '\\' | '\u{0060}'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '<'
+                | '>'
+                | '#'
+                | '&'
+                | '^'
+                | '~'
         ) {
             output.push('\\');
         }

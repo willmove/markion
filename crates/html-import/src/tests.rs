@@ -324,13 +324,13 @@ fn nested_table_falls_back_to_raw_html() {
 fn entities_decode_and_passthrough() {
     assert_eq!(
         md("<p>a &amp; b&nbsp;c &#233; &#x4E2D; &unknown; &</p>"),
-        "a & b c é 中 &unknown; &"
+        r"a \& b c é 中 \&unknown; \&"
     );
     assert_eq!(
         md("<p>&lt;tag&gt; &quot;q&quot; &#x1F600;</p>"),
         "\\<tag\\> \"q\" \u{1F600}"
     );
-    assert_eq!(md("<p>&#xZZ; &#; &amp</p>"), "&\\#xZZ; &\\#; &amp");
+    assert_eq!(md("<p>&#xZZ; &#; &amp</p>"), r"\&\#xZZ; \&\#; \&amp");
 }
 
 #[test]

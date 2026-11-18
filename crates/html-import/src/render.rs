@@ -171,6 +171,16 @@ fn push_text(r: &mut Renderer, text: &str) {
         return;
     }
     let escaped = escape_markdown_text(&collapsed);
+    if !r.line_start && escaped.starts_with(['.', ')']) {
+        let start = r.out.rfind('\n').map_or(0, |offset| offset + 1);
+        let digits = &r.out[start..];
+        if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            let protected = escape_line_start_marker(&format!("{digits}{escaped}"));
+            r.out.truncate(start);
+            r.out.push_str(&protected);
+            return;
+        }
+    }
     let escaped = if r.line_start {
         escape_line_start_marker(&escaped)
     } else {

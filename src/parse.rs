@@ -328,6 +328,7 @@ pub(crate) fn flush_list_item(
     item: Option<ListItemDraft>,
 ) {
     if let Some(mut item) = item {
+        let subtree_end = item.source_range.end;
         item.truncate_at_nested_block();
         let text = finish_rich_text(item.spans);
         // Empty unordered/ordered items still own their marker line (`- `,
@@ -341,6 +342,7 @@ pub(crate) fn flush_list_item(
             checked: item.checked,
             text,
             source_range: item.source_range,
+            subtree_end,
         };
         match item.destination {
             ListItemDestination::Document => blocks.push(block),
@@ -656,7 +658,7 @@ fn append_extended_segment(
             } else {
                 url.clone()
             };
-            append_span(spans, url, style, Some(&href));
+            append_span(spans, url, style, link.or(Some(&href)));
         }
         ExtendedInlineSegment::Highlight(children) => {
             let mut style = style;
@@ -974,7 +976,9 @@ pub(crate) fn extended_inline_matches(text: &str) -> Vec<ExtendedInlineMatch> {
                 index += 2;
                 continue;
             }
-            if let Some(found) = consume_extended_inline_delimiter(rest) {
+            if !is_backslash_escaped(text, index)
+                && let Some(found) = consume_extended_inline_delimiter(rest)
+            {
                 let inner = &rest[found.content_range.clone()];
                 let content_start = base + index + found.content_range.start;
                 matches.push(ExtendedInlineMatch {
@@ -1041,6 +1045,7 @@ pub(crate) fn render_extended_html_text_nodes(html: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     let mut raw_text_depth = 0usize;
+    let mut anchor_depth = 0usize;
     // pulldown's math containers hold raw LaTeX; extended inline syntax
     // (superscript & co.) must not rewrite formula payloads.
     let mut math_depth = 0usize;
@@ -1052,6 +1057,13 @@ pub(crate) fn render_extended_html_text_nodes(html: &str) -> String {
                 .map_or(html.len(), |relative| index + relative + 1);
             let tag = &html[index..tag_end];
             if let Some((name, closing)) = html_tag_name(tag) {
+                if name == "a" {
+                    if closing {
+                        anchor_depth = anchor_depth.saturating_sub(1);
+                    } else if !tag.ends_with("/>") {
+                        anchor_depth += 1;
+                    }
+                }
                 if matches!(name.as_str(), "code" | "pre" | "script" | "style") {
                     if closing {
                         raw_text_depth = raw_text_depth.saturating_sub(1);
@@ -1078,7 +1090,11 @@ pub(crate) fn render_extended_html_text_nodes(html: &str) -> String {
             .map_or(html.len(), |relative| index + relative);
         let text = &html[index..next_tag];
         if raw_text_depth == 0 && math_depth == 0 {
-            output.push_str(&render_extended_inline_html_text_node(text));
+            render_extended_segments_html(
+                &parse_extended_inline_segments(text),
+                &mut output,
+                anchor_depth == 0,
+            );
         } else {
             output.push_str(text);
         }
@@ -2682,33 +2698,30 @@ fn html_tag_name(tag: &str) -> Option<(String, bool)> {
     (!name.is_empty()).then_some((name, closing))
 }
 
-fn render_extended_inline_html_text_node(text: &str) -> String {
-    let mut output = String::new();
-    for segment in parse_extended_inline_segments(text) {
-        render_extended_segment_html(&segment, &mut output);
-    }
-    output
-}
-
-fn render_extended_segment_html(segment: &ExtendedInlineSegment, output: &mut String) {
+fn render_extended_segment_html(
+    segment: &ExtendedInlineSegment,
+    output: &mut String,
+    autolink: bool,
+) {
     match segment {
         ExtendedInlineSegment::Text(text) => output.push_str(text),
         ExtendedInlineSegment::Highlight(children) => {
             output.push_str("<mark>");
-            render_extended_segments_html(children, output);
+            render_extended_segments_html(children, output, autolink);
             output.push_str("</mark>");
         }
         ExtendedInlineSegment::Superscript(children) => {
             output.push_str("<sup>");
-            render_extended_segments_html(children, output);
+            render_extended_segments_html(children, output, autolink);
             output.push_str("</sup>");
         }
         ExtendedInlineSegment::Subscript(children) => {
             output.push_str("<sub>");
-            render_extended_segments_html(children, output);
+            render_extended_segments_html(children, output, autolink);
             output.push_str("</sub>");
         }
         ExtendedInlineSegment::Emoji(emoji) => output.push_str(emoji),
+        ExtendedInlineSegment::AutoLink(url) if !autolink => output.push_str(url),
         ExtendedInlineSegment::AutoLink(url) => {
             let href = if url.starts_with("www.") {
                 format!("https://{url}")
@@ -2724,9 +2737,13 @@ fn render_extended_segment_html(segment: &ExtendedInlineSegment, output: &mut St
     }
 }
 
-fn render_extended_segments_html(segments: &[ExtendedInlineSegment], output: &mut String) {
+fn render_extended_segments_html(
+    segments: &[ExtendedInlineSegment],
+    output: &mut String,
+    autolink: bool,
+) {
     for segment in segments {
-        render_extended_segment_html(segment, output);
+        render_extended_segment_html(segment, output, autolink);
     }
 }
 
@@ -2781,7 +2798,7 @@ fn parse_extended_inline_segments(text: &str) -> Vec<ExtendedInlineSegment> {
 
 fn consume_extended_inline_delimiter(text: &str) -> Option<ExtendedInlineMatch> {
     if let Some(stripped) = text.strip_prefix("==")
-        && let Some(end) = stripped.find("==")
+        && let Some(end) = unescaped_delimiter(stripped, "==")
     {
         let inner = &stripped[..end];
         if !inner.trim().is_empty() {
@@ -2794,7 +2811,7 @@ fn consume_extended_inline_delimiter(text: &str) -> Option<ExtendedInlineMatch> 
     }
 
     if let Some(stripped) = text.strip_prefix('^')
-        && let Some(end) = stripped.find('^')
+        && let Some(end) = unescaped_delimiter(stripped, "^")
     {
         let inner = &stripped[..end];
         if is_valid_short_inline_extent(inner) {
@@ -2808,7 +2825,7 @@ fn consume_extended_inline_delimiter(text: &str) -> Option<ExtendedInlineMatch> 
 
     if !text.starts_with("~~")
         && let Some(stripped) = text.strip_prefix('~')
-        && let Some(end) = stripped.find('~')
+        && let Some(end) = unescaped_delimiter(stripped, "~")
     {
         let inner = &stripped[..end];
         if is_valid_short_inline_extent(inner) {
@@ -2821,6 +2838,59 @@ fn consume_extended_inline_delimiter(text: &str) -> Option<ExtendedInlineMatch> 
     }
 
     None
+}
+
+fn unescaped_delimiter(text: &str, delimiter: &str) -> Option<usize> {
+    text.match_indices(delimiter)
+        .map(|(index, _)| index)
+        .find(|&index| !is_backslash_escaped(text, index))
+}
+
+fn is_backslash_escaped(source: &str, offset: usize) -> bool {
+    source.as_bytes()[..offset]
+        .iter()
+        .rev()
+        .take_while(|&&byte| byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+/// Pulldown omits a consumed backslash from the offset of the next text
+/// event. Retain that provenance when applying Markion's extensions.
+pub(crate) fn escaped_extension_prefix(source: &str, offset: usize, text: &str) -> bool {
+    text.as_bytes().first().is_some_and(|byte| {
+        matches!(byte, b'^' | b'~' | b'=' | b':')
+            && source.as_bytes().get(offset) == Some(byte)
+            && is_backslash_escaped(source, offset)
+    })
+}
+
+/// Preserve escaped delimiters across the HTML renderer's coalesced text.
+pub(crate) fn protect_html_extension_escapes<'a>(
+    events: Vec<(Event<'a>, Range<usize>)>,
+    source: &str,
+) -> Vec<(Event<'a>, Range<usize>)> {
+    let mut output = Vec::with_capacity(events.len());
+    for (event, range) in events {
+        match event {
+            Event::Text(text) if escaped_extension_prefix(source, range.start, &text) => {
+                let encoded = format!("&#{};", text.as_bytes()[0]);
+                output.push((
+                    Event::InlineHtml(encoded.into()),
+                    range.start..range.start + 1,
+                ));
+                if text.len() > 1 {
+                    output.push((
+                        Event::Text(text[1..].to_owned().into()),
+                        range.start + 1..range.end,
+                    ));
+                }
+            }
+            event => output.push((event, range)),
+        }
+    }
+    output
 }
 
 fn push_extended_text(segments: &mut Vec<ExtendedInlineSegment>, text: &str) {

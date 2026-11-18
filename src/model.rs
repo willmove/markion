@@ -1630,6 +1630,8 @@ pub struct VisualBlockContent {
     /// projects; rows for nested code/math/table/HTML blocks indent to their
     /// owning item's content column. Synthesized structural rows keep 0.
     pub list_depth: usize,
+    /// End of the complete CommonMark item, independent of the visible row.
+    pub list_subtree_end: Option<usize>,
     pub source_island: Option<VisualSourceIslandKind>,
     /// Exact editable fields for a dedicated complex-block editor. Absent
     /// when the authored syntax cannot be mapped losslessly.
@@ -2249,6 +2251,7 @@ pub enum PreviewBlock {
         checked: Option<bool>,
         text: RichText,
         source_range: Range<usize>,
+        subtree_end: usize,
     },
     BlockQuote {
         /// Ordered leaf blocks authored inside the quote. Paragraphs and list

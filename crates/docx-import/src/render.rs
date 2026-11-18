@@ -527,6 +527,9 @@ impl Converter<'_> {
         if heading.is_some() {
             trim_leading_inline_whitespace(&mut inline.chunks);
         }
+        if let Some(MarkdownChunk::Text(text)) = inline.chunks.first_mut() {
+            *text = escape_ordered_prose_lines(text);
+        }
         if !chunks_have_visible_content(&inline.chunks) {
             writer.text("\n\n");
             return Ok(());
@@ -716,43 +719,7 @@ impl Converter<'_> {
         location: Option<String>,
         boundary: &mut InlineBoundaryState,
     ) -> Result<(), ImportError> {
-        if let Some(drawing) = run
-            .descendants()
-            .find(|node| is_w(*node, "drawing") && drawing_has_image_reference(*node))
-        {
-            boundary.separate();
-            self.render_image(drawing, part, writer, location.clone())?;
-        }
-        if let Some(reference) = run
-            .descendants()
-            .find(|node| is_w(*node, "footnoteReference"))
-            .and_then(|node| attr_local(node, "id"))
-        {
-            boundary.separate();
-            self.footnote_references.insert(reference.to_owned());
-            writer.text(format!("[^fn{reference}]"));
-        }
         let properties = run.children().find(|node| is_w(*node, "rPr"));
-        let mut text = String::new();
-        for child in run.children().filter(Node::is_element) {
-            if excluded_revision(child) {
-                continue;
-            }
-            match child.tag_name().name() {
-                "t" if child.tag_name().namespace() == Some(W_NS) => {
-                    text.push_str(child.text().unwrap_or_default())
-                }
-                "tab" if child.tag_name().namespace() == Some(W_NS) => text.push_str("    "),
-                "br" | "cr" if child.tag_name().namespace() == Some(W_NS) => text.push_str("  \n"),
-                "noBreakHyphen" => text.push('\u{2011}'),
-                "softHyphen" => text.push('\u{00ad}'),
-                _ => {}
-            }
-        }
-        if text.is_empty() {
-            return Ok(());
-        }
-        let escaped = escape_markdown_text(&text);
         let style_id = properties
             .and_then(|node| node.children().find(|child| is_w(*child, "rStyle")))
             .and_then(|node| attr_local(node, "val"));
@@ -786,10 +753,44 @@ impl Converter<'_> {
                 after.insert_str(0, close);
             }
         }
-        boundary.prepare_text(&text, bold, writer);
-        writer.text(before);
-        writer.recovered_text(escaped);
-        writer.text(after);
+        let flush_text =
+            |text: &mut String, writer: &mut ChunkWriter, boundary: &mut InlineBoundaryState| {
+                if !text.is_empty() {
+                    boundary.prepare_text(text, bold, writer);
+                    writer.text(&before);
+                    writer.recovered_text(escape_markdown_text(text));
+                    writer.text(&after);
+                    text.clear();
+                }
+            };
+        let mut text = String::new();
+        for child in run.children().filter(Node::is_element) {
+            if excluded_revision(child) || child.tag_name().namespace() != Some(W_NS) {
+                continue;
+            }
+            match child.tag_name().name() {
+                "t" => text.push_str(child.text().unwrap_or_default()),
+                "tab" => text.push_str("    "),
+                "br" | "cr" => text.push_str("  \n"),
+                "noBreakHyphen" => text.push('\u{2011}'),
+                "softHyphen" => text.push('\u{00ad}'),
+                "drawing" if drawing_has_image_reference(child) => {
+                    flush_text(&mut text, writer, boundary);
+                    boundary.separate();
+                    self.render_image(child, part, writer, location.clone())?;
+                }
+                "footnoteReference" => {
+                    if let Some(reference) = attr_local(child, "id") {
+                        flush_text(&mut text, writer, boundary);
+                        boundary.separate();
+                        self.footnote_references.insert(reference.to_owned());
+                        writer.text(format!("[^fn{reference}]"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        flush_text(&mut text, writer, boundary);
         Ok(())
     }
 
@@ -1116,8 +1117,33 @@ impl Converter<'_> {
                         writer.text(format!(" rowspan=\"{rowspan}\""));
                     }
                     writer.text(">");
-                    let content = visible_text(*cell);
-                    writer.recovered_text(escape_html_text(&content));
+                    if cell.descendants().any(|node| {
+                        !excluded_revision(node)
+                            && (is_w(node, "hyperlink") || is_w(node, "drawing"))
+                    }) {
+                        self.diagnostic(
+                            DiagnosticCode::ComplexTableSimplified,
+                            DiagnosticSeverity::ContentLoss,
+                            part,
+                            Some(format!(
+                                "table {}, row {}, column {}",
+                                self.summary.tables,
+                                row_index + 1,
+                                column + 1
+                            )),
+                            Some("embedded image or hyperlink in a complex cell".into()),
+                        );
+                    }
+                    for (index, paragraph) in cell
+                        .descendants()
+                        .filter(|node| is_w(*node, "p") && !excluded_revision(*node))
+                        .enumerate()
+                    {
+                        if index > 0 {
+                            writer.text("<br><br>");
+                        }
+                        writer.recovered_text(escape_html_text(&visible_text(paragraph)));
+                    }
                     writer.text("</td>");
                 }
                 writer.text("</tr>\n");
@@ -1126,40 +1152,43 @@ impl Converter<'_> {
             return Ok(());
         }
 
-        let row_cells: Vec<Vec<String>> = rows
-            .iter()
-            .map(|row| {
-                row.children()
-                    .filter(|node| is_w(*node, "tc"))
-                    .map(|cell| normalize_cell_text(&visible_text(cell)))
-                    .collect()
-            })
-            .collect();
-        let width = row_cells.iter().map(Vec::len).max().unwrap_or(0);
+        let width = layouts.iter().map(Vec::len).max().unwrap_or(0);
         if width == 0 {
             return Ok(());
-        }
-        if row_cells
-            .iter()
-            .flatten()
-            .any(|cell| !cell.trim().is_empty())
-        {
-            writer.recovered_content = true;
         }
         let header = rows
             .first()
             .is_some_and(|row| row.descendants().any(|node| is_w(node, "tblHeader")));
-        if header {
-            write_gfm_row(writer, &row_cells[0], width);
-        } else {
+        if !header {
             write_gfm_row(writer, &[], width);
+            write_gfm_separator(writer, width);
         }
-        write_gfm_separator(writer, width);
-        for (index, row) in row_cells.iter().enumerate() {
-            if header && index == 0 {
-                continue;
+        for (row_index, row) in layouts.iter().enumerate() {
+            let mut cells = Vec::with_capacity(row.len());
+            for (cell, column, _, _) in row {
+                let mut content = ChunkWriter::default();
+                let location = Some(format!(
+                    "table {}, row {}, column {}",
+                    self.summary.tables,
+                    row_index + 1,
+                    column + 1
+                ));
+                for (index, paragraph) in cell
+                    .descendants()
+                    .filter(|node| is_w(*node, "p") && !excluded_revision(*node))
+                    .enumerate()
+                {
+                    if index > 0 {
+                        content.text("<br><br>");
+                    }
+                    self.render_inline_children(paragraph, part, &mut content, location.clone())?;
+                }
+                cells.push(content);
             }
-            write_gfm_row(writer, row, width);
+            write_gfm_row(writer, &cells, width);
+            if header && row_index == 0 {
+                write_gfm_separator(writer, width);
+            }
         }
         writer.text("\n");
         Ok(())
@@ -1838,7 +1867,19 @@ fn escape_markdown_text(value: &str) -> String {
     for character in value.chars() {
         if matches!(
             character,
-            '\\' | '\u{0060}' | '*' | '_' | '{' | '}' | '[' | ']' | '<' | '>' | '#'
+            '\\' | '\u{0060}'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '<'
+                | '>'
+                | '#'
+                | '&'
+                | '^'
+                | '~'
         ) {
             output.push('\\');
         }
@@ -1861,17 +1902,52 @@ fn escape_markdown_url(value: &str) -> String {
         .replace(')', "%29")
 }
 
-fn normalize_cell_text(value: &str) -> String {
-    escape_markdown_text(value.trim())
-        .replace('|', "\\|")
-        .replace('\n', "<br>")
+fn escape_ordered_prose_lines(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for line in value.split_inclusive('\n') {
+        let prefix = line.trim_start_matches(' ');
+        let suffix = prefix.trim_start_matches(|ch: char| ch.is_ascii_digit());
+        let digits = prefix.len() - suffix.len();
+        if (1..=9).contains(&digits)
+            && let Some(after) = suffix.strip_prefix(['.', ')'])
+            && (after.is_empty() || after.starts_with([' ', '\t', '\n']))
+        {
+            let split = line.len() - suffix.len();
+            output.push_str(&line[..split]);
+            output.push('\\');
+            output.push_str(suffix);
+        } else {
+            output.push_str(line);
+        }
+    }
+    output
 }
 
-fn write_gfm_row(writer: &mut ChunkWriter, cells: &[String], width: usize) {
+fn write_gfm_row(writer: &mut ChunkWriter, cells: &[ChunkWriter], width: usize) {
     writer.text("|");
     for index in 0..width {
         writer.text(" ");
-        writer.text(cells.get(index).map(String::as_str).unwrap_or(""));
+        if let Some(cell) = cells.get(index) {
+            writer.recovered_content |= cell.recovered_content;
+            for (index, chunk) in cell.chunks.iter().enumerate() {
+                match chunk {
+                    MarkdownChunk::AssetUrl(id) => writer.asset(*id),
+                    MarkdownChunk::Text(raw) => {
+                        let text = if index == 0 { raw.trim_start() } else { raw };
+                        let text = if index + 1 == cell.chunks.len() {
+                            text.trim_end()
+                        } else {
+                            text
+                        };
+                        writer.text(
+                            text.replace('|', "\\|")
+                                .replace("  \n", "<br>")
+                                .replace('\n', "<br>"),
+                        );
+                    }
+                }
+            }
+        }
         writer.text(" |");
     }
     writer.text("\n");

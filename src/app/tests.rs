@@ -2322,6 +2322,7 @@ fn preview_blockquote_exposes_child_list_items_as_selectable_runs() {
         checked: None,
         text: RichText::plain(text),
         source_range: 0..0,
+        subtree_end: 0,
     };
     let block = PreviewBlock::BlockQuote {
         children: vec![
@@ -2546,6 +2547,7 @@ fn preview_selection_markdown_joins_covered_block_sources() {
             checked: None,
             text: RichText::plain("item"),
             source_range: 22..28,
+            subtree_end: 28,
         },
     ];
     let selection = PreviewSelection {
@@ -7134,6 +7136,42 @@ fn visual_table_wrapped_and_selection_navigation_stays_in_column(cx: &mut TestAp
         assert_eq!(app.active_tab().document.text(), source);
         assert!(app.active_tab().undo_stack.is_empty());
     });
+}
+
+#[gpui::test]
+fn issue_36_table_cell_image_renders_in_visual_edit_and_read(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([10, 20, 30]))
+        .save(dir.path().join("panel.png"))
+        .unwrap();
+    let path = dir.path().join("table.md");
+    fs::write(&path, "| Header |\n| --- |\n| ![panel](panel.png) |\n").unwrap();
+    let document = MarkdownDocument::open(path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-table-image-0-1-0-0").is_some());
+    app.update(cx, |app, cx| {
+        assert!(matches!(
+            app.preview_image_entry(
+                "panel.png",
+                &markion::ImageSourceIdentity::FromUrl,
+                Some(dir.path())
+            ),
+            PreviewImageEntry::Ready(_)
+        ));
+        app.view_mode = ViewMode::Read;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("preview-table-cell-1-0-0-image-0")
+            .is_some()
+    );
 }
 
 #[gpui::test]

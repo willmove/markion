@@ -2895,8 +2895,11 @@ impl MarkdownDocument {
 
     pub fn render_html_fragment(&self) -> String {
         let body = self.body_text();
-        let parser_events =
-            render::rewrite_html_alerts(coalesced_offset_events(body, markdown_options()), body);
+        let events = parse::protect_html_extension_escapes(
+            coalesced_offset_events(body, markdown_options()),
+            body,
+        );
+        let parser_events = render::rewrite_html_alerts(events, body);
         let (events, formulas) = collect_html_math(parser_events, body);
         let (events, diagrams) = collect_html_diagrams(events);
         let mut output = String::new();
@@ -4260,23 +4263,33 @@ impl MarkdownDocument {
                         row.push(finish_rich_text(std::mem::take(&mut table.current_cell)));
                     }
                 }
-                Event::Text(text) => {
-                    push_preview_rich(
-                        &mut heading,
-                        &mut paragraph,
-                        &mut quote,
-                        quote_depth,
-                        &mut list_item,
-                        &mut image,
-                        &mut code,
-                        &mut table,
-                        &text,
-                        inline.style(),
-                        inline.link(),
-                        true,
-                    );
+                Event::Text(content) => {
+                    let (literal, rest) =
+                        if parse::escaped_extension_prefix(text, source_range.start, &content) {
+                            content.split_at(1)
+                        } else {
+                            ("", content.as_ref())
+                        };
+                    for (fragment, extended) in [(literal, false), (rest, true)] {
+                        if !fragment.is_empty() {
+                            push_preview_rich(
+                                &mut heading,
+                                &mut paragraph,
+                                &mut quote,
+                                quote_depth,
+                                &mut list_item,
+                                &mut image,
+                                &mut code,
+                                &mut table,
+                                fragment,
+                                inline.style(),
+                                inline.link(),
+                                extended,
+                            );
+                        }
+                    }
                     if let Some((_, _, title, _)) = outline_current.as_mut() {
-                        title.push_str(&text);
+                        title.push_str(&content);
                     }
                 }
                 Event::Code(text) => {
@@ -5475,6 +5488,47 @@ pub fn title_from_path(path: Option<&Path>) -> CowStr<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issue_41_html_paste_keeps_literal_prose_in_preview_and_export() {
+        let markdown = markion_html_import::html_to_markdown(
+            "<p><span>1</span><span>. Groceries</span></p><p>Use &amp;copy;, ~~draft~~ and x^2^.</p><p><s>done</s> and <sup>3</sup></p>",
+        );
+        let document = MarkdownDocument::from_text(markdown);
+        let blocks = document.preview_blocks();
+        let [
+            PreviewBlock::Paragraph { text: first, .. },
+            PreviewBlock::Paragraph { text: second, .. },
+            PreviewBlock::Paragraph { text: styled, .. },
+        ] = blocks.as_slice()
+        else {
+            panic!("expected three paragraphs, got {blocks:?}");
+        };
+        assert_eq!(first.text, "1. Groceries");
+        assert_eq!(second.text, "Use &copy;, ~~draft~~ and x^2^.");
+        assert!(
+            second
+                .spans
+                .iter()
+                .all(|span| span.style == InlineStyle::default())
+        );
+        assert!(
+            styled
+                .spans
+                .iter()
+                .any(|span| span.text == "done" && span.style.strikethrough)
+        );
+        assert!(
+            styled
+                .spans
+                .iter()
+                .any(|span| span.text == "3" && span.style.superscript)
+        );
+        let html = document.render_html_fragment();
+        assert!(html.contains("<p>1. Groceries</p>"));
+        assert!(html.contains("Use &amp;copy;, &#126;&#126;draft&#126;&#126; and x&#94;2&#94;."));
+        assert!(html.contains("<del>done</del> and <sup>3</sup>"));
+    }
 
     #[test]
     fn html_only_paragraph_source_covers_content_free_tag_runs() {

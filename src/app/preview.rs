@@ -2400,6 +2400,13 @@ pub(super) fn rich_text_with_math_element(
 
     let full_selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
     let full_search_ranges = active_preview_search_ranges(app, block_index, run_id, &rich.text);
+    let table_prefix;
+    let id_prefix = if let PreviewTextRunId::TableCell { row, col } = run_id {
+        table_prefix = format!("{id_prefix}-{row}-{col}");
+        table_prefix.as_str()
+    } else {
+        id_prefix
+    };
     let run_text = SharedString::from(rich.text.clone());
     let inline_metrics = Some((font_size, line_height));
     let mut lines = vec![Vec::new()];
@@ -2409,6 +2416,7 @@ pub(super) fn rich_text_with_math_element(
         let span_range = offset..offset + span.text.len();
         offset = span_range.end;
         if let Some(image) = &span.image {
+            let selector = format!("{id_prefix}-{block_index}-image-{fragment_index}");
             mixed_prose_push(
                 &mut lines,
                 linked_preview_image(
@@ -2420,7 +2428,8 @@ pub(super) fn rich_text_with_math_element(
                         document_dir,
                         None,
                         None,
-                    ),
+                    )
+                    .debug_selector(move || selector.clone()),
                     span.link.as_deref(),
                     cx,
                 )
@@ -6256,11 +6265,12 @@ fn visual_editor_field_element(
 
     if !caret_active
         && let Some(rich) = cell_rich
+        && let VisualEditorFieldKind::TableCell { row, column } = field.kind
         && (rich.text.contains('\n')
             || rich
                 .spans
                 .iter()
-                .any(|span| span.style.superscript || span.style.subscript))
+                .any(|span| span.image.is_some() || span.style.superscript || span.style.subscript))
     {
         let typography = app.typography_metrics();
         let metrics = (
@@ -6269,7 +6279,30 @@ fn visual_editor_field_element(
         );
         let mut lines = vec![Vec::new()];
         let mut index = field.source_range.start;
+        let mut image_index = 0;
         for span in &rich.spans {
+            if let Some(image) = &span.image {
+                let document_dir = app.active_tab().document.path().and_then(Path::parent);
+                let selector =
+                    format!("visual-table-image-{block_index}-{row}-{column}-{image_index}");
+                mixed_prose_push(
+                    &mut lines,
+                    preview_inline_image_view(
+                        app,
+                        &image.url,
+                        &image.identity,
+                        &image.alt,
+                        document_dir,
+                        None,
+                        None,
+                    )
+                    .debug_selector(move || selector.clone())
+                    .into_any_element(),
+                );
+                image_index += 1;
+                index += 1;
+                continue;
+            }
             for piece in span.text.split_inclusive('\n') {
                 for fragment in piece
                     .trim_end_matches('\n')
@@ -7554,6 +7587,7 @@ pub(super) fn visual_table_view(
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let typography = app.typography_metrics();
+    let palette = app.palette();
     let text = app.active_tab().document.text();
     let markdown_start = text
         .get(block.source_range.clone())
@@ -7610,15 +7644,11 @@ pub(super) fn visual_table_view(
     let grid = div()
         .debug_selector(move || format!("visual-table-chrome-{block_index}"))
         .border_1()
-        .border_color(rgb(0xcbd5e1))
+        .border_color(palette.border)
         .rounded_md()
         .overflow_hidden()
         .children(rows.iter().enumerate().map(|(row_index, row)| {
-            let background = if row_index == 0 {
-                rgb(0xf1f5f9)
-            } else {
-                rgb(0xffffff)
-            };
+            let background = table_cell_background(palette, row_index == 0);
             let is_last_row = row_index + 1 == rows.len();
             let row_drop = VisualTableAxis::Row(row_index);
             let row_grip = axis_target(row_drop).filter(|_| {
@@ -7628,7 +7658,7 @@ pub(super) fn visual_table_view(
                 .flex()
                 .bg(background)
                 .when(!is_last_row, |style| {
-                    style.border_b_1().border_color(rgb(0xe2e8f0))
+                    style.border_b_1().border_color(palette.border)
                 })
                 .when(cells.is_some() && row_index >= 1, |row| {
                     row.drag_over::<DraggedTableRow>(move |style, dragged, _, _| {
@@ -7672,7 +7702,7 @@ pub(super) fn visual_table_view(
                             rows.contains(&row_index) && columns.contains(&cell_index)),
                             |style| style.bg(app.palette().active_bg))
                         .when(!is_last_cell, |style| {
-                            style.border_r_1().border_color(rgb(0xe2e8f0))
+                            style.border_r_1().border_color(palette.border)
                         })
                         .text_size(px(typography.table_font_size))
                         .cursor(CursorStyle::IBeam)
@@ -7797,6 +7827,7 @@ pub(super) fn visual_table_view(
                                 target,
                                 menu_axis == Some(target.axis),
                                 format!("visual-table-row-grip-{block_index}-{row_index}"),
+                                palette,
                                 cx,
                             ))
                         })
@@ -7805,6 +7836,7 @@ pub(super) fn visual_table_view(
                                 target,
                                 menu_axis == Some(target.axis),
                                 format!("visual-table-column-grip-{block_index}-{cell_index}"),
+                                palette,
                                 cx,
                             ))
                         })
@@ -7887,6 +7919,7 @@ pub(super) fn visual_table_view(
                             TableStructureEdit::InsertRow {
                                 at: target.row_count,
                             },
+                            palette,
                             cx,
                         )
                         .left_0()
@@ -7906,6 +7939,7 @@ pub(super) fn visual_table_view(
                             TableStructureEdit::InsertColumn {
                                 at: target.column_count,
                             },
+                            palette,
                             cx,
                         )
                         .top_0()
@@ -7926,6 +7960,7 @@ fn visual_table_grip(
     target: VisualTableAxisTarget,
     menu_open: bool,
     selector: String,
+    palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let is_row = matches!(target.axis, VisualTableAxis::Row(_));
@@ -7935,9 +7970,9 @@ fn visual_table_grip(
     };
     let draggable = !matches!(target.axis, VisualTableAxis::Row(0));
     let pill_color = if menu_open {
-        rgb(0x3b82f6)
+        palette.active_text
     } else {
-        rgb(0x94a3b8)
+        palette.muted
     };
     let grip = div()
         .id(ElementId::from((
@@ -7955,7 +7990,7 @@ fn visual_table_grip(
         } else {
             CursorStyle::PointingHand
         })
-        .hover(|style| style.bg(rgb(0xe2e8f0)))
+        .hover(|style| style.bg(palette.active_bg))
         .child(
             div()
                 .rounded_full()
@@ -8008,6 +8043,7 @@ fn visual_table_edge_strip(
     selector: String,
     target: VisualTableAxisTarget,
     edit: TableStructureEdit,
+    palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     div()
@@ -8018,11 +8054,11 @@ fn visual_table_edge_strip(
         .items_center()
         .justify_center()
         .rounded_sm()
-        .bg(rgb(0xf1f5f9))
-        .hover(|style| style.bg(rgb(0xe2e8f0)))
+        .bg(palette.panel_bg)
+        .hover(|style| style.bg(palette.active_bg).text_color(palette.active_text))
         .text_size(px(10.))
         .line_height(px(10.))
-        .text_color(rgb(0x64748b))
+        .text_color(palette.text)
         .cursor_pointer()
         .child("+")
         .on_mouse_down(
@@ -8229,10 +8265,8 @@ fn html_table_grid_view(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let columns = grid.columns.max(1).min(u16::MAX as usize) as u16;
-    let border = rgb(0xe2e8f0);
-    let outer_border = rgb(0xcbd5e1);
-    let header_bg = rgb(0xf1f5f9);
-    let body_bg = rgb(0xffffff);
+    let palette = app.palette();
+    let border = palette.border;
     let font_size = typography.table_font_size;
     let padding = 8.0f32;
 
@@ -8279,10 +8313,8 @@ fn html_table_grid_view(
                     .min_w_0()
                     .p(px(padding))
                     .text_size(px(font_size))
-                    .when(is_header, |style| {
-                        style.font_weight(FontWeight::SEMIBOLD).bg(header_bg)
-                    })
-                    .when(!is_header, |style| style.bg(body_bg))
+                    .bg(table_cell_background(palette, is_header))
+                    .when(is_header, |style| style.font_weight(FontWeight::SEMIBOLD))
                     .when(!touches_last_col, |style| {
                         style.border_r_1().border_color(border)
                     })
@@ -8349,10 +8381,46 @@ fn html_table_grid_view(
         // an equal fraction of the table width.
         .grid_col_weights(html_table_column_weights(grid))
         .border_1()
-        .border_color(outer_border)
+        .border_color(border)
         .rounded_md()
         .overflow_hidden()
         .children(cell_views)
+}
+
+fn table_cell_background(palette: ThemePalette, header: bool) -> Rgba {
+    if header {
+        palette.panel_bg
+    } else {
+        palette.surface_bg
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn issue_27_table_text_contrasts_with_both_backgrounds_in_light_and_dark_themes() {
+    fn luminance(color: Rgba) -> f32 {
+        fn linear(channel: f32) -> f32 {
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    }
+
+    let themes = markion::builtin_theme_definitions();
+    for name in ["One Light", "One Dark"] {
+        let theme = themes.iter().find(|theme| theme.name == name).unwrap();
+        let palette = theme_palette_from_definition(theme);
+        for header in [false, true] {
+            let background = luminance(table_cell_background(palette, header));
+            let foreground = luminance(palette.text);
+            assert!(
+                (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05) >= 4.5
+            );
+        }
+    }
 }
 
 /// Small "Copy" button rendered in the header of every code block. Clicking it
@@ -9198,55 +9266,69 @@ pub(super) fn preview_block_view(
                 .and_then(|source| authored_table_column_percents(source, column_count));
             let column_weights =
                 preview_table_column_weights(rows, &typography, authored.as_deref());
+            let palette = app.palette();
             div()
                 .mb_3()
                 .border_1()
-                .border_color(rgb(0xcbd5e1))
+                .border_color(palette.border)
                 .rounded_md()
                 .overflow_hidden()
                 .children(rows.iter().enumerate().map(|(row_index, row)| {
-                    let background = if row_index == 0 {
-                        rgb(0xf1f5f9)
-                    } else {
-                        rgb(0xffffff)
-                    };
+                    let background = table_cell_background(palette, row_index == 0);
                     let is_last_row = row_index + 1 == rows.len();
                     div()
                         .flex()
                         .bg(background)
                         .when(!is_last_row, |style| {
-                            style.border_b_1().border_color(rgb(0xe2e8f0))
+                            style.border_b_1().border_color(palette.border)
                         })
                         .children(row.iter().enumerate().map(|(cell_index, cell)| {
                             let is_last_cell = cell_index + 1 == row.len();
+                            let run_id = PreviewTextRunId::TableCell {
+                                row: row_index,
+                                col: cell_index,
+                            };
+                            let font_size = typography.table_font_size;
+                            let line_height = typography.text_line_height(font_size);
                             preview_table_cell_flex(
                                 column_weights.get(cell_index).copied().unwrap_or(1.0),
                             )
                             .p_2()
                             .when(!is_last_cell, |style| {
-                                style.border_r_1().border_color(rgb(0xe2e8f0))
+                                style.border_r_1().border_color(palette.border)
                             })
-                            .text_size(px(typography.table_font_size))
-                            .child(rich_text_element(
-                                app,
-                                ElementId::from((
-                                    "preview-table-cell",
-                                    ((block_index as u64) << 32)
-                                        | (((row_index as u64) & 0xffff) << 16)
-                                        | ((cell_index as u64) & 0xffff),
-                                )),
-                                cell,
-                                block_index,
-                                PreviewTextRunId::TableCell {
-                                    row: row_index,
-                                    col: cell_index,
+                            .text_size(px(font_size))
+                            .child(
+                                if cell.spans.iter().any(|span| span.image.is_some()) {
+                                    rich_text_with_math_element(
+                                        app,
+                                        "preview-table-cell",
+                                        cell,
+                                        block_index,
+                                        run_id,
+                                        display_scale,
+                                        font_size,
+                                        line_height,
+                                        document_dir,
+                                        cx,
+                                    )
+                                } else {
+                                    rich_text_element(
+                                        app,
+                                        ElementId::from((
+                                            "preview-table-cell",
+                                            ((block_index as u64) << 32)
+                                                | (((row_index as u64) & 0xffff) << 16)
+                                                | ((cell_index as u64) & 0xffff),
+                                        )),
+                                        cell,
+                                        block_index,
+                                        run_id,
+                                        (font_size, line_height),
+                                        cx,
+                                    )
                                 },
-                                (
-                                    typography.table_font_size,
-                                    typography.text_line_height(typography.table_font_size),
-                                ),
-                                cx,
-                            ))
+                            )
                         }))
                 }))
         }

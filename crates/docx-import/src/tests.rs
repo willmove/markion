@@ -221,7 +221,7 @@ fn bold_boundary_state_stops_at_structural_and_block_boundaries() {
 
     assert!(markdown.contains("**body**[^fn2]after"));
     assert!(markdown.contains("**image**[Blocked external image: remote]after"));
-    assert!(markdown.contains("| cell | word |"), "{markdown}");
+    assert!(markdown.contains("| **cell** | word |"), "{markdown}");
     assert!(!markdown.contains("cell word"));
     assert!(markdown.contains("[^fn2]: **note**\n    word"));
     assert!(!markdown.contains("[^fn2] after"));
@@ -542,6 +542,79 @@ fn repeated_embedded_image_uses_one_typed_asset_and_keeps_alt_text() {
             .iter()
             .any(|item| item.code == DiagnosticCode::FloatingImageNormalized)
     );
+}
+
+#[test]
+fn issue_36_and_38_rich_cells_and_same_run_drawings_preserve_source_order() {
+    let drawing = |id: &str| {
+        format!(
+            r#"<w:drawing><wp:inline><wp:docPr descr="{id}"/><a:graphic><a:graphicData><a:blip r:embed="{id}"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#
+        )
+    };
+    let xml = document(&format!(
+        r#"<w:p><w:r><w:t>Before </w:t>{}<w:t> between </w:t>{}<w:t> after.</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>First </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>priority</w:t></w:r><w:r><w:t> and </w:t></w:r><w:hyperlink r:id="guide"><w:r><w:t>guide</w:t></w:r></w:hyperlink></w:p>
+<w:p><w:r><w:t>Second </w:t>{}<w:t> end.</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        drawing("red"),
+        drawing("blue"),
+        drawing("red"),
+    ));
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="red" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/red.png"/>
+<Relationship Id="blue" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/blue.png"/>
+<Relationship Id="guide" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/guide" TargetMode="External"/>
+</Relationships>"#;
+    let image = |width| {
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(width, 1)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
+    };
+    let red = image(1);
+    let blue = image(2);
+    let result = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/media/red.png", &red),
+        ("word/media/blue.png", &blue),
+    ]);
+    assert_eq!(result.assets.len(), 2);
+    assert!(!result.has_content_loss());
+    let markdown = result
+        .render_markdown(|id| Some(format!("assets/{}.png", id.0)))
+        .unwrap();
+    assert!(markdown.contains("Before ![red](assets/0.png) between ![blue](assets/1.png) after."));
+    assert!(markdown.contains("| First **priority** and [guide](https://example.com/guide)<br><br>Second ![red](assets/0.png) end. |"));
+}
+
+#[test]
+fn issue_36_complex_cell_reports_omitted_link_targets() {
+    let xml = document(
+        r#"<w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:hyperlink r:id="guide"><w:r><w:t>Guide</w:t></w:r></w:hyperlink></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let result = convert(&[("word/document.xml", xml.as_bytes())]);
+    assert!(result.has_content_loss());
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::ComplexTableSimplified
+            && diagnostic.severity == DiagnosticSeverity::ContentLoss
+            && diagnostic.location.as_deref() == Some("table 1, row 1, column 1")
+    }));
+    assert!(result.render_markdown(|_| None).unwrap().contains("Guide"));
+}
+
+#[test]
+fn issue_47_word_prose_escapes_notation_and_split_ordered_marker() {
+    let xml = document(
+        r#"<w:p><w:r><w:t>r^4^ and ~~draft~~ &amp;copy;</w:t></w:r></w:p>
+<w:p><w:r><w:t>18</w:t></w:r><w:r><w:t>. Verify the calibration report.</w:t></w:r></w:p>
+<w:p><w:r><w:t>x</w:t></w:r><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>2</w:t></w:r></w:p>"#,
+    );
+    let result = convert(&[("word/document.xml", xml.as_bytes())]);
+    let markdown = result.render_markdown(|_| None).unwrap();
+    assert!(markdown.contains(r"r\^4\^ and \~\~draft\~\~ \&copy;"));
+    assert!(markdown.contains(r"18\. Verify the calibration report."));
+    assert!(markdown.contains("x<sup>2</sup>"));
 }
 
 #[test]

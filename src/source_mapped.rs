@@ -1013,15 +1013,22 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
             text, source_range, ..
         }
         | PreviewBlock::Paragraph { text, source_range }
-        | PreviewBlock::ListItem {
-            text, source_range, ..
-        }
         | PreviewBlock::FootnoteDefinition {
             text, source_range, ..
         }
         | PreviewBlock::DefinitionTerm { text, source_range }
         | PreviewBlock::DefinitionDetail { text, source_range } => {
             *source_range = shift_range(source_range, delta)?;
+            shift_rich_text(text, delta)?;
+        }
+        PreviewBlock::ListItem {
+            text,
+            source_range,
+            subtree_end,
+            ..
+        } => {
+            *source_range = shift_range(source_range, delta)?;
+            *subtree_end = shift_offset(*subtree_end, delta)?;
             shift_rich_text(text, delta)?;
         }
         PreviewBlock::BlockQuote {
@@ -1143,6 +1150,9 @@ pub(crate) fn shift_visual_block(block: &mut VisualBlock, delta: isize) -> Optio
     }
     let block = block.content_mut();
     block.source_range = shift_range(&block.source_range, delta)?;
+    if let Some(end) = &mut block.list_subtree_end {
+        *end = shift_offset(*end, delta)?;
+    }
     if let crate::VisualBlockKind::Table { rows, .. } = &mut block.kind {
         for cell in rows.iter_mut().flatten() {
             shift_rich_text(cell, delta)?;
@@ -1843,6 +1853,7 @@ mod tests {
                     height_signature: Some(1),
                     quote_context: None,
                     list_depth: 0,
+                    list_subtree_end: None,
                     source_island: None,
                     editor: None,
                 },

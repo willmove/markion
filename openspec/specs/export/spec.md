@@ -545,3 +545,11 @@ Built-in exports SHALL label every GFM alert with its title: the custom title wh
 #### Scenario: Untitled alert label in HTML and LaTeX
 - **WHEN** a document containing `> [!TIP]` followed by a body line is exported to HTML or LaTeX
 - **THEN** the alert shows the default label "Tip" as its title
+
+### Requirement: Explicit link destinations SHALL take precedence over labels
+Preview and built-in exports SHALL preserve the destination of an authored link even when its visible label resembles an automatically detected URL.
+
+#### Scenario: An explicit link has a URL-shaped label
+- **WHEN** the link label is a URL different from its authored destination
+- **THEN** the label remains visible and the link leads to the authored destination
+- **AND** generated HTML contains a single anchor for the link

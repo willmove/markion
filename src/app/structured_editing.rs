@@ -125,9 +125,12 @@ impl MarkionApp {
         };
         let target = BlockTarget::from_block(self.active_tab().document.version(), &blocks[next]);
         if let Ok(edit) = selection.move_to(&self.active_tab().document, &target, forward) {
+            let text = self.active_tab().document.text();
             let len = selection
                 .range(&self.active_tab().document)
-                .map_or(0, |range| range.len());
+                .map_or(0, |range| {
+                    text[range].trim_end_matches([' ', '\t', '\r', '\n']).len()
+                });
             let start = edit.selection_after.start;
             let version = self.active_tab().document.version();
             self.apply_exact_block_edit(edit, p1_t(self.language, P1Msg::BlockMoved).into(), cx);
@@ -165,21 +168,9 @@ impl MarkionApp {
         ) else {
             return false;
         };
-        let VisualBlockKind::ListItem { level, .. } = blocks[index].kind else {
-            return false;
-        };
-        let Ok(unit) = markion::block_edit::source_block_unit(
-            self.active_tab().document.text(),
-            &blocks,
-            index,
-        ) else {
-            return false;
-        };
-        let nested = blocks[unit.blocks.clone()].iter().skip(1).any(|block| {
-            matches!(block.kind, VisualBlockKind::ListItem { level: child, .. } if child > level)
-                || block.list_depth >= level
-        });
-        if !nested || !self.active_tab().selected_range.is_empty() {
+        if !matches!(blocks[index].kind, VisualBlockKind::ListItem { .. })
+            || !self.active_tab().selected_range.is_empty()
+        {
             return false;
         }
         let result = markion::block_edit::indent_subtree(

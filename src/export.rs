@@ -2597,6 +2597,32 @@ mod tests {
         String::from_utf8(data).expect("part is UTF-8")
     }
 
+    #[test]
+    fn issue_34_url_shaped_labels_keep_the_authored_destination() {
+        let destination = "https://destination.example.test/chapter";
+        for label in [
+            "https://label.example.test/article",
+            "www.label.example.test/article",
+        ] {
+            let doc = MarkdownDocument::from_text(format!("[{label}]({destination})"));
+            let expected = format!("<p><a href=\"{destination}\">{label}</a></p>\n");
+            assert_eq!(doc.render_html_fragment(), expected);
+            let blocks = doc.preview_blocks();
+            let PreviewBlock::Paragraph { text, .. } = &blocks[0] else {
+                panic!("expected linked paragraph");
+            };
+            assert_eq!(text.text, label);
+            assert_eq!(text.spans[0].link.as_deref(), Some(destination));
+            let relationships = entry(&docx_parts(&doc), "word/_rels/document.xml.rels");
+            assert!(relationships.contains(&format!("Target=\"{destination}\"")));
+            assert!(!relationships.contains("label.example.test"));
+            assert!(
+                doc.render_latex_document()
+                    .contains(&format!("\\href{{{destination}}}{{{label}}}"))
+            );
+        }
+    }
+
     /// Package-structure validation shared by the DOCX tests: the ZIP magic,
     /// the core part inventory every producer (built-in writer or pandoc)
     /// must carry, and style-reference resolution — every `w:pStyle` referenced

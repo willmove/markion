@@ -955,18 +955,7 @@ fn collect_preview_image_sources<'a>(
                 collect_preview_image_sources(children, &[], out);
             }
             PreviewBlock::Table { rows, .. } => {
-                for row in rows {
-                    for cell in row {
-                        for span in &cell.spans {
-                            if let Some(image) = &span.image {
-                                out.push(PreviewImageSource {
-                                    url: image.url.as_str(),
-                                    identity: &image.identity,
-                                });
-                            }
-                        }
-                    }
-                }
+                collect_table_image_sources(rows, out);
             }
             PreviewBlock::Html { images, .. } => {
                 for image in images {
@@ -993,6 +982,7 @@ fn collect_preview_image_sources<'a>(
                     });
                 }
             }
+            VisualBlockKind::Table { rows, .. } => collect_table_image_sources(rows, out),
             _ => {
                 for run in &block.editable_runs {
                     if let Some(image) = &run.html_image {
@@ -1003,6 +993,20 @@ fn collect_preview_image_sources<'a>(
                     }
                 }
             }
+        }
+    }
+}
+
+fn collect_table_image_sources<'a>(
+    rows: &'a [Vec<RichText>],
+    out: &mut Vec<PreviewImageSource<'a>>,
+) {
+    for cell in rows.iter().flatten() {
+        for image in cell.spans.iter().filter_map(|span| span.image.as_ref()) {
+            out.push(PreviewImageSource {
+                url: &image.url,
+                identity: &image.identity,
+            });
         }
     }
 }

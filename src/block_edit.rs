@@ -159,16 +159,12 @@ pub fn source_block_unit(
         while last < blocks.len() && blocks[last].source_range.start < range.end {
             last += 1;
         }
-    } else if let VisualBlockKind::ListItem { level, .. } = block.kind {
-        while let Some(candidate) = blocks.get(last) {
-            let nested = match candidate.kind {
-                VisualBlockKind::Whitespace => true,
-                VisualBlockKind::ListItem { level: next, .. } => next > level,
-                _ => candidate.list_depth >= level,
-            };
-            if !nested {
-                break;
-            }
+    } else if matches!(block.kind, VisualBlockKind::ListItem { .. }) {
+        let subtree_end = block.list_subtree_end.ok_or(BlockEditError::Ambiguous)?;
+        while let Some(candidate) = blocks
+            .get(last)
+            .filter(|next| next.source_range.start < subtree_end)
+        {
             range.end = range.end.max(candidate.source_range.end);
             last += 1;
         }
@@ -211,54 +207,81 @@ pub fn move_source_units(
     {
         return Err(BlockEditError::Ambiguous);
     }
-    let line_ending = preferred_line_ending(source);
-    let join = |left_range: Range<usize>, right_range: Range<usize>| {
-        let left = &source[left_range.clone()];
-        let right = &source[right_range.clone()];
-        let minimum: usize = if tight_list_join(source, blocks, &left_range, &right_range) {
-            1
-        } else {
-            2
-        };
-        // Count logical line endings across whitespace-only separator lines,
-        // retaining all authored spaces/tabs and any already larger gap.
-        let trailing = &left[left.trim_end_matches([' ', '\t', '\r', '\n']).len()..];
-        let leading_len = right.len() - right.trim_start_matches([' ', '\t', '\r', '\n']).len();
-        let existing = trailing
-            .bytes()
-            .chain(right[..leading_len].bytes())
-            .filter(|b| *b == b'\n')
-            .count();
-        let needs_line_start = !left.ends_with('\n') && !right.starts_with(['\r', '\n']);
-        let separator = if !left.is_empty() && !right.is_empty() {
-            line_ending.repeat(
-                minimum
-                    .saturating_sub(existing)
-                    .max(usize::from(needs_line_start)),
-            )
-        } else {
-            String::new()
-        };
-        (format!("{left}{separator}{right}"), separator.len())
-    };
-    let (range, replacement, selected_start) = if insertion < moving.start {
-        let (replacement, _) = join(moving.clone(), insertion..moving.start);
-        (insertion..moving.end, replacement, insertion)
+    let (range, left, right, moved_first) = if insertion < moving.start {
+        (
+            insertion..moving.end,
+            moving.clone(),
+            insertion..moving.start,
+            true,
+        )
     } else {
-        let between = moving.end..insertion;
-        let (replacement, separator) = join(between.clone(), moving.clone());
         (
             moving.start..insertion,
-            replacement,
-            moving.start + between.len() + separator,
+            moving.end..insertion,
+            moving.clone(),
+            false,
         )
     };
+    let line_ending = preferred_line_ending(source);
+    let tight = tight_list_join(source, blocks, &left, &right);
+    let suffix_range = range.end..source.len();
+    let preserve_list_boundary = tight
+        && !source[suffix_range.clone()].trim().is_empty()
+        && !tight_list_join(source, blocks, &right, &suffix_range);
+    let (mut left, right) = (&source[left], &source[right]);
+    let mut trailing_gap = "";
+    if preserve_list_boundary && trailing_line_breaks(right) == 1 {
+        // The old final sibling owns the gap before the next block. Keep
+        // that gap at this boundary when its sibling takes its place.
+        let tail_start = left.trim_end_matches([' ', '\t', '\r', '\n']).len();
+        if let Some(offset) = left[tail_start..].find('\n') {
+            let gap_start = tail_start + offset + 1;
+            if left[gap_start..].contains('\n') {
+                (left, trailing_gap) = left.split_at(gap_start);
+            }
+        }
+    }
+    let separator = block_join_separator(left, right, line_ending, if tight { 1 } else { 2 });
+    let selected_start = if moved_first {
+        range.start
+    } else {
+        range.start + left.len() + separator.len()
+    };
+    let mut replacement = format!("{left}{separator}{right}{trailing_gap}");
+    if preserve_list_boundary {
+        let suffix_separator =
+            block_join_separator(&replacement, &source[suffix_range], line_ending, 2);
+        replacement.push_str(&suffix_separator);
+    }
     Ok(BlockEdit {
         document_version: version,
         range,
         replacement,
         selection_after: selected_start..selected_start,
     })
+}
+
+fn trailing_line_breaks(text: &str) -> usize {
+    let start = text.trim_end_matches([' ', '\t', '\r', '\n']).len();
+    text[start..].bytes().filter(|&byte| byte == b'\n').count()
+}
+
+fn block_join_separator(left: &str, right: &str, ending: &str, minimum: usize) -> String {
+    if left.is_empty() || right.is_empty() {
+        return String::new();
+    }
+    let right_start = right.len() - right.trim_start_matches([' ', '\t', '\r', '\n']).len();
+    let existing = trailing_line_breaks(left)
+        + right[..right_start]
+            .bytes()
+            .filter(|&byte| byte == b'\n')
+            .count();
+    let needs_line_start = !left.ends_with('\n') && !right.starts_with(['\r', '\n']);
+    ending.repeat(
+        minimum
+            .saturating_sub(existing)
+            .max(usize::from(needs_line_start)),
+    )
 }
 
 /// A single line ending is sufficient only inside the same original list.
@@ -298,12 +321,13 @@ fn tight_list_join(
     };
     let start = left_index.min(right_index);
     let end = left_index.max(right_index);
-    blocks[start..=end].iter().all(|block| match block.kind {
-        VisualBlockKind::Whitespace => true,
-        VisualBlockKind::ListItem { level, .. } if block.quote_context.is_none() => {
-            level > signature.0 || list_signature(source, block) == Some(signature)
+    let mut subtree_end = 0;
+    blocks[start..=end].iter().all(|block| {
+        if list_signature(source, block) == Some(signature) {
+            subtree_end = block.list_subtree_end.unwrap_or(block.source_range.end);
+            return true;
         }
-        _ => block.list_depth >= signature.0,
+        matches!(block.kind, VisualBlockKind::Whitespace) || block.source_range.start < subtree_end
     })
 }
 
@@ -337,70 +361,112 @@ pub fn indent_subtree(
         return Err(BlockEditError::Unsupported);
     }
     let unit = source_block_unit(source, blocks, index)?;
-    let first_line = source[unit.source_range.clone()]
-        .lines()
-        .next()
-        .unwrap_or("");
-    let indent = first_line
-        .bytes()
-        .take_while(|byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    if outdent && indent == 0 {
-        return Err(BlockEditError::Unsupported);
-    }
-    if !outdent {
-        let mut predecessor = false;
-        for candidate in blocks[..index].iter().rev() {
-            match candidate.kind {
-                VisualBlockKind::Whitespace => continue,
-                VisualBlockKind::ListItem {
-                    level: previous, ..
-                } if previous > level => continue,
-                VisualBlockKind::ListItem {
-                    level: previous, ..
-                } => {
-                    predecessor = previous == level;
-                    break;
-                }
-                _ if candidate.list_depth > 0 => continue,
-                _ => break,
-            }
-        }
-        if !predecessor {
+    let line_at = |block: &VisualBlock| {
+        source[block.source_range.start..]
+            .lines()
+            .next()
+            .unwrap_or("")
+    };
+    let indent = line_indent_columns(line_at(block));
+    let (new_indent, new_level) = if outdent {
+        let parent_level = level
+            .checked_sub(1)
+            .filter(|depth| *depth > 0)
+            .ok_or(BlockEditError::Unsupported)?;
+        let parent = blocks[..index].iter().rev().find(|candidate| {
+            matches!(candidate.kind, VisualBlockKind::ListItem { level, .. } if level == parent_level)
+                && candidate.list_subtree_end.is_some_and(|end| end > unit.source_range.start)
+        }).ok_or(BlockEditError::Unsupported)?;
+        (line_indent_columns(line_at(parent)), parent_level)
+    } else {
+        let (previous_index, previous) = blocks[..index].iter().enumerate().rev()
+            .find(|(_, candidate)| {
+                matches!(candidate.kind, VisualBlockKind::ListItem { level: depth, .. } if depth <= level)
+            })
+            .filter(|(_, candidate)| {
+                matches!(candidate.kind, VisualBlockKind::ListItem { level: depth, .. } if depth == level)
+                    && candidate.quote_context.is_none()
+            })
+            .ok_or(BlockEditError::Unsupported)?;
+        let previous_unit = source_block_unit(source, blocks, previous_index)?;
+        if previous_unit.source_range.end != unit.source_range.start {
             return Err(BlockEditError::Unsupported);
         }
-    }
-    let remove = if first_line.starts_with('\t') {
-        1
-    } else {
-        indent.min(4)
+        let minimum = list_content_column(line_at(previous)).ok_or(BlockEditError::Ambiguous)?;
+        let existing_child = blocks[previous_index + 1..index].iter().find(|candidate| {
+            matches!(candidate.kind, VisualBlockKind::ListItem { level: depth, .. } if depth == level + 1)
+        });
+        let fallback =
+            if matches!(
+                previous.kind,
+                VisualBlockKind::ListItem { ordered: false, .. }
+            ) && matches!(block.kind, VisualBlockKind::ListItem { ordered: false, .. })
+            {
+                minimum.max(line_indent_columns(line_at(previous)) + 4)
+            } else {
+                minimum
+            };
+        let target = existing_child
+            .map(|child| line_indent_columns(line_at(child)))
+            .unwrap_or(fallback)
+            .clamp(minimum, minimum + 3);
+        (target, level + 1)
     };
+    if (outdent && new_indent >= indent) || (!outdent && new_indent <= indent) {
+        return Err(BlockEditError::Ambiguous);
+    }
+    let delta = new_indent as isize - indent as isize;
     let mut replacement = String::new();
     let mut old_offset = unit.source_range.start;
     let mut new_caret = caret;
     for line in source[unit.source_range.clone()].split_inclusive('\n') {
         if line.trim().is_empty() {
             replacement.push_str(line);
-        } else if outdent {
-            if !line
-                .as_bytes()
-                .get(..remove)
-                .is_some_and(|prefix| prefix.iter().all(|b| matches!(b, b' ' | b'\t')))
-            {
-                return Err(BlockEditError::Ambiguous);
-            }
-            replacement.push_str(&line[remove..]);
-            if old_offset < caret {
-                new_caret = new_caret.saturating_sub(remove.min(caret - old_offset));
-            }
         } else {
-            replacement.push_str("    ");
-            replacement.push_str(line);
+            let prefix = line.len() - line.trim_start_matches([' ', '\t']).len();
+            let columns = line_indent_columns(line)
+                .checked_add_signed(delta)
+                .ok_or(BlockEditError::Ambiguous)?;
+            replacement.push_str(&" ".repeat(columns));
+            replacement.push_str(&line[prefix..]);
             if old_offset <= caret {
-                new_caret += 4;
+                let before = prefix.min(caret - old_offset);
+                let after = if before == prefix {
+                    columns
+                } else {
+                    before.min(columns)
+                };
+                new_caret = new_caret + after - before;
             }
         }
         old_offset += line.len();
+    }
+
+    let expected: Vec<_> = blocks[unit.blocks.clone()]
+        .iter()
+        .filter_map(|block| match block.kind {
+            VisualBlockKind::ListItem { level: depth, .. } => Some(depth + new_level - level),
+            _ => None,
+        })
+        .collect();
+    if !reindent_preserves_subtree(source, &unit.source_range, &replacement, 0, &expected) {
+        if outdent {
+            return Err(BlockEditError::Ambiguous);
+        }
+        // An ordered marker that starts above one cannot interrupt a
+        // paragraph. A blank line gives that child its own block.
+        let ending = preferred_line_ending(source);
+        replacement.insert_str(0, ending);
+        if !reindent_preserves_subtree(
+            source,
+            &unit.source_range,
+            &replacement,
+            ending.len(),
+            &expected,
+        ) {
+            return Err(BlockEditError::Ambiguous);
+        }
+        new_caret += ending.len();
     }
     Ok(BlockEdit {
         document_version: version,
@@ -408,6 +474,100 @@ pub fn indent_subtree(
         replacement,
         selection_after: new_caret..new_caret,
     })
+}
+
+fn line_indent_columns(line: &str) -> usize {
+    line.bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .fold(0, |column, byte| {
+            if byte == b'\t' {
+                column + 4 - column % 4
+            } else {
+                column + 1
+            }
+        })
+}
+
+fn list_content_column(line: &str) -> Option<usize> {
+    let marker = line.trim_start_matches([' ', '\t']);
+    let digits = marker.bytes().take_while(u8::is_ascii_digit).count();
+    let marker_len = match marker.as_bytes().get(digits) {
+        Some(b'.' | b')') if digits > 0 => digits + 1,
+        Some(b'-' | b'+' | b'*') if digits == 0 => 1,
+        _ => return None,
+    };
+    let column = line_indent_columns(line) + marker_len;
+    let rest = &marker[marker_len..];
+    let end = rest
+        .bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .fold(column, |col, byte| {
+            if byte == b'\t' {
+                col + 4 - col % 4
+            } else {
+                col + 1
+            }
+        });
+    let padding = end - column;
+    Some(
+        column
+            + if (1..=4).contains(&padding) && !rest.trim().is_empty() {
+                padding
+            } else {
+                1
+            },
+    )
+}
+
+fn reindent_preserves_subtree(
+    source: &str,
+    range: &Range<usize>,
+    replacement: &str,
+    prefix_len: usize,
+    expected: &[usize],
+) -> bool {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let candidate = format!(
+        "{}{}{}",
+        &source[..range.start],
+        replacement,
+        &source[range.end..]
+    );
+    let root_start = range.start + prefix_len;
+    let payload_end = range.start + replacement.trim_end().len();
+    let mut depth = 0;
+    let mut seen = 0;
+    for (event, span) in
+        Parser::new_ext(&candidate, crate::parse::markdown_options()).into_offset_iter()
+    {
+        if span.start >= payload_end {
+            break;
+        }
+        match event {
+            Event::Start(Tag::List(_)) => depth += 1,
+            Event::End(TagEnd::List(_)) => depth -= 1,
+            Event::Start(Tag::Item) if span.start >= root_start => {
+                if expected.get(seen) != Some(&depth) {
+                    return false;
+                }
+                if seen == 0 {
+                    let start = candidate[..span.start]
+                        .rfind('\n')
+                        .map_or(0, |index| index + 1);
+                    if start != root_start
+                        || span.end < payload_end
+                        || span.end > range.start + replacement.len()
+                    {
+                        return false;
+                    }
+                }
+                seen += 1;
+            }
+            _ => {}
+        }
+    }
+    seen == expected.len()
 }
 
 pub fn slash_query_at(source: &str, cursor: usize, document_version: u64) -> Option<SlashQuery> {
@@ -1189,6 +1349,125 @@ fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
 mod tests {
     use super::*;
     use crate::MarkdownDocument;
+
+    #[test]
+    fn issue_52_list_indent_moves_exactly_one_level_and_keeps_children() {
+        for (source, item, outdent, expected) in [
+            (
+                "1. Gather\n2. Inspect\n    1. Notes\n3. Publish\n",
+                "Inspect",
+                false,
+                "1. Gather\n\n   2. Inspect\n       1. Notes\n3. Publish\n",
+            ),
+            (
+                "- Atlas\n  - Chapter\n    - Earlier\n    - Parcel\n      - Detail\n- Tail\n",
+                "Parcel",
+                true,
+                "- Atlas\n  - Chapter\n    - Earlier\n  - Parcel\n    - Detail\n- Tail\n",
+            ),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let offset = source.find(item).unwrap();
+            let block = blocks
+                .iter()
+                .find(|b| b.source_range.contains(&offset))
+                .unwrap();
+            let edit = indent_subtree(
+                source,
+                doc.version(),
+                &blocks,
+                &BlockTarget::from_block(doc.version(), block),
+                offset,
+                outdent,
+            )
+            .unwrap();
+            let mut changed = source.to_string();
+            changed.replace_range(edit.range, &edit.replacement);
+            assert_eq!(changed, expected);
+            assert_eq!(&changed[edit.selection_after.start..][..item.len()], item);
+        }
+    }
+
+    #[test]
+    fn issue_54_list_indent_keeps_a_continuation_paragraph_with_its_item() {
+        for ending in ["\n", "\r\n"] {
+            let source = "- Dock\n- Inspect\n    - Lens\n    - Frame\n\n    Caption.\n\n- Exit\n"
+                .replace('\n', ending);
+            let expected = "- Dock\n    - Inspect\n        - Lens\n        - Frame\n\n        Caption.\n\n- Exit\n"
+                .replace('\n', ending);
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let offset = source.find("Inspect").unwrap();
+            let block = blocks
+                .iter()
+                .find(|b| b.source_range.contains(&offset))
+                .unwrap();
+            let edit = indent_subtree(
+                &source,
+                doc.version(),
+                &blocks,
+                &BlockTarget::from_block(doc.version(), block),
+                offset,
+                false,
+            )
+            .unwrap();
+            let mut changed = source.clone();
+            changed.replace_range(edit.range, &edit.replacement);
+            assert_eq!(changed, expected);
+            assert!(
+                MarkdownDocument::from_text(&changed)
+                    .render_html_fragment()
+                    .contains("<li>Frame</li>\n</ul>\n<p>Caption.</p>\n</li>")
+            );
+        }
+    }
+
+    #[test]
+    fn issue_53_reorder_keeps_the_gap_before_independent_prose() {
+        for ending in ["\n", "\r\n"] {
+            let source =
+                "# Garden plan\n\n- East\n  - Carrots\n- West\n  - Beans\n\nWater after sunset.\n"
+                    .replace('\n', ending);
+            let expected =
+                "# Garden plan\n\n- West\n  - Beans\n- East\n  - Carrots\n\nWater after sunset.\n"
+                    .replace('\n', ending);
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let target = |name: &str| {
+                let offset = source.find(name).unwrap();
+                BlockTarget::from_block(
+                    doc.version(),
+                    blocks
+                        .iter()
+                        .find(|b| b.source_range.contains(&offset))
+                        .unwrap(),
+                )
+            };
+            for (moved, anchor, placement) in [
+                ("East", "West", BlockPlacement::After),
+                ("West", "East", BlockPlacement::Before),
+            ] {
+                let edit = reorder_block(
+                    &source,
+                    doc.version(),
+                    &blocks,
+                    &target(moved),
+                    &target(anchor),
+                    placement,
+                )
+                .unwrap();
+                let mut changed = source.clone();
+                changed.replace_range(edit.range, &edit.replacement);
+                assert_eq!(changed, expected);
+                assert!(
+                    MarkdownDocument::from_text(&changed)
+                        .render_html_fragment()
+                        .ends_with("</ul>\n<p>Water after sunset.</p>\n")
+                );
+            }
+        }
+    }
 
     #[test]
     fn empty_paragraph_insertions_use_the_exact_line_and_preserve_neighbors() {
