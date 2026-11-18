@@ -32,54 +32,18 @@ jobs:
           run-id: ${{ env.SIGNED_RUN_ID }}
           name: markion-macos-x86_64
           path: signed
-      - name: Verify and launch on Intel macOS
+      - name: Exercise the release workflow launch gate on Intel
         if: env.SIGNED_RUN_ID != ''
         shell: bash
         run: |
           set -euo pipefail
-          uname -m
-          sw_vers
-          test "$(uname -m)" = x86_64
-          dmg=(signed/*.dmg)
-          shasum -a 256 "${dmg[0]}"
-          bash scripts/verify-macos-release.sh "${dmg[0]}" x86_64
-
-          mount_dir="$(mktemp -d)"
-          trap 'hdiutil detach -quiet "$mount_dir"; rmdir "$mount_dir"' EXIT
-          hdiutil attach -readonly -nobrowse -quiet -mountpoint "$mount_dir" "${dmg[0]}"
-          app="$RUNNER_TEMP/Applications/Markion.app"
-          mkdir -p "$(dirname "$app")"
-          ditto "$mount_dir/Markion.app" "$app"
-          xattr -w com.apple.quarantine "0081;$(printf '%x' "$(date +%s)");Safari;" "$app"
-          xattr -p com.apple.quarantine "$app"
-          syspolicy_check distribution "$app"
-          swift -e 'import Metal; print("Metal device:", MTLCreateSystemDefaultDevice()?.name ?? "unavailable")'
-          open -n "$app"
-          swift - "$app" <<'SWIFT'
-          import AppKit
-          import CoreGraphics
-
-          let path = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath().path
-          for _ in 0..<35 {
-              if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleURL?.resolvingSymlinksInPath().path == path }),
-                 let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-                 windows.contains(where: { $0[kCGWindowOwnerPID as String] as? pid_t == app.processIdentifier && $0[kCGWindowLayer as String] as? Int == 0 }) {
-                  print("Verified the installed Markion bundle opened a visible window on Intel macOS")
-                  exit(0)
-              }
-              Thread.sleep(forTimeInterval: 1)
-          }
-          fputs("No visible Markion window was observed after installation\n", stderr)
-          exit(1)
-          SWIFT
-      - name: Capture launch evidence
-        if: always() && env.SIGNED_RUN_ID != ''
-        run: screencapture -x "$RUNNER_TEMP/markion-intel.png"
+          dmgs=(signed/*.dmg)
+          bash scripts/smoke-test-macos-release.sh "${dmgs[0]}" x86_64 "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@v4
         if: always() && env.SIGNED_RUN_ID != ''
         with:
-          name: markion-intel-launch
-          path: ${{ runner.temp }}/markion-intel.png
+          name: macos-launch-x86_64
+          path: ${{ runner.temp }}/smoke
           if-no-files-found: ignore
 
   windows-install:
