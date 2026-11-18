@@ -1902,7 +1902,7 @@ pub fn indented_code_display(body: &str, body_start: usize) -> (String, Vec<Disp
     (text, segments)
 }
 
-fn fenced_payload_ranges(
+pub(crate) fn fenced_payload_ranges(
     text: &str,
     source_range: Range<usize>,
     first_marker: char,

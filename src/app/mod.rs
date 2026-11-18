@@ -148,6 +148,7 @@ actions!(
         TaskList,
         BlockQuote,
         CodeFence,
+        FormatCodeBlock,
         FormatTable,
         TableAddRow,
         TableDeleteRow,
@@ -586,6 +587,12 @@ mod menu_shortcuts {
         "Ctrl+Shift+K",
         "Cmd+Shift+K",
     );
+    pub const FORMAT_CODE_BLOCK: MenuShortcut = MenuShortcut::new(
+        "format-code-block",
+        "secondary-alt-l",
+        "Ctrl+Alt+L",
+        "Cmd+Option+L",
+    );
     pub const FORMAT_TABLE: MenuShortcut = MenuShortcut::new(
         "format-table",
         "secondary-shift-m",
@@ -741,6 +748,7 @@ mod menu_shortcuts {
         TASK_LIST,
         BLOCK_QUOTE,
         CODE_FENCE,
+        FORMAT_CODE_BLOCK,
         FORMAT_TABLE,
         TABLE_ADD_ROW,
         TABLE_DELETE_ROW,
@@ -1591,6 +1599,7 @@ struct BlockMenuState {
     selection_format: Option<VisualSelectionFormatTarget>,
     is_image: bool,
     is_table: bool,
+    is_fenced_code: bool,
     image_object_selected: bool,
     anchor: Point<Pixels>,
     root_selected: usize,
@@ -1675,6 +1684,7 @@ enum BlockMenuGroup {
     InsertBlocks,
     InsertCallouts,
     Insertion,
+    CodeBlock,
     Operations,
     TableRows,
     TableColumns,
@@ -1700,6 +1710,7 @@ enum BlockMenuItem {
     Submenu(BlockContextSubmenu),
     TableRow(VisualTableMenuItem),
     TableColumn(VisualTableMenuItem),
+    CodeBlockFormat,
     ImageWidth(u8),
     ImageAlignment(ImageAlignment),
     ImageProperties,
@@ -1827,6 +1838,9 @@ impl BlockMenuState {
                     BlockMenuItem::Delete,
                 ]);
             } else {
+                if self.is_fenced_code {
+                    items.push(BlockMenuItem::CodeBlockFormat);
+                }
                 items.push(BlockMenuItem::Submenu(BlockContextSubmenu::Insertion));
             }
             return items;
@@ -1858,6 +1872,9 @@ impl BlockMenuState {
                 BlockMenuItem::Insert(SlashPaletteCommand::Formula),
                 BlockMenuItem::Insert(SlashPaletteCommand::Image),
             ]);
+        }
+        if self.is_fenced_code {
+            items.push(BlockMenuItem::CodeBlockFormat);
         }
         items.extend(BLOCK_MENU_OPERATIONS);
         if !self.is_image {
@@ -2030,6 +2047,7 @@ impl BlockMenuItem {
             }
             Self::Delete => BlockMenuGroup::Delete,
             Self::TableRow(_) => BlockMenuGroup::TableRows,
+            Self::CodeBlockFormat => BlockMenuGroup::CodeBlock,
             Self::TableColumn(_) => BlockMenuGroup::TableColumns,
             Self::Submenu(_) => BlockMenuGroup::TableRows,
             _ => BlockMenuGroup::Operations,
@@ -2064,6 +2082,7 @@ struct BlockMenuPresentation {
     editing_context: bool,
     can_edit_selection: bool,
     can_paste: bool,
+    can_format_code: bool,
     table_context: Option<VisualTableContext>,
 }
 
@@ -2104,6 +2123,7 @@ impl BlockMenuPresentation {
             BlockMenuItem::TableRow(item) => self.table_context.is_some_and(|table| {
                 visual_table_menu_item_edit(table.row, item, table.alignment).is_some()
             }),
+            BlockMenuItem::CodeBlockFormat => self.can_format_code,
             BlockMenuItem::TableColumn(item) => self.table_context.is_some_and(|table| {
                 visual_table_menu_item_edit(table.column, item, table.alignment).is_some()
             }),
@@ -2646,6 +2666,8 @@ enum PaneScrollTarget {
     PreferencesShortcutActions,
     /// Preferences panel Export tab body. Drag identity only.
     PreferencesExport,
+    /// Preferences panel Editor tab body. Drag identity only.
+    PreferencesEditor,
     /// Files sidebar tree list. Drag identity only; never a Sync scroll driver.
     FileTree,
     /// Outline sidebar heading list. Drag identity only; never a Sync scroll driver.
@@ -2755,6 +2777,7 @@ enum EditorContextAction {
     Copy,
     Paste,
     SelectAll,
+    FormatCodeBlock,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2888,6 +2911,7 @@ enum PreferencesTab {
     Images,
     Shortcuts,
     Export,
+    Editor,
     Ai,
 }
 
@@ -2923,6 +2947,7 @@ mod ai_panel;
 mod appearance;
 mod application;
 mod bootstrap;
+mod code_format_prefs;
 mod diagram;
 mod documents;
 mod docx_import;
@@ -3099,9 +3124,15 @@ struct MarkionApp {
     preferences_categories_scroll: ScrollHandle,
     preferences_actions_scroll: ScrollHandle,
     preferences_export_scroll: ScrollHandle,
+    preferences_editor_scroll: ScrollHandle,
     /// Cached `pandoc --version` probe result for the Export tab's
     /// availability line. `None` = not probed (or probing in flight).
     pandoc_available_cached: Option<bool>,
+    code_block_preferences: markion::CodeBlockFormatPreferences,
+    code_formatter_registry: Arc<markion::code_format::CodeFormatterRegistry>,
+    code_formatter_availability_cached: Option<markion::code_format::FormatterAvailability>,
+    code_format_generation: u64,
+    code_format_cancellation: Option<markion::external_command::CommandCancellation>,
     shortcut_platform: ShortcutPlatform,
     shortcut_category: ShortcutCategory,
     /// Menu-action shortcut overrides loaded from `config.toml`

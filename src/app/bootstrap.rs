@@ -185,6 +185,10 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemTask), TaskList),
                 MenuItem::action(t(language, Msg::ItemQuote), BlockQuote),
                 MenuItem::action(t(language, Msg::ItemCodeFence), CodeFence),
+                MenuItem::action(
+                    markion::code_format_t(language, markion::CodeFormatMsg::FormatCodeBlock),
+                    FormatCodeBlock,
+                ),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemFormatTable), FormatTable),
                 MenuItem::action(t(language, Msg::ItemAddTableRow), TableAddRow),
@@ -374,6 +378,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         registry_binding(cx, eff(&menu_shortcuts::TASK_LIST), TaskList),
         registry_binding(cx, eff(&menu_shortcuts::BLOCK_QUOTE), BlockQuote),
         registry_binding(cx, eff(&menu_shortcuts::CODE_FENCE), CodeFence),
+        registry_binding(cx, eff(&menu_shortcuts::FORMAT_CODE_BLOCK), FormatCodeBlock),
         KeyBinding::new("home", Home, None),
         KeyBinding::new("end", End, None),
         KeyBinding::new("enter", InsertNewline, None),
