@@ -111,8 +111,8 @@ jobs:
           if ($setup.ExitCode -ne 0) { throw "NSIS failed with exit code $($setup.ExitCode)" }
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
 
-          $env:APPDATA = Join-Path $fixture 'profile/windows/APPDATA'
-          $env:LOCALAPPDATA = Join-Path $fixture 'profile/windows/LOCALAPPDATA'
+          $env:APPDATA = Join-Path $fixture 'profile/roaming'
+          $env:LOCALAPPDATA = Join-Path $fixture 'profile/local'
           foreach ($location in @($native, $portable)) {
               $binary = Get-ChildItem -Path $location -Recurse -Filter 'markion.exe' | Select-Object -First 1
               if (!$binary) { throw "Installed binary missing under $location" }
