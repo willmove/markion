@@ -599,10 +599,8 @@ mod tests {
             .unwrap();
         assert!(doc.text().starts_with("before\n\n"));
         assert!(doc.text().ends_with("\n\nafter"));
-        let table = crate::table::parse_markdown_table(
-            &doc.text()[crate::table::table_ranges(doc.text())[0].clone()],
-        )
-        .unwrap();
+        let table =
+            crate::table::parse_markdown_table(&doc.text()[doc.table_ranges()[0].clone()]).unwrap();
         assert_eq!(table.rows.len(), 4);
         assert_eq!(table.rows[1][0], "x\\|y");
         assert_eq!(table.rows[1][1], "😀");

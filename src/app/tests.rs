@@ -6733,6 +6733,85 @@ fn visual_table_document_state(
     })
 }
 
+#[gpui::test]
+fn issue_30_visual_click_edits_the_rendered_right_cell(cx: &mut TestAppContext) {
+    let source = "| Left | Right |\n| --- | --- |\n| BIRCH51\\\\|WILLOW28 | COPPER73 |\n";
+    let right = source.find("COPPER73").unwrap();
+    let (app, cx) = visual_table_handle_app(source, cx);
+    let position = cx
+        .debug_bounds(test_debug_selector("visual-table-cell-0-1-1".into()))
+        .expect("right body cell")
+        .center();
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+
+    let caret = app.update(cx, |app, _| app.cursor_offset());
+    assert!((right..=right + "COPPER73".len()).contains(&caret));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_text_in_range(app, None, "x", window, cx);
+        });
+    });
+    let mut expected = source.to_string();
+    expected.insert(caret, 'x');
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), expected);
+        assert_eq!(tab.undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
+#[gpui::test]
+fn issue_31_format_table_action_keeps_the_preceding_paragraph(cx: &mut TestAppContext) {
+    let source = "Notes | choices\r\n| Product | Count |\r\n| --- | --- |\r\n| Tea | 2 |\r\n";
+    let offset = source.find("Product").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = offset..offset;
+        app.auto_save_preferences.enabled = false;
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(FormatTable);
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_ne!(
+            tab.document.text(),
+            source,
+            "the command formatted the table"
+        );
+        assert!(
+            tab.document
+                .text()
+                .starts_with("Notes | choices\r\n| Product")
+        );
+        assert!(
+            tab.document
+                .render_html_fragment()
+                .contains("<th>Product</th><th>Count</th>")
+        );
+        assert_eq!(tab.undo_stack.len(), 1);
+        assert_eq!(&tab.document.text()[tab.selected_range.clone()], "Product");
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().selected_range, offset..offset);
+    });
+}
+
 const TABLE_NAVIGATION_SAMPLE: &str = "## Table\n\n\
 | Syntax        | Example                                     | Purpose    |\n\
 | :------------- | :-------------------------------------------: | ----------: |\n\
