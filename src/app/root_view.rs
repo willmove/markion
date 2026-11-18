@@ -437,6 +437,7 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::task_list))
                     .on_action(cx.listener(Self::block_quote))
                     .on_action(cx.listener(Self::code_fence))
+                    .on_action(cx.listener(Self::format_code_block))
                     .on_action(cx.listener(Self::format_table))
                     .on_action(cx.listener(Self::table_add_row))
                     .on_action(cx.listener(Self::table_delete_row))
@@ -4585,6 +4586,7 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
         PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
+        PaneScrollTarget::PreferencesEditor => "preferences-editor-scrollbar",
         PaneScrollTarget::FileTree => "file-tree-scrollbar",
         PaneScrollTarget::Outline => "outline-scrollbar",
         PaneScrollTarget::MarkdownReference => "markdown-reference-scrollbar",
@@ -5121,12 +5123,43 @@ fn editor_context_menu_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
         .as_ref()
         .expect("editor context menu is rendered only while open");
     let has_selection = !menu.selection.is_empty();
-    let items = [
-        (EditorContextAction::Cut, Msg::ItemCut, has_selection),
-        (EditorContextAction::Copy, Msg::ItemCopy, has_selection),
-        (EditorContextAction::Paste, Msg::ItemPaste, true),
-        (EditorContextAction::SelectAll, Msg::ItemSelectAll, true),
+    let in_fenced_code = !app.active_tab().is_image()
+        && !matches!(app.rendered_view_mode(), ViewMode::Read)
+        && markion::code_format::fenced_code_block_for_range(
+            &app.active_tab().document,
+            menu.selection.clone(),
+            false,
+        )
+        .is_some();
+    let mut items: Vec<(EditorContextAction, &'static str, bool)> = vec![
+        (
+            EditorContextAction::Cut,
+            t(app.language, Msg::ItemCut),
+            has_selection,
+        ),
+        (
+            EditorContextAction::Copy,
+            t(app.language, Msg::ItemCopy),
+            has_selection,
+        ),
+        (
+            EditorContextAction::Paste,
+            t(app.language, Msg::ItemPaste),
+            true,
+        ),
+        (
+            EditorContextAction::SelectAll,
+            t(app.language, Msg::ItemSelectAll),
+            true,
+        ),
     ];
+    if in_fenced_code {
+        items.push((
+            EditorContextAction::FormatCodeBlock,
+            markion::code_format_t(app.language, markion::CodeFormatMsg::FormatCodeBlock),
+            true,
+        ));
+    }
     let app_entity = cx.entity();
     anchored().position(menu.position).child(
         div()
@@ -5148,6 +5181,7 @@ fn editor_context_menu_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
                     EditorContextAction::Copy => "editor-context-copy",
                     EditorContextAction::Paste => "editor-context-paste",
                     EditorContextAction::SelectAll => "editor-context-select-all",
+                    EditorContextAction::FormatCodeBlock => "editor-context-format-code",
                 };
                 div()
                     .id(id)
@@ -5166,7 +5200,7 @@ fn editor_context_menu_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
                                 });
                             })
                     })
-                    .child(t(app.language, label))
+                    .child(label)
             })),
     )
 }
@@ -5882,6 +5916,17 @@ pub(super) fn active_menu_dropdown(
                     code_fence,
                     CodeFence,
                     menu_shortcuts::CODE_FENCE
+                ))
+                .child(menu_action_button(
+                    markion::code_format_t(language, markion::CodeFormatMsg::FormatCodeBlock),
+                    Some(
+                        menu_shortcuts::FORMAT_CODE_BLOCK
+                            .effective_label(shortcut_overrides, shortcut_platform),
+                    ),
+                    palette,
+                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                        app.format_code_block(&FormatCodeBlock, window, cx);
+                    }),
                 ))
                 .child(menu_separator(palette))
                 .child(action_item!(
@@ -6931,6 +6976,9 @@ pub(super) fn preferences_panel_view(
                 .when(active_tab == PreferencesTab::Export, |panel| {
                     panel.child(preferences_export_body(app, palette, cx))
                 })
+                .when(active_tab == PreferencesTab::Editor, |panel| {
+                    panel.child(code_format_prefs::preferences_editor_body(app, palette, cx))
+                })
                 .when(active_tab == PreferencesTab::Ai, |panel| {
                     panel.child(ai_panel::settings_view(app, cx))
                 }),
@@ -6990,6 +7038,14 @@ fn preferences_tab_strip(
             palette,
             cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                 app.select_preferences_tab(PreferencesTab::Export, cx);
+            }),
+        ))
+        .child(preferences_tab_button(
+            markion::code_format_t(app.language, markion::CodeFormatMsg::PrefTabEditor),
+            app.preferences_tab == PreferencesTab::Editor,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Editor, cx);
             }),
         ))
         .child(preferences_tab_button(
@@ -8279,7 +8335,7 @@ fn preferences_export_body(
 }
 
 /// Muted section header used across the Preferences panel bodies.
-fn preference_section_header(label: &'static str) -> Div {
+pub(super) fn preference_section_header(label: &'static str) -> Div {
     div()
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
@@ -8313,7 +8369,7 @@ fn preference_pandoc_availability_line(app: &MarkionApp, palette: ThemePalette) 
 /// One labeled row with a value box and Browse…/Reset actions (pandoc path,
 /// DOCX reference template). The action labels resolve from `language` so
 /// every caller shares them.
-fn preference_path_row(
+pub(super) fn preference_path_row(
     label: &'static str,
     value: String,
     customized: bool,
@@ -9034,7 +9090,7 @@ fn font_picker_entry(
 }
 
 /// Small text action button for font rows (wider than the numeric stepper).
-fn preference_font_action(
+pub(super) fn preference_font_action(
     label: SharedString,
     palette: ThemePalette,
     listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,

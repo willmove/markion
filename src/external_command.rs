@@ -2,7 +2,7 @@
 
 use std::{
     ffi::OsString,
-    io::{self, Read},
+    io::{self, Read, Write},
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
     sync::{
@@ -91,11 +91,33 @@ pub fn run_external_command(
     limits: ExternalCommandLimits,
     cancellation: &CommandCancellation,
 ) -> Result<ExternalCommandOutput, ExternalCommandError> {
+    run_external_command_inner(request, None, limits, cancellation)
+}
+
+pub fn run_external_command_with_stdin(
+    request: &ExternalCommandRequest,
+    stdin_bytes: &[u8],
+    limits: ExternalCommandLimits,
+    cancellation: &CommandCancellation,
+) -> Result<ExternalCommandOutput, ExternalCommandError> {
+    run_external_command_inner(request, Some(stdin_bytes), limits, cancellation)
+}
+
+fn run_external_command_inner(
+    request: &ExternalCommandRequest,
+    stdin_bytes: Option<&[u8]>,
+    limits: ExternalCommandLimits,
+    cancellation: &CommandCancellation,
+) -> Result<ExternalCommandOutput, ExternalCommandError> {
     let mut command = Command::new(&request.program);
     command
         .current_dir(&request.working_directory)
         .args(&request.arguments)
-        .stdin(Stdio::null())
+        .stdin(if stdin_bytes.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
@@ -103,6 +125,24 @@ pub fn run_external_command(
 
     let mut child = command.spawn().map_err(ExternalCommandError::Spawn)?;
     let child_id = child.id();
+    let stdin_writer = stdin_bytes.map(|bytes| {
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let payload = bytes.to_vec();
+        thread::spawn(move || {
+            if let Err(err) = stdin.write_all(&payload)
+                && err.kind() != io::ErrorKind::BrokenPipe
+            {
+                return Err(err);
+            }
+            if let Err(err) = stdin.flush()
+                && err.kind() != io::ErrorKind::BrokenPipe
+            {
+                return Err(err);
+            }
+            drop(stdin);
+            Ok(())
+        })
+    });
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
     let stdout_reader = thread::spawn(move || read_bounded(stdout, limits.max_stdout_bytes));
@@ -124,6 +164,9 @@ pub fn run_external_command(
             None => thread::sleep(POLL_INTERVAL),
         }
     };
+    if let Some(writer) = stdin_writer {
+        let _ = writer.join();
+    }
     let (stdout, stdout_truncated) = join_reader(stdout_reader)?;
     let (stderr, stderr_truncated) = join_reader(stderr_reader)?;
     Ok(ExternalCommandOutput {
@@ -344,5 +387,24 @@ mod tests {
         .unwrap();
         assert!(output.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap(), value);
+    }
+
+    #[test]
+    fn pipes_stdin_and_closes_eof_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let script =
+            "$data = [Console]::In.ReadToEnd(); [Console]::Out.Write($data.ToUpperInvariant())";
+        #[cfg(not(windows))]
+        let script = "tr a-z A-Z";
+        let output = run_external_command_with_stdin(
+            &request(script, dir.path()),
+            b"hello world",
+            ExternalCommandLimits::default(),
+            &CommandCancellation::default(),
+        )
+        .unwrap();
+        assert!(output.success());
+        assert_eq!(output.stdout, b"HELLO WORLD");
     }
 }

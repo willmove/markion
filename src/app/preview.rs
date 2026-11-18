@@ -5823,6 +5823,7 @@ pub(super) fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
             visual_block_transform_element_id(block_transform_index(transform))
         }
         BlockMenuItem::TableRow(item) => context_table_item_id(true, item),
+        BlockMenuItem::CodeBlockFormat => "visual-code-format-block",
         BlockMenuItem::TableColumn(item) => context_table_item_id(false, item),
         BlockMenuItem::Submenu(BlockContextSubmenu::TableRows) => "visual-context-table-rows",
         BlockMenuItem::Submenu(BlockContextSubmenu::TableColumns) => "visual-context-table-columns",
@@ -5883,6 +5884,9 @@ fn block_menu_item_label(
         }
         BlockMenuItem::Insert(command) => slash_command_label(language, command),
         BlockMenuItem::InsertCallout(kind) => callout_menu_label(language, kind).into(),
+        BlockMenuItem::CodeBlockFormat => {
+            markion::code_format_t(language, markion::CodeFormatMsg::FormatCodeBlock).to_string()
+        }
         BlockMenuItem::Transform(transform) => block_transform_label(language, transform),
         BlockMenuItem::Submenu(page) => block_menu_submenu_label(language, page, context),
         BlockMenuItem::TableRow(item) => format!(
@@ -5964,6 +5968,7 @@ fn block_menu_item_icon(item: BlockMenuItem) -> crate::ui::icon::Icon {
         }
         BlockMenuItem::ImageSaveLocal => Icon::Download,
         BlockMenuItem::ImageUpload => Icon::Upload,
+        BlockMenuItem::CodeBlockFormat => Icon::Braces,
         BlockMenuItem::ImageProperties => Icon::Settings,
         BlockMenuItem::ImageAlignment(ImageAlignment::Left) => Icon::AlignLeft,
         BlockMenuItem::ImageAlignment(ImageAlignment::Center) => Icon::AlignCenter,
@@ -6865,6 +6870,14 @@ fn visual_code_editor(
             code.to_string(),
             palette,
             label,
+            (!indented).then(|| {
+                (
+                    payload.source_range.clone(),
+                    Some(block_id),
+                    block_index,
+                    "visual-code-format",
+                )
+            }),
             cx,
         ))
         .child(visual_editor_field_element(
@@ -7195,6 +7208,7 @@ fn visual_diagram_editor(
                 // mounted when the user expanded the source — so the language
                 // chip is always editable while it is on screen.
                 CodeHeaderLanguage::Field(info, block_index, block.id),
+                None,
                 cx,
             ))
             .child(visual_editor_field_element(
@@ -8436,7 +8450,6 @@ fn code_copy_button(
     let typography = app.typography_metrics();
     div()
         .flex_none()
-        .ml_auto()
         .px_2()
         .py_1()
         .rounded_sm()
@@ -8455,16 +8468,64 @@ fn code_copy_button(
         )
 }
 
+fn code_format_button(
+    app: &MarkionApp,
+    range: Range<usize>,
+    block_id: Option<VisualBlockId>,
+    block_index: usize,
+    debug_prefix: &'static str,
+    palette: &CodePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let typography = app.typography_metrics();
+    let id = ElementId::Name(SharedString::from(format!("{debug_prefix}-{block_index}")));
+    div()
+        .id(id)
+        .debug_selector(move || format!("{debug_prefix}-{block_index}"))
+        .flex_none()
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .bg(palette.copy_bg)
+        .text_color(palette.accent)
+        .text_size(px(typography.small_font_size))
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, _, _, cx| cx.stop_propagation()),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                cx.stop_propagation();
+                app.format_code_block_at_range(range.clone(), block_id, false, cx);
+            }),
+        )
+        .child(markion::code_format_t(
+            app.language,
+            markion::CodeFormatMsg::FormatButton,
+        ))
+}
+
 /// Header row for a code block: the optional language label on the left and the
-/// one-click copy button on the right.
+/// one-click format/copy actions on the right.
 fn code_block_header(
     app: &MarkionApp,
     language: Option<&str>,
     code: String,
     palette: &CodePalette,
+    format_target: Option<(Range<usize>, Option<VisualBlockId>, usize, &'static str)>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
-    code_block_header_with_language(app, language, code, palette, CodeHeaderLanguage::Text, cx)
+    code_block_header_with_language(
+        app,
+        language,
+        code,
+        palette,
+        CodeHeaderLanguage::Text,
+        format_target,
+        cx,
+    )
 }
 
 /// How the rendered block header presents the fence's language token.
@@ -8488,6 +8549,7 @@ fn code_block_header_with_language(
     code: String,
     palette: &CodePalette,
     label: CodeHeaderLanguage<'_>,
+    format_target: Option<(Range<usize>, Option<VisualBlockId>, usize, &'static str)>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
@@ -8513,7 +8575,28 @@ fn code_block_header_with_language(
             ));
         }
     }
-    header.child(code_copy_button(app, code, palette, cx))
+    let actions = div()
+        .flex_none()
+        .ml_auto()
+        .flex()
+        .items_center()
+        .gap_1()
+        .when_some(
+            format_target,
+            |row, (range, block_id, block_index, prefix)| {
+                row.child(code_format_button(
+                    app,
+                    range,
+                    block_id,
+                    block_index,
+                    prefix,
+                    palette,
+                    cx,
+                ))
+            },
+        )
+        .child(code_copy_button(app, code, palette, cx));
+    header.child(actions)
 }
 
 /// Compact, obviously-clickable editable chip for the fence's first info-string
@@ -8579,6 +8662,7 @@ fn code_block_view(
     show_code_line_numbers: bool,
     code_theme: CodeTheme,
     wrap_long_lines: bool,
+    format_target: Option<(Range<usize>, Option<VisualBlockId>, usize, &'static str)>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
@@ -8598,6 +8682,7 @@ fn code_block_view(
             language.as_deref(),
             code.to_string(),
             palette,
+            format_target,
             cx,
         ));
     if show_code_line_numbers {
@@ -9031,7 +9116,22 @@ pub(super) fn preview_block_view(
                 }
             }
         }
-        PreviewBlock::CodeBlock { language, code, .. } => {
+        PreviewBlock::CodeBlock {
+            language,
+            code,
+            source_range,
+            fenced,
+            ..
+        } => {
+            let split_format_target =
+                (*fenced && matches!(app.rendered_view_mode(), ViewMode::Split)).then(|| {
+                    (
+                        source_range.clone(),
+                        None,
+                        block_index,
+                        "preview-code-format",
+                    )
+                });
             match app.diagram_entry(language.as_deref(), code) {
                 Some(DiagramCacheEntry::Ready(image, size)) => div()
                     .mb_3()
@@ -9069,6 +9169,7 @@ pub(super) fn preview_block_view(
                         show_code_line_numbers,
                         code_theme,
                         code_wrap,
+                        None,
                         cx,
                     )),
                 Some(DiagramCacheEntry::Error(error)) => div()
@@ -9092,6 +9193,7 @@ pub(super) fn preview_block_view(
                         show_code_line_numbers,
                         code_theme,
                         code_wrap,
+                        None,
                         cx,
                     )),
                 None => code_block_view(
@@ -9102,6 +9204,7 @@ pub(super) fn preview_block_view(
                     show_code_line_numbers,
                     code_theme,
                     code_wrap,
+                    split_format_target,
                     cx,
                 ),
             }
