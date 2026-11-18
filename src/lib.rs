@@ -318,8 +318,7 @@ use table::{
     format_markdown_table, format_table_column_width_comment, formatted_table_cell_range,
     leading_table_column_width_comment_range, normalize_column_percents, parse_markdown_table,
     parse_table_column_width_comment, permute_column_percents, selection_is_within_one_table_cell,
-    table_cell_source_ranges, table_position_at, table_preview_source_range,
-    table_range_at as table_range_at_fn, table_ranges as table_ranges_fn,
+    table_cell_source_ranges, table_position_at, table_preview_source_range, table_source_range,
 };
 pub use table::{
     authored_table_column_percents, percents_from_flex_weights,
@@ -1986,8 +1985,7 @@ impl MarkdownDocument {
         format: MarkdownFormat,
     ) -> std::ops::Range<usize> {
         let range = clamp_range_to_char_boundaries(&self.text, range);
-        if let Some(inside_one_cell) = selection_is_within_one_table_cell(&self.text, range.clone())
-        {
+        if let Some(table_range) = self.table_range_at(range.start) {
             let inline_ok = matches!(
                 format,
                 MarkdownFormat::Bold
@@ -1996,7 +1994,13 @@ impl MarkdownDocument {
                     | MarkdownFormat::Strikethrough
                     | MarkdownFormat::Link
             );
-            if !inside_one_cell || !inline_ok {
+            let start = table_range.start;
+            if !inline_ok
+                || !selection_is_within_one_table_cell(
+                    &self.text[table_range],
+                    range.start - start..range.end - start,
+                )
+            {
                 return range;
             }
         }
@@ -2018,11 +2022,20 @@ impl MarkdownDocument {
     }
 
     pub fn table_range_at(&self, byte_index: usize) -> Option<Range<usize>> {
-        table_range_at_fn(&self.text, byte_index)
+        let index = clamp_to_char_boundary(&self.text, byte_index);
+        self.table_ranges()
+            .into_iter()
+            .find(|range| range.start <= index && index <= range.end)
     }
 
     pub fn table_ranges(&self) -> Vec<Range<usize>> {
-        table_ranges_fn(&self.text)
+        if !self.text.contains('|') {
+            return Vec::new();
+        }
+        self.preview_blocks_shared()
+            .iter()
+            .filter_map(|block| table_source_range(&self.text, block))
+            .collect()
     }
 
     pub fn edit_table_at(&mut self, byte_index: usize, edit: TableEdit) -> Option<TableEditResult> {
@@ -2248,10 +2261,22 @@ impl MarkdownDocument {
             parse_table_column_width_comment(&self.text[range.clone()])
                 .filter(|percents| percents.len() == old_column_count)
         });
+        let table_source = &self.text[table_range.clone()];
+        let line_ending = if table_source.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let separator = table_source.lines().nth(1)?;
+        let indent =
+            &separator[..separator.len() - separator.trim_start_matches([' ', '\t']).len()];
         table.normalize();
-        let table_replacement = format_markdown_table(&table);
+        let mut table_replacement = format_markdown_table(&table);
+        if line_ending != "\n" || !indent.is_empty() {
+            table_replacement = table_replacement.replace('\n', &format!("{line_ending}{indent}"));
+        }
         let selection_in_table =
-            formatted_table_cell_range(&table, selected_row, selected_column).unwrap_or(0..0);
+            formatted_table_cell_range(&table_replacement, selected_row, selected_column)?;
 
         let rewritten_percents = match (column_edit, old_percents) {
             (Some(ColumnPercentEdit::Insert(insert_at)), Some(percents)) => {
@@ -2271,11 +2296,14 @@ impl MarkdownDocument {
                 (leading_comment.clone(), rewritten_percents)
             {
                 let comment = format_table_column_width_comment(&percents);
-                let replacement = format!("{comment}\n{table_replacement}");
+                let header_indent =
+                    &self.text[self.line_start_at(table_range.start)..table_range.start];
+                let prefix = format!("{comment}{line_ending}{header_indent}");
+                let table_start = comment_range.start + prefix.len();
                 (
                     comment_range.start..table_range.end,
-                    replacement,
-                    comment_range.start + comment.len() + 1,
+                    format!("{prefix}{table_replacement}"),
+                    table_start,
                 )
             } else {
                 (
@@ -2307,14 +2335,27 @@ impl MarkdownDocument {
     ) -> Option<Range<usize>> {
         let byte_index = clamp_to_char_boundary(&self.text, byte_index);
         let table_range = self.table_range_at(byte_index)?;
-        let table = parse_markdown_table(&self.text[table_range.clone()])?;
+        let table_source = &self.text[table_range.clone()];
+        let table = parse_markdown_table(table_source)?;
         let columns = table.column_count();
         if percents.len() != columns {
             return None;
         }
         let percents = normalize_column_percents(percents)?;
         let comment = format_table_column_width_comment(&percents);
-        let line = format!("{comment}\n");
+        let header_indent = &self.text[self.line_start_at(table_range.start)..table_range.start];
+        if !header_indent
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            return None;
+        }
+        let line_ending = if table_source.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let line = format!("{comment}{line_ending}{header_indent}");
         let replace_range = leading_table_column_width_comment_range(&self.text, table_range.start)
             .unwrap_or(table_range.start..table_range.start);
         if self.text.get(replace_range.clone()) == Some(line.as_str()) {
@@ -4493,7 +4534,7 @@ impl MarkdownDocument {
         // export, and sync scroll alike. For documents without nesting the
         // stream is already ordered, so this is a no-op there.
         blocks.sort_by_key(|block| block.source_range().start);
-        absorb_table_column_width_comments(&mut blocks);
+        absorb_table_column_width_comments(text, &mut blocks);
         absorb_table_of_contents(&mut blocks);
         uniquify_heading_anchors(&mut headings);
 
@@ -5209,23 +5250,33 @@ fn emit_finished_paragraph(
     );
 }
 
-fn absorb_table_column_width_comments(blocks: &mut Vec<PreviewBlock>) {
+fn absorb_table_column_width_comments(text: &str, blocks: &mut Vec<PreviewBlock>) {
     let mut index = 0;
     while index < blocks.len() {
         if matches!(&blocks[index], PreviewBlock::BlockQuote { .. }) {
             if let PreviewBlock::BlockQuote { children, .. } = &mut blocks[index] {
-                absorb_table_column_width_comments(children);
+                absorb_table_column_width_comments(text, children);
             }
             index += 1;
             continue;
         }
         let html_start = match &blocks[index] {
             PreviewBlock::Html {
-                html, source_range, ..
+                html,
+                source_range,
+                list_depth,
+                ..
             } if parse_table_column_width_comment(html).is_some()
-                && blocks
-                    .get(index + 1)
-                    .is_some_and(|next| matches!(next, PreviewBlock::Table { .. })) =>
+                && matches!(
+                    blocks.get(index + 1),
+                    Some(PreviewBlock::Table {
+                        source_range: table_range,
+                        list_depth: table_depth,
+                        ..
+                    }) if list_depth == table_depth
+                        && text.get(source_range.end..table_range.start).is_some_and(|gap|
+                            gap.bytes().all(|byte| byte.is_ascii_whitespace()))
+                ) =>
             {
                 Some(source_range.start)
             }
@@ -8362,6 +8413,58 @@ mod tests {
     }
 
     #[test]
+    fn issue_31_table_format_keeps_adjacent_pipe_prose_and_other_tables() {
+        for ending in ["\n", "\r\n"] {
+            for prose in ["Notes | choices\n", "備註 | 選項\n更多 | 說明\n"] {
+                let prefix = format!(
+                    "---\ntitle: example\n---\n\n~~~text\n| Fake | Table |\n| --- | --- |\n~~~\n\n{prose}"
+                )
+                .replace('\n', ending);
+                let table = "| Product | Count |\n| --- | --- |\n| Tea | 2 |".replace('\n', ending);
+                let suffix = "\n\nAfter | prose\n\n| Other | Value |\n| --- | --- |\n| A | B |\n"
+                    .replace('\n', ending);
+                let source = format!("{prefix}{table}{suffix}");
+                let mut doc = MarkdownDocument::from_text(&source);
+                let at = source.find("Product").unwrap();
+                let original_html = doc.render_html_fragment();
+                assert_eq!(
+                    doc.table_range_at(at),
+                    Some(prefix.len()..prefix.len() + table.len())
+                );
+                for outside in [
+                    source.find("Fake").unwrap(),
+                    prefix.len() - ending.len() - 1,
+                ] {
+                    assert_eq!(doc.table_range_at(outside), None);
+                    assert!(doc.edit_table_at(outside, TableEdit::Format).is_none());
+                    assert_eq!(doc.text(), source);
+                }
+                let result = doc.edit_table_at(at, TableEdit::Format).unwrap();
+                assert_eq!(&doc.text()[..result.table_range.start], prefix);
+                assert_eq!(&doc.text()[result.table_range.end..], suffix);
+                assert_eq!(&doc.text()[result.selected_range], "Product");
+                assert_eq!(doc.render_html_fragment(), original_html);
+                if ending == "\r\n" {
+                    assert!(!doc.text().replace("\r\n", "").contains('\n'));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn table_format_preserves_list_continuation_indentation() {
+        let source = "- first\n\n  | Name | Value |\n  | --- | --- |\n  | a | b |\n\n- second\n";
+        let mut doc = MarkdownDocument::from_text(source);
+        let before = doc.render_html_fragment();
+        let offset = source.find("Value").unwrap();
+        let result = doc.edit_table_at(offset, TableEdit::Format).unwrap();
+        assert_eq!(doc.render_html_fragment(), before);
+        assert!(doc.text().starts_with("- first\n\n  | Name"));
+        assert!(doc.text().ends_with("\n\n- second\n"));
+        assert_eq!(&doc.text()[result.selected_range], "Value");
+    }
+
+    #[test]
     fn column_width_comment_is_absorbed_into_the_following_table() {
         let source = "<!-- markion-cols:30,70 -->\n| A | B |\n| --- | --- |\n| 1 | 2 |\n";
         let doc = MarkdownDocument::from_text(source);
@@ -8390,6 +8493,18 @@ mod tests {
         };
         assert_eq!(&source[cells[0].field.source_range.clone()], "A");
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn table_lookup_excludes_a_width_comment_separated_by_a_link_definition() {
+        let prefix = "<!-- markion-cols:30,70 -->\n\n[guide]: /help\n\n";
+        let source = format!("{prefix}| A | B |\n| --- | --- |\n| one | two |");
+        let mut doc = MarkdownDocument::from_text(&source);
+        let at = source.find("one").unwrap();
+        assert_eq!(doc.table_range_at(at), Some(prefix.len()..source.len()));
+        assert_eq!(doc.table_range_at(0), None);
+        doc.edit_table_at(at, TableEdit::Format).unwrap();
+        assert!(doc.text().starts_with(prefix));
     }
 
     #[test]
@@ -11014,6 +11129,49 @@ Intro.
         );
         assert!(doc.text().starts_with("before\n\n"));
         assert!(doc.text().ends_with("\n\nafter"));
+    }
+
+    #[test]
+    fn issue_30_direct_edit_and_format_agree_on_escaped_gfm_pipes() {
+        for count in 1..=4 {
+            let cell = format!("ORBIT_17{}|MAPLE_46", "\\".repeat(count));
+            for cell in [cell.clone(), format!("`{cell}`")] {
+                let source = format!(
+                    "BEFORE_31\n\n| Label | Status |\n| :--- | ---: |\n| {cell} | SABLE_82 |\n\nAFTER_64\n"
+                );
+                let mut doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let Some(VisualBlockEditor::Table { cells }) = blocks.iter().find_map(|block| {
+                    block
+                        .editor
+                        .as_ref()
+                        .filter(|editor| matches!(editor, VisualBlockEditor::Table { .. }))
+                }) else {
+                    panic!("expected editable GFM table for {source:?}");
+                };
+                assert_eq!(cells.len(), 4, "unexpected cell for {source:?}");
+                let target = &cells[3].field.source_range;
+                assert_eq!(&source[target.clone()], "SABLE_82");
+                let original_html = doc.render_html_fragment();
+                assert!(original_html.contains("SABLE_82"));
+                let edit = doc
+                    .direct_visual_block_edit(target.clone(), "CEDAR_93")
+                    .unwrap();
+                assert_eq!(edit.range, *target);
+                assert!(doc.validate_visual_block_edit(&edit));
+                doc.replace_range(edit.range, &edit.replacement);
+                assert_eq!(doc.text(), source.replace("SABLE_82", "CEDAR_93"));
+
+                let formatted = doc.edit_table_at(target.start, TableEdit::Format).unwrap();
+                assert_eq!((formatted.row, formatted.column), (1, 1));
+                assert_eq!(&doc.text()[formatted.selected_range], "CEDAR_93");
+                assert!(doc.text().contains(&cell), "source escapes changed");
+                assert_eq!(
+                    doc.render_html_fragment(),
+                    original_html.replace("SABLE_82", "CEDAR_93")
+                );
+            }
+        }
     }
 
     #[test]

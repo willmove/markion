@@ -1394,7 +1394,7 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 
 ### Requirement: GFM table preview blocks carry parser event source ranges
 
-The parser SHALL assign each `PreviewBlock::Table` the source range of the pulldown-cmark table event that produced that block’s rows. The range SHALL be non-empty and SHALL cover the authored GFM table bytes. The parser SHALL NOT assign an empty `0..0` placeholder range, and SHALL NOT zip table cell content to source ranges produced by a separate document scan that can skip tables the CommonMark+GFM parser emits. After derivation, GFM tables SHALL appear in the preview block stream in document (source) order. Nested-in-list table ordering MAY still be restored by sorting blocks on those event source-range starts; that sort SHALL NOT be used to repair invented placeholder ranges. Table cell-editing lookup MAY continue to use a dedicated scan of two-or-more-column tables and is not required to be 1:1 with preview table blocks.
+The parser SHALL assign each `PreviewBlock::Table` the source range of the pulldown-cmark table event that produced that block’s rows. The range SHALL be non-empty and SHALL cover the authored GFM table bytes. The parser SHALL NOT assign an empty `0..0` placeholder range, and SHALL NOT zip table cell content to source ranges produced by a separate document scan that can skip tables the CommonMark+GFM parser emits. After derivation, GFM tables SHALL appear in the preview block stream in document (source) order. Nested-in-list table ordering MAY still be restored by sorting blocks on those event source-range starts. That sort SHALL NOT be used to repair invented placeholder ranges. Editing lookup SHALL resolve against the parser-owned table span. Cell mapping, caret-based column selection, and table replacements SHALL agree on the authored GFM delimiters.
 
 When an HTML comment whose payload is exactly a Markion column-width comment (`<!-- markion-cols:… -->`) immediately precedes a GFM table at the same block nesting, derivation SHALL extend that table’s source range to include the comment and SHALL NOT emit the comment as a separate Html preview block. Cell-editing lookup SHALL continue to use the pipe-table slice inside that range.
 
@@ -1428,6 +1428,18 @@ When an HTML comment whose payload is exactly a Markion column-width comment (`<
 - **WHEN** the document contains `<!-- markion-cols:30,70 -->` immediately followed by a two-column GFM table
 - **THEN** preview derivation emits one Table block whose source range includes the comment and the table
 - **AND** no Html preview block is emitted for that comment
+
+#### Scenario: Table formatting preserves adjacent prose
+
+- **WHEN** Format Table acts on a GFM table that immediately follows a separate paragraph containing a pipe
+- **THEN** only the parser-owned table bytes can change
+- **AND** the authored header, neighboring paragraph, and their ordering are preserved
+
+#### Scenario: An escaped pipe stays in its authored cell
+
+- **WHEN** a GFM cell contains a pipe escaped by one or more consecutive backslashes
+- **THEN** direct editing and caret-based column selection locate the same cells that the table displays
+- **AND** Format Table preserves the authored escape bytes, alignment, and logical columns
 
 ### Requirement: CRLF HTML events coalesce into one preview block
 
