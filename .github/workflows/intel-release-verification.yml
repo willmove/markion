@@ -1,4 +1,4 @@
-name: Native candidate installation verification
+name: Windows candidate installation verification
 on:
   push:
     branches: [codex/macos-intel-verification]
@@ -8,27 +8,57 @@ permissions:
   actions: read
   contents: read
 
+
 jobs:
-  verify:
-    runs-on: macos-latest
+  windows-install:
+    runs-on: windows-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Download v0.6.2 Apple Silicon DMG
+      - name: Download candidate Windows installers
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: '44308180701'
-          name: markion-macos-arm64
+          run-id: '44339741078'
+          name: markion-windows-x86_64
           path: signed
-      - name: Verify and launch the Apple Silicon package
-        shell: bash
+      - name: Smoke-test native and portable packages
+        shell: pwsh
         run: |
-          set -euo pipefail
-          bash scripts/smoke-test-macos-release.sh signed/Markion_0.6.2_aarch64.dmg arm64 "$RUNNER_TEMP/smoke"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: macos-launch-arm64
-          path: ${{ runner.temp }}/smoke
-          if-no-files-found: ignore
+          $ErrorActionPreference = 'Stop'
+          $native = Join-Path $env:RUNNER_TEMP 'markion-qa-nsis'
+          $portable = Join-Path $env:RUNNER_TEMP 'markion-qa-portable'
+          $fixture = Join-Path $env:RUNNER_TEMP 'markion-qa-fixtures'
+          python docs/testing/fixtures/prepare.py prepare --output $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture preparation failed' }
+
+          $installer = Get-ChildItem -Path signed -Filter '*-setup.exe' | Select-Object -First 1
+          $zip = Get-ChildItem -Path signed -Filter '*-portable.zip' | Select-Object -First 1
+          Get-FileHash -Algorithm SHA256 -Path $installer.FullName, $zip.FullName
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$native" -PassThru -Wait
+          if ($setup.ExitCode -ne 0) { throw "NSIS failed with exit code $($setup.ExitCode)" }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
+
+          $env:APPDATA = Join-Path $fixture 'profile/roaming'
+          $env:LOCALAPPDATA = Join-Path $fixture 'profile/local'
+          foreach ($location in @($native, $portable)) {
+              $binary = Get-ChildItem -Path $location -Recurse -Filter 'markion.exe' | Select-Object -First 1
+              if (!$binary) { throw "Installed binary missing under $location" }
+              $app = Start-Process -FilePath $binary.FullName -WorkingDirectory $binary.DirectoryName -PassThru
+              try {
+                  $deadline = (Get-Date).AddSeconds(30)
+                  do {
+                      Start-Sleep -Milliseconds 600
+                      $app.Refresh()
+                  } until ($app.HasExited -or $app.MainWindowHandle -ne 0 -or (Get-Date) -ge $deadline)
+                  if ($app.HasExited -or $app.MainWindowHandle -eq 0) {
+                      throw "No running Markion window at $($binary.FullName)"
+                  }
+                  Write-Host "Native Windows window opened at $($binary.FullName): $($app.MainWindowTitle)"
+              } finally {
+                  if (!$app.HasExited) {
+                      $null = $app.CloseMainWindow()
+                      if (!$app.WaitForExit(5000)) { Stop-Process -Id $app.Id }
+                  }
+              }
+          }
