@@ -6,14 +6,13 @@ Developer ID signing plus Apple notarization is the only supported way for a dow
 
 ## What Changes
 
-- The release workflow gains an optional **Developer ID** signing mode for both macOS jobs. When the repository secrets `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE` (base64 `.p12`) and `APPLE_CERTIFICATE_PASSWORD` are set, `packager.toml`'s ad-hoc `signing-identity = "-"` is overridden at build time. cargo-packager then signs the `.app` with the hardened runtime and a secure timestamp, and signs the DMG.
-- On `v*` tag builds and manual `workflow_dispatch` builds, when App Store Connect API key secrets (`APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_PRIVATE_KEY`) are also set, the `.app` is notarized and stapled by cargo-packager. The DMG is then notarized and stapled by a new workflow step, so both the disk image and the app carry offline-verifiable tickets.
+- Public `v*` tags and manual signing rehearsals require the complete Apple credential set. A missing credential blocks publication. Pushes to the main branch and pull requests continue to produce ad-hoc CI packages without accessing Apple credentials.
+- Verification mounts the final DMG read-only and checks the signed, stapled app inside it, including its architecture. Maintainers can run the same check against the public download.
+- cargo-packager uses the Developer ID to sign the app with the hardened runtime and a secure timestamp, then uses the App Store Connect API key to notarize and staple the app. The workflow signs, notarizes and staples the disk image too.
 - The macOS signature gate becomes mode-aware:
   - Ad-hoc builds must still pass `codesign --verify --deep --strict` with `Signature=adhoc`.
-  - Developer ID builds must show a `Developer ID Application` authority, a team identifier and the hardened runtime.
-  - Notarized builds must pass `stapler validate` for the `.app` and the DMG, and `spctl` must report `source=Notarized Developer ID`.
-- Partial secret sets fail the job instead of silently degrading. A tag build that falls back to ad-hoc emits a workflow warning that the macOS DMGs will be blocked after a browser download.
-- Without any Apple secrets, behavior is unchanged: the free ad-hoc seal, the same artifacts and the same names. Fork pull requests, which get no secrets, keep working.
+  - Developer ID builds must show a `Developer ID Application` authority, a team identifier, the hardened runtime and a timestamp on the embedded app.
+  - Both the app and DMG must pass `stapler validate`. With Gatekeeper enabled, `spctl` must report `source=Notarized Developer ID`.
 - Documentation:
   - A new maintainer guide, `docs/macos-signing.md`, covers enrolling, creating the certificate and API key, setting the secrets, and verifying the result.
   - `docs/release-process.md` covers notarization verification and the release-note wording.
@@ -29,11 +28,11 @@ Non-goals: Mac App Store distribution, a universal binary, in-app macOS self-upd
 
 ### Modified Capabilities
 
-- `release-packaging`: macOS installers move from "always ad-hoc" to "Developer ID signed and notarized when credentials are configured, ad-hoc otherwise". The macOS packaging gate verifies the configured mode. The documentation requirement drops the claim that ad-hoc builds are always overridable through Open Anyway. This delta builds on the requirement as renamed by `improve-macos-distribution`, which must be archived first.
+- `release-packaging`: public macOS installers require Developer ID signing and notarization. Development builds retain ad-hoc signing. The macOS packaging gate verifies the final disk image and embedded app. This delta builds on the requirement as renamed by `improve-macos-distribution`, which must be archived first.
 
 ## Impact
 
 - Code: `.github/workflows/release.yml` (macOS signing configuration, DMG notarization, mode-aware signature verification), new `scripts/configure-macos-signing.sh` and `scripts/notarize-macos-dmg.sh`. `packager.toml` changes only in comments, and the committed identity stays `"-"`.
 - Docs: new `docs/macos-signing.md`; `docs/release-process.md`, `docs/faq.md`, `README.md` (English and its Chinese section), `README.zh-CN.md`.
-- Secrets: new optional repository secrets `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_PRIVATE_KEY`. None appear in the repository or logs.
+- Secrets: `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_PRIVATE_KEY` are required for public tags and signing rehearsals. Their values stay in GitHub Actions Secrets and the signing runner.
 - Invariants: no application code changes. The cached-per-version Markdown state, the editor and the gpui-free member crates are untouched. Windows, Linux, the updater signing flow and the OSS mirror (byte-for-byte copies of the release assets) are unchanged.

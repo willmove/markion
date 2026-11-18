@@ -32,11 +32,11 @@ This creates `markion-updater.key` and `markion-updater.key.pub`. Never commit e
 
 The public key is embedded only in tagged Windows and Linux builds. The private key and password are consumed only by the tag-only `prepare-update` job and must never appear in repository files, logs, or workflow artifacts. The existing OSS secrets are also required because `update.json` directs Windows and Linux clients to the installers under `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`.
 
-Minisign authenticates the updater payload; it is not Windows Authenticode signing or Linux package-manager signing. SmartScreen can therefore still warn when launching Markion or its installer. macOS bundles are sealed with a free ad-hoc code signature by default (`[macos] signing-identity = "-"` in `packager.toml`), which current macOS still blocks after a browser download.
+Minisign authenticates the updater payload. Windows SmartScreen can still warn when launching Markion or its installer.
 
 ### macOS Developer ID signing and notarization
 
-When the `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_PRIVATE_KEY` secrets are configured, tag builds sign both macOS bundles with the Developer ID (hardened runtime), notarize and staple the `.app` and the DMG, and fail rather than publish if Apple rejects a submission. [macos-signing.md](macos-signing.md) covers provisioning, verification, and rotation. Without those secrets the tag build still succeeds with ad-hoc DMGs but emits a `This tagged release's macOS DMGs are NOT notarized` warning; partial secret sets fail the macOS jobs.
+Tag builds and manual signing rehearsals require `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_PRIVATE_KEY` in GitHub Actions Secrets. Both macOS jobs sign with Developer ID Application and staple Apple notarization tickets to the app and the DMG. Missing secrets, rejected notarization or failed signature verification block publication. Branch and pull request builds use the committed ad-hoc identity. [Signing setup and verification](macos-signing.md).
 
 Treat rotation as a planned migration, not a secret replacement. The current client trusts one key and the workflow verifies that the embedded public key matches the signing private key, so changing both keys in one release would strand existing clients. Before rotating, implement and test a bridge client that trusts both old and new public keys, publish that bridge while signing with the old key, and wait for it to be distributed. Only then sign subsequent releases with the new key, retaining the old key for a documented transition period.
 
@@ -172,7 +172,7 @@ All of these jobs must succeed:
 
 - Build and package on `windows-latest`.
 - Build and package on `macos-latest` (arm64 native).
-- Build and package on `macos-latest` (cross-compiled `x86_64-apple-darwin`). Both macOS jobs verify the signature their run selected — ad-hoc, or Developer ID with stapled notarization tickets on the `.app` and DMG — and log `macOS signing mode: <mode>; notarize: <true|false>`.
+- Build and package on `macos-latest` (cross-compiled `x86_64-apple-darwin`). Both tag jobs log `macOS signing mode: developer-id; notarize: true` and verify the Developer ID signatures and stapled notarization tickets on the final DMG and its mounted app before upload.
 - Build and package on `ubuntu-22.04` (the AppImage includes the lavapipe software Vulkan fallback from `scripts/build-lavapipe.sh`, bundled before the permission fix).
 - AppImage smoke test (no GPU, no Vulkan driver): starts the AppImage like the AppImage catalog test (Xvfb, icewm, `firejail --appimage`) and requires a non-blank window. `release` and `mirror-oss` wait for it; its screenshot is the `appimage-smoke-test` artifact.
 - Sign the updater installers (Windows NSIS + Linux AppImage) and build metadata.
@@ -207,7 +207,7 @@ For future releases, default to a concise user-facing summary:
 - Start each language with one sentence, followed by normally **3–5 combined highlights/fixes**. Use fewer for small patches; group changes by user outcome and omit duplicate points.
 - Keep compatibility, downloads and verification to brief lines. Retain English-first/Chinese equivalence and the full tag-to-tag comparison link.
 - Put implementation history, benchmark tables, detailed test logs and release retries in linked project-status or verification documents. Review the complete diff, including direct commits, without reproducing the development log.
-- Keep migration and actual signing/notarization status explicit. For a non-notarized macOS DMG, retain the essential `xattr -cr /Applications/Markion.app` or `curl -LO` instruction and link further installation guidance. State "no migration required" only after checking persisted formats.
+- Keep migration and actual signing status explicit. For macOS, state that both DMGs are Developer ID signed and notarized, and that users drag Markion to Applications and open it normally. State "no migration required" only after checking persisted formats.
 - Summarize verified results and identify unverified/skipped scope honestly. Add detail only when needed for safe upgrading or explicitly requested by the maintainer; essential upgrade and first-launch instructions take precedence over brevity.
 
 Use this compact template, replacing placeholders with the release's actual changes, packages and evidence:
@@ -271,6 +271,7 @@ Confirm that:
 - The assets include `markion_X.Y.Z_x64-setup.exe`, `markion_X.Y.Z_x64-portable.zip`, `Markion_X.Y.Z_aarch64.dmg`, `Markion_X.Y.Z_x64.dmg`, `markion_X.Y.Z_amd64.deb`, `markion_X.Y.Z_x86_64.rpm`, and `markion_X.Y.Z_x86_64.AppImage`.
 - The assets also include `markion_X.Y.Z_x64-setup.exe.sig`, `markion_X.Y.Z_x86_64.AppImage.sig`, and `update.json`; the Release's `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"` and the GitHub asset URL `https://github.com/willmove/markion/releases/download/vX.Y.Z/markion_X.Y.Z_x64-setup.exe` as the installer URL, and a `linux-x86_64` entry with `format: "appimage"`, its full signature, and the GitHub AppImage asset URL as the installer URL.
 - The tag workflow succeeded on all native build jobs (Windows, macOS arm64, macOS x86_64 cross, Linux) and in the publish job.
+- Both public macOS DMGs pass `scripts/verify-macos-release.sh` with the matching architecture. Record a browser download, drag-to-Applications install and first launch on a Mac with Gatekeeper enabled in the native acceptance report.
 - The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the seven packages, both installer `.sig` files, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`, the mirrored `update.json` names the OSS URL for both the NSIS installer and the AppImage, and both manifests carry identical signature content.
 - From a clean Windows x86_64 installation of the previous version, the updater accepts the signature, starts the passive NSIS installer, and refuses to begin while any document is dirty. Manual download remains available when the signed path fails.
 - From a previous-version Linux AppImage (launch it so the AppImage runtime is active), the updater accepts the signature, replaces the `.AppImage` in place, relaunches the new version, and also refuses to begin while any document is dirty. A `.deb`-installed Linux build keeps the browser-download flow.

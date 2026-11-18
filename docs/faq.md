@@ -16,7 +16,7 @@ Markion is a native desktop Markdown editor built in Rust with the [GPUI](https:
 | macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Apple Silicon and Intel Macs each get a native build; **min macOS 11.0**. A universal binary is a future task. |
 | Linux | `x86_64-unknown-linux-gnu` | Built on Ubuntu 22.04; ships as `.deb` and `.AppImage` |
 
-**Windows releases are unsigned; macOS releases are Developer ID signed and notarized once the maintainer's Apple credentials are configured in CI, and otherwise carry only a free ad-hoc signature.** Each release's notes say whether its DMGs are notarized. A notarized DMG opens after the standard "downloaded from the Internet" confirmation; a non-notarized build is blocked by Gatekeeper after a browser download, and SmartScreen warns on Windows — [Troubleshooting](#troubleshooting) has the exact steps and Terminal alternatives. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen; AppImage-launched Linux installs update through the same signed flow (see [Updating Markion](#updating-markion)). macOS and Linux `.deb`/`.rpm` update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
+Windows releases may trigger SmartScreen. For macOS, check the release notes for the DMG signing status. For a Developer ID signed and notarized DMG, drag Markion to Applications and open it normally. [Troubleshooting](#troubleshooting) covers older ad-hoc releases such as v0.6.1. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen; AppImage-launched Linux installs update through the same signed flow (see [Updating Markion](#updating-markion)). macOS and Linux `.deb`/`.rpm` update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
 
 ## Updating Markion
 
@@ -221,13 +221,13 @@ Markion caches derived document state (preview blocks, outline, statistics, synt
 
 ## Troubleshooting
 
-- **macOS says Markion "is damaged and can't be opened" (or "can't be opened because Apple cannot check it for malicious software").** This is Gatekeeper refusing a browser-downloaded app that Apple has not notarized — the file is intact (the `sha256sums.txt` attached to each release will confirm it). Every release up to v0.4.9 is in this state: those DMGs carry a valid ad-hoc signature (v0.4.7 and earlier were not even sealed), but current macOS on Apple silicon rejects quarantined ad-hoc apps outright, and the *System Settings → Privacy & Security → Open Anyway* button appears only on some macOS versions. Notarized releases do not need any of this. For a non-notarized build, clear the quarantine flag macOS puts on downloaded files:
+- **macOS says Markion "is damaged and can't be opened".** Gatekeeper may reject the ad-hoc DMGs from v0.6.1 after a browser download. Check the release notes and SHA-256 digest on GitHub to verify your download. For a trusted copy of an older ad-hoc release, you can clear the quarantine attribute after installation:
 
   ```bash
   xattr -cr /Applications/Markion.app
   ```
 
-  The same command works for any release version; repeat it after each browser-downloaded update of a non-notarized build and prefix `sudo` if your install location requires it. Downloading with `curl -LO <dmg-url>` avoids the prompt entirely, because curl does not set the quarantine flag.
+  Repeat this only after browser-downloaded updates to older ad-hoc builds. Downloading with `curl -LO <dmg-url>` avoids the prompt entirely, because curl does not set the quarantine flag.
 - **Windows SmartScreen warns before running the installer.** Click **More info → Run anyway**. Releases are unsigned.
 - **PDF export produced a tiny, plain-looking file.** The built-in PDF writer (a text snapshot) was used because pandoc or its PDF engine was not installed. Install [pandoc](https://pandoc.org/) and a LaTeX engine (e.g. `xelatex`), or set `[export] pdf_engine = "pdfroff"` and install groff, then re-export — the status bar will say "pandoc engine" when the richer path succeeds.
 - **A custom theme is not appearing in Preferences.** Confirm the `.toml` file is in the themes directory (see [Configuration locations](#configuration-locations)), that its `name` field is set and non-empty, and that no built-in theme has the same name (built-ins take precedence).

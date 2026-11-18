@@ -28,10 +28,8 @@
 #
 # NOTE on signing: Windows builds have no Authenticode certificate, so
 # SmartScreen warns. macOS bundles are ad-hoc sealed by default (see [macos]
-# below); the release workflow switches them to Developer ID signing plus
-# Apple notarization when the Apple secrets are configured
-# (docs/macos-signing.md). Only a notarized app opens after a browser
-# download — current macOS rejects a quarantined ad-hoc bundle as "damaged".
+# below) for local and development builds. The release workflow requires
+# Developer ID signing and Apple notarization (docs/macos-signing.md).
 # The Windows NSIS installer and the Linux AppImage are separately signed with
 # minisign for the in-app updater; that authenticates update downloads but is
 # not Authenticode or package-manager signing.
@@ -112,7 +110,7 @@ formats = ["nsis", "app", "dmg", "deb", "appimage"]
 # NOT Developer ID signing or notarization: Gatekeeper still rejects the
 # quarantined app after a browser download. Keep this line exactly as is —
 # scripts/configure-macos-signing.sh rewrites it to the Developer ID identity
-# in CI when the Apple secrets exist, and cargo-packager then signs with the
+# for release jobs, and cargo-packager then signs with the
 # hardened runtime and notarizes. CI verifies the selected signature with
 # `codesign --verify --deep --strict` (plus stapler/spctl when notarized).
 signing-identity = "-"

@@ -26,15 +26,13 @@ The only path that meets "download, open, run" is **Developer ID Application sig
 
 ## Mode selection (`scripts/configure-macos-signing.sh`)
 
-The script runs in both macOS matrix jobs before packaging and selects one of three modes:
+The workflow calls the script before packaging both architectures on version tags and manual signing rehearsals:
 
 | Developer ID secrets | API key secrets | Ref | Mode |
 | --- | --- | --- | --- |
-| none | none | any | `adhoc` (today's behavior) |
-| all 3 | any | branch / PR | `developer-id`, not notarized (no notary round-trip on every push) |
-| all 3 | all 3 | `v*` tag or `workflow_dispatch` | `developer-id` + notarize |
-| some, not all | — | any | **fail** (misconfiguration) |
-| none | some or all | any | **fail** (notarization needs Developer ID) |
+| unused | unused | branch / PR | ad-hoc |
+| all 3 | all 3 | `v*` tag or manual build | Developer ID and notarization |
+| any missing | any missing | `v*` tag or manual build | fail before packaging |
 
 In `developer-id` mode the script performs the following steps:
 
@@ -44,7 +42,7 @@ In `developer-id` mode the script performs the following steps:
 
 When notarization is enabled it writes the `.p8` key to `$RUNNER_TEMP/private_keys/AuthKey_<id>.p8` with mode 0600 and exports `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_KEY_PATH`. Only the API-key method is supported: it is Apple's recommended CI credential, it is not tied to a person's Apple ID, and it avoids app-specific passwords. Values never reach the log; GitHub masks secrets, and the script prints only the mode.
 
-The `mode` and `notarize` step outputs drive the later steps. A `v*` tag build that does not notarize emits a `::warning::` saying its macOS DMGs will be blocked after a browser download.
+The workflow uses the same publish/preflight condition for setting up signing, notarizing the DMG, and verifying the shipping artifact. The unsigned development path verifies the staged app's ad-hoc seal.
 
 ## DMG notarization (`scripts/notarize-macos-dmg.sh`)
 
@@ -58,20 +56,19 @@ The `.app` inside the DMG is already stapled, so Gatekeeper can verify it offlin
 
 ## Verification gate (mode-aware)
 
-The gate always requires `codesign --verify --deep --strict dist/Markion.app` to pass. It then reads `codesign -dvv` and applies the checks for the selected mode:
+The gate requires `codesign --verify --deep --strict` for the app and checks the expected signature type:
 
-- `adhoc`: requires `Signature=adhoc` (unchanged).
-- `developer-id`:
+- Ad-hoc development mode requires `Signature=adhoc` on the staged app.
+- The release verifier checks the app mounted from the DMG read-only:
   - requires an `Authority=Developer ID Application:` line;
   - requires a `TeamIdentifier` that is not `not set`;
-  - requires `runtime` in the CodeDirectory flags;
-  - requires `codesign --verify --strict` on the DMG.
-- `notarize`:
+  - requires `runtime` in the CodeDirectory flags, a secure timestamp and the expected executable architecture;
+  - requires a valid Developer ID signature on the DMG;
   - requires `xcrun stapler validate` to pass on the `.app` and the DMG;
   - requires `spctl --assess --type execute -vv` on the `.app` to report `source=Notarized Developer ID`;
   - requires `spctl --assess --type open --context context:primary-signature -vv` on the DMG to report the same.
 
-A run that should have shipped a notarized DMG but did not therefore fails before any artifact upload.
+The release verifier can also run directly against the public asset. A failed check stops the build before any artifact upload.
 
 ## Compatibility and risk
 
