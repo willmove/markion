@@ -4,11 +4,11 @@
 Govern the project's reusable branding assets — the canonical SVG logo and the platform icon derivatives (.ico/.icns/.png) consumed by packaging, the Windows executable resource, and documentation — so every consumer draws from a single source rather than ad-hoc copies.
 ## Requirements
 ### Requirement: Reusable SVG logo asset
-Markion SHALL provide `assets/markion-logo.svg` as a self-contained, valid SVG with an explicit `viewBox`; it SHALL be the canonical source for documentation, packaging, and generated desktop icon assets.
+Markion SHALL provide `assets/markion-logo.svg` as a self-contained, valid SVG with an explicit `viewBox`. It SHALL be the canonical source for documentation, packaging, and generated desktop icon assets. The artwork SHALL display the Page Fold M, a light capital M with inward-curving page edges and a clipped upper-right corner on a deep teal rounded square. The area outside the square SHALL be transparent.
 
 #### Scenario: Logo is available as vector art
 - **WHEN** project branding needs a scalable icon
-- **THEN** `assets/markion-logo.svg` provides the logo as valid SVG with an explicit `viewBox`
+- **THEN** `assets/markion-logo.svg` provides the Page Fold M as valid SVG vector artwork with an explicit `viewBox`
 
 #### Scenario: Canonical artwork is used for generated assets
 - **WHEN** the project icon-generation script runs

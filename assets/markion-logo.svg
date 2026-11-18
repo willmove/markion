@@ -1,1 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc"><title id="title">Markion logo</title><desc id="desc">A minimal gradient M mark with a coordinated pen nib beneath.</desc><defs><linearGradient id="m" x1="26" y1="92" x2="102" y2="36" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0877d8"/><stop offset=".48" stop-color="#16b8d1"/><stop offset="1" stop-color="#62e15f"/></linearGradient><mask id="nib-cutout"><rect width="128" height="128" fill="#fff"/><path d="M63.8 80.9 63.8 94.3" stroke="#000" stroke-width="2" stroke-linecap="round"/><circle cx="63.8" cy="81.3" r="2.5" fill="#000"/></mask></defs><path d="M28 92V54c0-12 15-18 23-8l13 17 13-17c8-10 23-4 23 8v38" fill="none" stroke="url(#m)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/><path d="M52 75Q60 95 64 104 68 95 76 75Z" fill="url(#m)" mask="url(#nib-cutout)"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Markion logo</title>
+  <desc id="desc">An off-white M shaped like open pages on a deep teal rounded square.</desc>
+  <rect x="8" y="8" width="112" height="112" rx="21" fill="#0a605c"/>
+  <path fill="#fcfdfc" d="
+    M27.5 35 H37.5
+    C44.5 35 49 42.5 64 60.25
+    C79 42.5 83.5 35 90.5 35
+    H95.5 L100.5 40 V94.25 H69.75
+    C69.75 88.875 80.25 85.25 88.25 85.25
+    V52.25
+    C78.25 58 70.5 66.75 64 78.25
+    C57.5 66.75 49.75 58 39.75 52.25
+    V85.25
+    C47.75 85.25 58.25 88.875 58.25 94.25
+    H27.5 Z"/>
+</svg>
