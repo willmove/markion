@@ -1,4 +1,4 @@
-name: Windows candidate installation verification
+name: AppImage candidate installation verification
 on:
   push:
     branches: [codex/macos-intel-verification]
@@ -9,56 +9,75 @@ permissions:
   contents: read
 
 
+
 jobs:
-  windows-install:
-    runs-on: windows-latest
-    timeout-minutes: 15
+  appimage-smoke:
+    name: AppImage smoke test (no GPU, no Vulkan driver)
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Download candidate Windows installers
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux packages
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: '44339741078'
-          name: markion-windows-x86_64
-          path: signed
-      - name: Smoke-test native and portable packages
-        shell: pwsh
+          name: markion-linux-x86_64
+          path: dist
+
+      - name: Install the catalog test environment
         run: |
-          $ErrorActionPreference = 'Stop'
-          $native = Join-Path $env:RUNNER_TEMP 'markion-qa-nsis'
-          $portable = Join-Path $env:RUNNER_TEMP 'markion-qa-portable'
-          $fixture = Join-Path $env:RUNNER_TEMP 'markion-qa-fixtures'
-          python docs/testing/fixtures/prepare.py prepare --output $fixture
-          if ($LASTEXITCODE -ne 0) { throw 'Fixture preparation failed' }
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb \
+            icewm \
+            x11-utils \
+            xdotool \
+            imagemagick \
+            libfuse2 \
+            fuse \
+            libgl1-mesa-dri \
+            libosmesa6 \
+            mesa-utils \
+            libvulkan1
+          # Same firejail build and install steps as the catalog's code/worker.sh.
+          mkdir -p "$RUNNER_TEMP/firejail" && cd "$RUNNER_TEMP/firejail"
+          wget -q https://github.com/AppImage/appimage.github.io/releases/download/deps/alpine-firejail-git20230825.tar.gz
+          musl="$(wget -q https://dl-cdn.alpinelinux.org/alpine/v3.13/main/x86_64/ -O - | grep -o 'musl-1[^"]*\.apk' | head -n 1)"
+          wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.13/main/x86_64/$musl"
+          tar xf alpine-firejail-git20230825.tar.gz
+          mkdir -p firejail
+          tar xf musl-*.apk -C ./firejail/ 2>/dev/null || true
+          tar xf firejail-0*.apk -C ./firejail/ 2>/dev/null || true
+          sudo cp -Rf ./firejail/etc/* /etc/
+          sudo cp -Rf ./firejail/lib/* /lib/
+          sudo cp -Rf ./firejail/usr/* /usr/
+          sudo chown root:root /usr/bin/firejail
+          sudo chmod u+s /usr/bin/firejail
+          firejail --version | head -n 1
 
-          $installer = Get-ChildItem -Path signed -Filter '*-setup.exe' | Select-Object -First 1
-          $zip = Get-ChildItem -Path signed -Filter '*-portable.zip' | Select-Object -First 1
-          Get-FileHash -Algorithm SHA256 -Path $installer.FullName, $zip.FullName
-          $setup = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$native" -PassThru -Wait
-          if ($setup.ExitCode -ne 0) { throw "NSIS failed with exit code $($setup.ExitCode)" }
-          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
+      # Hosted runners may ship Mesa's Vulkan drivers; move their manifests
+      # away so the test reproduces a machine without any Vulkan driver.
+      - name: Remove system Vulkan drivers
+        run: |
+          for dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d /usr/local/share/vulkan/icd.d; do
+            if [ -d "$dir" ]; then
+              sudo mkdir -p "$RUNNER_TEMP/disabled-icd$dir"
+              sudo find "$dir" -name '*.json' -exec mv -t "$RUNNER_TEMP/disabled-icd$dir" {} +
+            fi
+          done
 
-          $env:APPDATA = Join-Path $fixture 'profile/roaming'
-          $env:LOCALAPPDATA = Join-Path $fixture 'profile/local'
-          foreach ($location in @($native, $portable)) {
-              $binary = Get-ChildItem -Path $location -Recurse -Filter 'markion.exe' | Select-Object -First 1
-              if (!$binary) { throw "Installed binary missing under $location" }
-              $app = Start-Process -FilePath $binary.FullName -WorkingDirectory $binary.DirectoryName -PassThru
-              try {
-                  $deadline = (Get-Date).AddSeconds(30)
-                  do {
-                      Start-Sleep -Milliseconds 600
-                      $app.Refresh()
-                  } until ($app.HasExited -or $app.MainWindowHandle -ne 0 -or (Get-Date) -ge $deadline)
-                  if ($app.HasExited -or $app.MainWindowHandle -eq 0) {
-                      throw "No running Markion window at $($binary.FullName)"
-                  }
-                  Write-Host "Native Windows window opened at $($binary.FullName): $($app.MainWindowTitle)"
-              } finally {
-                  if (!$app.HasExited) {
-                      $null = $app.CloseMainWindow()
-                      if (!$app.WaitForExit(5000)) { Stop-Process -Id $app.Id }
-                  }
-              }
-          }
+      - name: Start the AppImage under firejail and wait for its window
+        env:
+          MARKION_SMOKE_REQUIRE_NO_VULKAN_DRIVER: '1'
+        run: bash scripts/smoke-test-appimage.sh dist/*.AppImage "$RUNNER_TEMP/appimage-smoke"
+
+      - name: Upload smoke test screenshot and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-smoke-test
+          path: ${{ runner.temp }}/appimage-smoke
+          if-no-files-found: ignore
+          retention-days: 14
