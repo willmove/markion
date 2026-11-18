@@ -81,3 +81,56 @@ jobs:
           name: markion-intel-launch
           path: ${{ runner.temp }}/markion-intel.png
           if-no-files-found: ignore
+
+  windows-install:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download candidate Windows installers
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: '44283630532'
+          name: markion-windows-x86_64
+          path: signed
+      - name: Smoke-test native and portable packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $native = Join-Path $env:RUNNER_TEMP 'markion-qa-nsis'
+          $portable = Join-Path $env:RUNNER_TEMP 'markion-qa-portable'
+          $fixture = Join-Path $env:RUNNER_TEMP 'markion-qa-fixtures'
+          python docs/testing/fixtures/prepare.py prepare --output $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture preparation failed' }
+
+          $installer = Get-ChildItem -Path signed -Filter '*-setup.exe' | Select-Object -First 1
+          $zip = Get-ChildItem -Path signed -Filter '*-portable.zip' | Select-Object -First 1
+          Get-FileHash -Algorithm SHA256 -Path $installer.FullName, $zip.FullName
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$native" -PassThru -Wait
+          if ($setup.ExitCode -ne 0) { throw "NSIS failed with exit code $($setup.ExitCode)" }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
+
+          $env:APPDATA = Join-Path $fixture 'profile/windows/APPDATA'
+          $env:LOCALAPPDATA = Join-Path $fixture 'profile/windows/LOCALAPPDATA'
+          foreach ($location in @($native, $portable)) {
+              $binary = Get-ChildItem -Path $location -Recurse -Filter 'markion.exe' | Select-Object -First 1
+              if (!$binary) { throw "Installed binary missing under $location" }
+              $app = Start-Process -FilePath $binary.FullName -WorkingDirectory $binary.DirectoryName -PassThru
+              try {
+                  $deadline = (Get-Date).AddSeconds(30)
+                  do {
+                      Start-Sleep -Milliseconds 600
+                      $app.Refresh()
+                  } until ($app.HasExited -or $app.MainWindowHandle -ne 0 -or (Get-Date) -ge $deadline)
+                  if ($app.HasExited -or $app.MainWindowHandle -eq 0) {
+                      throw "No running Markion window at $($binary.FullName)"
+                  }
+                  Write-Host "Native Windows window opened at $($binary.FullName): $($app.MainWindowTitle)"
+              } finally {
+                  if (!$app.HasExited) {
+                      $null = $app.CloseMainWindow()
+                      if (!$app.WaitForExit(5000)) { Stop-Process -Id $app.Id }
+                  }
+              }
+          }
