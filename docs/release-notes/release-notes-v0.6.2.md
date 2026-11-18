@@ -14,7 +14,7 @@ Documents and settings carry over automatically. On macOS, drag Markion into App
 
 Download the attached Windows x64 installer or portable ZIP, macOS Apple Silicon or Intel DMG, or Linux x86_64 AppImage, DEB or RPM.
 
-The Windows workspace suite passed. Both published macOS DMGs passed signature, notarization, and installed-app launch checks on their matching CPU architectures. The maintainer’s v0.6.2 exception covers unrun manual checks for installed-package interaction and DPI, real IME, browser clipboard and Word/WeChat interoperability, and signed upgrades from the previous Windows/AppImage release. [Verification record](https://github.com/willmove/markion/blob/v0.6.2/docs/verification/release-v0.6.2-preflight.md).
+The Windows workspace suite passed. Both published macOS DMGs passed signature, notarization, and installed-app launch checks on their matching CPU architectures. The maintainer’s v0.6.2 exception covers unrun manual checks for installed-package interaction and DPI, real IME, browser clipboard and Word/WeChat interoperability (including DOCX producer qualification), and signed upgrades from the previous Windows/AppImage release, including rollback and extended runs. [Verification record](https://github.com/willmove/markion/blob/v0.6.2/docs/verification/release-v0.6.2-preflight.md).
 
 See the [full comparison](https://github.com/willmove/markion/compare/v0.6.1...v0.6.2).
 
@@ -36,6 +36,6 @@ See the [full comparison](https://github.com/willmove/markion/compare/v0.6.1...v
 
 从附件下载 Windows x64 安装程序或便携 ZIP、macOS Apple Silicon 或 Intel DMG，或 Linux x86_64 的 AppImage、DEB 或 RPM。
 
-Windows 工作区测试已通过。两个 macOS DMG 均在对应架构上通过签名、公证与安装启动检查。维护者为 v0.6.2 授权一次性例外，未执行的人工项目包括完整安装包交互与 DPI、真实输入法、浏览器剪贴板及 Word／微信互操作，还有从上一版 Windows／AppImage 执行签名升级。[验证记录](https://github.com/willmove/markion/blob/v0.6.2/docs/verification/release-v0.6.2-preflight.md)。
+Windows 工作区测试已通过。两个 macOS DMG 均在对应架构上通过签名、公证与安装启动检查。维护者为 v0.6.2 授权一次性例外，未执行的人工项目包括完整安装包交互与 DPI、真实输入法、浏览器剪贴板及 Word／微信互操作（含 DOCX 生成端兼容性验证），以及从上一版 Windows／AppImage 执行签名升级、失败回退和长时间运行。[验证记录](https://github.com/willmove/markion/blob/v0.6.2/docs/verification/release-v0.6.2-preflight.md)。
 
 查看[完整对比](https://github.com/willmove/markion/compare/v0.6.1...v0.6.2)。
