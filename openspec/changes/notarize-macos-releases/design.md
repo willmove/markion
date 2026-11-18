@@ -70,6 +70,10 @@ The gate requires `codesign --verify --deep --strict` for the app and checks the
 
 The release verifier can also run directly against the public asset. A failed check stops the build before any artifact upload.
 
+## Installed-app launch gate
+
+Each signing rehearsal and tagged release runs a launch check with its final DMG on both Apple Silicon and Intel macOS. Each check validates the disk image and applies Gatekeeper’s distribution policy to a copy installed from that image. LaunchServices starts the installed app with isolated preferences and recovery directories. The runner checks that the Markion process owns a visible window and retains its launch log. Tagged GitHub publication and the OSS mirror both depend on the launch results.
+
 ## Compatibility and risk
 
 - The hardened runtime already ships today (flags `0x10002`), and v0.4.9 runs once its quarantine is cleared, so Developer ID signing adds no new runtime restriction. Markion has no JIT engine, no unsigned plug-in loading and no `DYLD_*` use, so it needs no entitlements file.

@@ -8,6 +8,7 @@ Developer ID signing plus Apple notarization is the only supported way for a dow
 
 - Public `v*` tags and manual signing rehearsals require the complete Apple credential set. A missing credential blocks publication. Pushes to the main branch and pull requests continue to produce ad-hoc CI packages without accessing Apple credentials.
 - Verification mounts the final DMG read-only and checks the signed, stapled app inside it, including its architecture. Maintainers can run the same check against the public download.
+- Before release publication, launch the app installed from each final signed DMG on a runner with the matching CPU architecture. Both apps must open a visible window.
 - cargo-packager uses the Developer ID to sign the app with the hardened runtime and a secure timestamp, then uses the App Store Connect API key to notarize and staple the app. The workflow signs, notarizes and staples the disk image too.
 - The macOS signature gate becomes mode-aware:
   - Ad-hoc builds must still pass `codesign --verify --deep --strict` with `Signature=adhoc`.

@@ -33,3 +33,5 @@
 - [x] 5.1 Require all Apple credentials for tags and manual signing rehearsals. Keep branch and pull request packages ad-hoc. Verify missing credentials, invalid credentials, and the full configuration path with test values.
 - [x] 5.2 Verify the final DMG and its embedded app signatures, tickets and architecture. The new verifier rejected the release's SHA-256-matched v0.6.1 Apple Silicon DMG on macOS with Gatekeeper enabled. The existing app seal passed verification, but Gatekeeper rejected it and the app had no stapled ticket.
 - [x] 5.3 Update the signing and release runbooks to match the gate.
+
+- [ ] 5.4 Gate public release and OSS mirroring on a visible window from each signed and notarized DMG on its matching native architecture.

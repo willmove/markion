@@ -23,6 +23,8 @@ In signing runs, cargo-packager signs `Markion.app` with the hardened runtime an
 - The embedded app's team identifier, hardened runtime, timestamp and expected executable architecture
 - `spctl` reporting `source=Notarized Developer ID` for the DMG and its embedded app when Gatekeeper assessments are enabled
 
+Both tagged releases and signing rehearsals run an installed-app smoke test on Apple Silicon and Intel macOS. Each job downloads its architecture’s final DMG, applies Gatekeeper’s distribution assessment, and checks for a visible Markion window after opening the installed app. The tag jobs block GitHub and OSS publication until both checks pass.
+
 Branch pushes and pull requests build ad-hoc without reading Apple secrets.
 
 ## One-time setup

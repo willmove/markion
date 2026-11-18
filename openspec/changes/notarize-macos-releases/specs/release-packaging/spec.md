@@ -43,6 +43,12 @@ For tagged releases and manual signing rehearsals, both macOS jobs SHALL sign wi
 - **THEN** the job verifies both the DMG and its mounted app's signatures and tickets
 - **AND** Gatekeeper accepts both when assessments are enabled
 
+#### Scenario: Both final disk images open an installed application before publication
+- **WHEN** a signing rehearsal or tagged release produces both notarized DMGs
+- **THEN** a runner of each matching CPU architecture applies macOS distribution assessment and launches the app installed from that run’s DMG
+- **AND** each installed application must open a visible window
+- **AND** a failure blocks tagged GitHub publication and OSS mirroring
+
 #### Scenario: Missing or partial credentials block publication
 - **WHEN** a tag build or manual signing rehearsal lacks any required Apple credential
 - **THEN** the macOS job fails and identifies the missing secret names
