@@ -415,6 +415,9 @@ impl MarkionApp {
         if tab == PreferencesTab::Export {
             self.refresh_pandoc_availability(cx);
         }
+        if tab == PreferencesTab::Editor {
+            self.refresh_code_formatter_availability(cx);
+        }
         cx.notify();
     }
 

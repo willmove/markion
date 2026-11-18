@@ -3198,6 +3198,12 @@ pub fn shortcut_catalog(lang: Language, heading_menu_max_level: u8) -> ShortcutC
                 macos: &["Cmd+Shift+K"],
             },
             ShortcutAction {
+                label: crate::code_format_t(lang, crate::CodeFormatMsg::FormatCodeBlock),
+                ids: &["format-code-block"],
+                windows_linux: &["Ctrl+Alt+L"],
+                macos: &["Cmd+Option+L"],
+            },
+            ShortcutAction {
                 label: t(lang, Msg::ItemCopy),
                 ids: &["copy"],
                 windows_linux: &["Ctrl+C"],

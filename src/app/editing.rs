@@ -899,20 +899,30 @@ impl MarkionApp {
             &target,
         );
         self.visual_table_menu = None;
-        let context = self
+        let (context, is_fenced_code) = self
             .active_tab()
             .document
             .visual_blocks_shared()
             .iter()
             .find(|block| block.id == target.block_id)
-            .map(|block| match block.kind {
-                VisualBlockKind::Table { .. } => BlockMenuContext::Table,
-                VisualBlockKind::Image { .. } => BlockMenuContext::Image,
-                VisualBlockKind::Heading { level } => BlockMenuContext::Heading(level),
-                VisualBlockKind::Paragraph => BlockMenuContext::Paragraph,
-                _ => BlockMenuContext::Block,
+            .map(|block| {
+                let context = match block.kind {
+                    VisualBlockKind::Table { .. } => BlockMenuContext::Table,
+                    VisualBlockKind::Image { .. } => BlockMenuContext::Image,
+                    VisualBlockKind::Heading { level } => BlockMenuContext::Heading(level),
+                    VisualBlockKind::Paragraph => BlockMenuContext::Paragraph,
+                    _ => BlockMenuContext::Block,
+                };
+                let fenced_code = matches!(block.kind, VisualBlockKind::CodeBlock { .. })
+                    && block.quote_context.is_none()
+                    && matches!(
+                        &block.editor,
+                        Some(VisualBlockEditor::Code { payload, .. })
+                            if payload.kind == VisualEditorFieldKind::CodePayload
+                    );
+                (context, fenced_code)
             })
-            .unwrap_or(BlockMenuContext::Block);
+            .unwrap_or((BlockMenuContext::Block, false));
         let is_table = context == BlockMenuContext::Table;
         let empty_paragraph_offset = self
             .active_tab()
@@ -945,6 +955,7 @@ impl MarkionApp {
             selection_format,
             is_image: presentation.is_image,
             is_table,
+            is_fenced_code,
             image_object_selected: false,
             anchor,
             root_selected: 0,
@@ -1320,6 +1331,14 @@ impl MarkionApp {
         } else {
             None
         };
+        let can_format_code = !matches!(self.rendered_view_mode(), ViewMode::Read)
+            && matches!(block.kind, VisualBlockKind::CodeBlock { .. })
+            && block.quote_context.is_none()
+            && matches!(
+                &block.editor,
+                Some(VisualBlockEditor::Code { payload, .. })
+                    if payload.kind == VisualEditorFieldKind::CodePayload
+            );
         let can_duplicate_or_delete = block_can_reorder_at(&blocks, index);
         let is_empty_paragraph = matches!(block.kind, VisualBlockKind::Whitespace)
             && block.quote_context.is_none()
@@ -1335,6 +1354,7 @@ impl MarkionApp {
             can_insert_block: can_duplicate_or_delete || is_empty_paragraph,
             is_empty_paragraph,
             can_paste: block_menu_insertion_range(tab, &blocks, target).is_some(),
+            can_format_code,
             table_context: None,
             editing_context: false,
             // The block catalog only includes Copy Selection after capture;
@@ -1933,6 +1953,15 @@ impl MarkionApp {
                 } else if let BlockMenuItem::Insert(command) = item {
                     self.open_palette_insertion_editor(range, command, label, cx);
                 }
+            }
+            BlockMenuItem::CodeBlockFormat => {
+                self.dismiss_visual_block_menu();
+                self.format_code_block_at_range(
+                    target.source_range.clone(),
+                    Some(target.block_id),
+                    false,
+                    cx,
+                );
             }
             BlockMenuItem::Transform(transform) => {
                 self.transform_visual_block(target, transform, cx)
@@ -3991,6 +4020,286 @@ impl MarkionApp {
         );
     }
 
+    pub(super) fn format_code_block(
+        &mut self,
+        _: &FormatCodeBlock,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_tab().is_image() || matches!(self.rendered_view_mode(), ViewMode::Read) {
+            self.status =
+                markion::code_format_t(self.language, markion::CodeFormatMsg::StatusReadOnly)
+                    .into();
+            cx.notify();
+            return;
+        }
+        let selection = self.active_tab().safe_selected_range();
+        self.format_code_block_at_range(selection, None, false, cx);
+    }
+
+    pub(super) fn format_code_block_at_range(
+        &mut self,
+        range: Range<usize>,
+        block_id: Option<VisualBlockId>,
+        auto_triggered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_tab().is_image() || matches!(self.rendered_view_mode(), ViewMode::Read) {
+            if !auto_triggered {
+                self.status =
+                    markion::code_format_t(self.language, markion::CodeFormatMsg::StatusReadOnly)
+                        .into();
+                cx.notify();
+            }
+            return;
+        }
+
+        let target = {
+            let doc = &self.active_tab().document;
+            block_id
+                .and_then(|id| markion::code_format::fenced_code_block_by_id(doc, id))
+                .or_else(|| {
+                    markion::code_format::fenced_code_block_for_range(doc, range, auto_triggered)
+                })
+        };
+        let Some(target) = target else {
+            if !auto_triggered {
+                self.status = markion::code_format_t(
+                    self.language,
+                    markion::CodeFormatMsg::StatusNoCodeBlock,
+                )
+                .into();
+                cx.notify();
+            }
+            return;
+        };
+
+        let raw_token = target
+            .language_token
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("");
+        if raw_token.is_empty() {
+            if !auto_triggered {
+                self.status = markion::code_format_t(
+                    self.language,
+                    markion::CodeFormatMsg::StatusMissingLanguage,
+                )
+                .into();
+                cx.notify();
+            }
+            return;
+        }
+        let Some(code_language) = target.language else {
+            if !auto_triggered {
+                self.status = markion::code_format_tf(
+                    self.language,
+                    markion::CodeFormatMsg::StatusUnsupportedLanguage,
+                    &[raw_token],
+                )
+                .into();
+                cx.notify();
+            }
+            return;
+        };
+
+        if target.expected_payload.trim().is_empty() {
+            if !auto_triggered {
+                self.status = markion::code_format_t(
+                    self.language,
+                    markion::CodeFormatMsg::StatusAlreadyFormatted,
+                )
+                .into();
+                cx.notify();
+            }
+            return;
+        }
+
+        self.code_format_generation = self.code_format_generation.wrapping_add(1);
+        let generation = self.code_format_generation;
+        if let Some(previous) = self.code_format_cancellation.take() {
+            previous.cancel();
+        }
+        let cancellation = markion::external_command::CommandCancellation::default();
+        self.code_format_cancellation = Some(cancellation.clone());
+        let lang_label = code_language_label(self.language, code_language);
+        if !auto_triggered {
+            self.status = markion::code_format_tf(
+                self.language,
+                markion::CodeFormatMsg::StatusFormatting,
+                &[lang_label],
+            )
+            .into();
+            cx.notify();
+        }
+
+        let input = markion::code_format::prepare_code_input(&target);
+        let registry = self.code_formatter_registry.clone();
+        let prefs = self.code_block_preferences.clone();
+        let options = markion::code_format::CodeFormatOptions::default();
+        let language_token = target.language_token.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    registry.format_snippet(
+                        code_language,
+                        language_token.as_deref(),
+                        &input,
+                        &prefs,
+                        &options,
+                        &cancellation,
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.apply_async_code_format_result(
+                    generation,
+                    code_language,
+                    &target,
+                    result,
+                    auto_triggered,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    fn apply_async_code_format_result(
+        &mut self,
+        generation: u64,
+        code_language: markion::code_format::CodeLanguage,
+        target: &markion::code_format::FencedCodeBlockTarget,
+        result: Result<String, markion::code_format::CodeFormatError>,
+        auto_triggered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.code_format_generation != generation {
+            return;
+        }
+        self.code_format_cancellation = None;
+        let lang_label = code_language_label(self.language, code_language);
+
+        let formatted = match result {
+            Ok(formatted) => formatted,
+            Err(markion::code_format::CodeFormatError::Cancelled { .. }) => return,
+            Err(markion::code_format::CodeFormatError::FormatterUnavailable { detail, .. }) => {
+                self.status = markion::code_format_tf(
+                    self.language,
+                    markion::CodeFormatMsg::StatusFormatterUnavailable,
+                    &[lang_label, &detail],
+                )
+                .into();
+                cx.notify();
+                return;
+            }
+            Err(markion::code_format::CodeFormatError::TimedOut { .. }) => {
+                self.status = markion::code_format_tf(
+                    self.language,
+                    markion::CodeFormatMsg::StatusFormatTimedOut,
+                    &[lang_label],
+                )
+                .into();
+                cx.notify();
+                return;
+            }
+            Err(
+                markion::code_format::CodeFormatError::ExecutionFailed { detail, .. }
+                | markion::code_format::CodeFormatError::InvalidOutput { detail, .. },
+            ) => {
+                self.status = markion::code_format_tf(
+                    self.language,
+                    markion::CodeFormatMsg::StatusFormatFailed,
+                    &[lang_label, &detail],
+                )
+                .into();
+                cx.notify();
+                return;
+            }
+            Err(err) => {
+                let detail = err.to_string();
+                self.status = markion::code_format_tf(
+                    self.language,
+                    markion::CodeFormatMsg::StatusFormatFailed,
+                    &[lang_label, &detail],
+                )
+                .into();
+                cx.notify();
+                return;
+            }
+        };
+
+        let is_read_only =
+            self.active_tab().is_image() || matches!(self.rendered_view_mode(), ViewMode::Read);
+        let tab = self.active_tab();
+        let still_matches = !is_read_only
+            && tab.document.instance_id() == target.document_id
+            && tab.document.version() == target.document_version
+            && tab.document.text().get(target.payload_range.clone())
+                == Some(target.expected_payload.as_str());
+        if !still_matches {
+            if !auto_triggered {
+                self.status = markion::code_format_t(
+                    self.language,
+                    markion::CodeFormatMsg::StatusFormatStale,
+                )
+                .into();
+                cx.notify();
+            }
+            return;
+        }
+
+        let replacement =
+            markion::code_format::build_formatted_payload_replacement(target, &formatted);
+        if replacement == target.expected_payload {
+            if !auto_triggered {
+                self.status = markion::code_format_t(
+                    self.language,
+                    markion::CodeFormatMsg::StatusAlreadyFormatted,
+                )
+                .into();
+                cx.notify();
+            }
+            return;
+        }
+
+        let prev_selection = self.active_tab().safe_selected_range();
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let mutation = self.active_tab_mut().document.prepare_range_mutation(
+            MutationOrigin::StructuralEdit,
+            target.payload_range.clone(),
+            &replacement,
+        );
+        let Some(receipt) = self.apply_document_mutation("format_code_block", mutation) else {
+            cx.notify();
+            return;
+        };
+        if !receipt.changed {
+            return;
+        }
+        self.commit_undo_snapshot(snapshot);
+        let new_selection =
+            markion::code_format::clamped_cursor_after_format(prev_selection, target, &replacement);
+        let doc_len = self.active_tab().document.text().len();
+        let clamped_start = new_selection.start.min(doc_len);
+        let clamped_end = new_selection.end.clamp(clamped_start, doc_len);
+        let tab = self.active_tab_mut();
+        tab.selected_range = clamped_start..clamped_end;
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        tab.clear_visual_caret_affinity();
+        tab.clear_visual_navigation_intent();
+        self.status = markion::code_format_tf(
+            self.language,
+            markion::CodeFormatMsg::StatusFormatted,
+            &[lang_label],
+        )
+        .into();
+        self.after_document_changed(cx);
+        cx.notify();
+    }
+
     pub(super) fn format_table(&mut self, _: &FormatTable, _: &mut Window, cx: &mut Context<Self>) {
         self.apply_table_edit(
             TableEdit::Format,
@@ -4457,6 +4766,9 @@ impl MarkionApp {
             EditorContextAction::Copy => self.copy(&Copy, window, cx),
             EditorContextAction::Paste => self.paste(&Paste, window, cx),
             EditorContextAction::SelectAll => self.select_all(&SelectAll, window, cx),
+            EditorContextAction::FormatCodeBlock => {
+                self.format_code_block_at_range(menu.selection, None, false, cx);
+            }
         }
     }
 
@@ -5967,11 +6279,29 @@ impl MarkionApp {
                 cx,
             );
         } else if let Some(text) = item.text() {
-            if !self.has_text_input_focus() && !plain && self.paste_table_matrix(&text, cx) {
-                return;
-            }
             if self.has_text_input_focus() {
                 self.push_text_input(&text, cx);
+                return;
+            }
+            let inside_fenced_code = !self.active_tab().is_image()
+                && !matches!(self.rendered_view_mode(), ViewMode::Read)
+                && markion::code_format::fenced_code_block_for_range(
+                    &self.active_tab().document,
+                    self.active_tab().safe_selected_range(),
+                    true,
+                )
+                .is_some();
+            if inside_fenced_code {
+                self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
+                self.replace_text_in_range(None, &text, window, cx);
+                self.active_tab_mut().finish_undo_capture();
+                if self.code_block_preferences.format_on_paste {
+                    let updated_range = self.active_tab().safe_selected_range();
+                    self.format_code_block_at_range(updated_range, None, true, cx);
+                }
+                return;
+            }
+            if !plain && self.paste_table_matrix(&text, cx) {
                 return;
             }
             let insertion = if plain {
@@ -7055,6 +7385,22 @@ impl MarkionApp {
         }
         self.active_tab().next_boundary(offset)
     }
+}
+
+fn code_language_label(
+    language: Language,
+    code_language: markion::code_format::CodeLanguage,
+) -> &'static str {
+    use markion::code_format::CodeLanguage;
+    let msg = match code_language {
+        CodeLanguage::Json => markion::CodeFormatMsg::LangJson,
+        CodeLanguage::JavaScript => markion::CodeFormatMsg::LangJavaScript,
+        CodeLanguage::TypeScript => markion::CodeFormatMsg::LangTypeScript,
+        CodeLanguage::Java => markion::CodeFormatMsg::LangJava,
+        CodeLanguage::Rust => markion::CodeFormatMsg::LangRust,
+        CodeLanguage::Python => markion::CodeFormatMsg::LangPython,
+    };
+    markion::code_format_t(language, msg)
 }
 
 /// Hover tooltip for a document tab: restores the full title (and the full

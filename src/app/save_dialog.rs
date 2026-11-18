@@ -233,10 +233,18 @@ pub(super) fn prompt_for_open_file(
     title: Msg,
     filter: Option<(Msg, &[&str])>,
 ) -> Pin<Box<dyn Future<Output = Option<PathBuf>> + 'static>> {
-    let mut dialog =
-        set_dialog_parent(AsyncFileDialog::new(), window).set_title(t(language, title));
+    let filter_owned = filter.map(|(msg, exts)| (t(language, msg), exts));
+    prompt_for_open_file_titled(window, t(language, title), filter_owned)
+}
+
+pub(super) fn prompt_for_open_file_titled(
+    window: &Window,
+    title: &str,
+    filter: Option<(&str, &[&str])>,
+) -> Pin<Box<dyn Future<Output = Option<PathBuf>> + 'static>> {
+    let mut dialog = set_dialog_parent(AsyncFileDialog::new(), window).set_title(title);
     if let Some((filter_label, extensions)) = filter {
-        dialog = dialog.add_filter(t(language, filter_label), extensions);
+        dialog = dialog.add_filter(filter_label, extensions);
     }
     Box::pin(async move {
         dialog
