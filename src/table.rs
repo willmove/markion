@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use crate::model::{InlineSpan, RichText, TableAlignment};
+use crate::model::{InlineSpan, PreviewBlock, RichText, TableAlignment};
 use crate::text_util::clamp_to_char_boundary;
 
 #[derive(Default)]
@@ -48,76 +48,12 @@ pub(crate) struct TableCellSourceRange {
     pub source_range: Range<usize>,
 }
 
-pub(crate) fn table_range_at(text: &str, byte_index: usize) -> Option<Range<usize>> {
-    if text.is_empty() {
+pub(crate) fn table_source_range(text: &str, block: &PreviewBlock) -> Option<Range<usize>> {
+    let PreviewBlock::Table { source_range, .. } = block else {
         return None;
-    }
-
-    let index = clamp_to_char_boundary(text, byte_index);
-    let (mut start, mut end) = line_bounds_for_table_lookup(text, index)?;
-
-    if !is_markdown_table_candidate(&text[start..end]) {
-        if index == start && start > 0 {
-            let (previous_start, previous_end) = previous_line_bounds(text, start)?;
-            if is_markdown_table_candidate(&text[previous_start..previous_end]) {
-                start = previous_start;
-                end = previous_end;
-            } else {
-                return None;
-            }
-        } else {
-            return None;
-        }
-    }
-
-    while let Some((previous_start, previous_end)) = previous_line_bounds(text, start) {
-        if !is_markdown_table_candidate(&text[previous_start..previous_end]) {
-            break;
-        }
-        start = previous_start;
-    }
-
-    while let Some((next_start, next_end)) = next_line_bounds(text, end) {
-        if !is_markdown_table_candidate(&text[next_start..next_end]) {
-            break;
-        }
-        end = next_end;
-    }
-
-    let range = start..end;
-    parse_markdown_table(&text[range.clone()]).map(|_| range)
-}
-
-pub(crate) fn table_ranges(text: &str) -> Vec<Range<usize>> {
-    let mut ranges = Vec::new();
-    let mut offset = 0usize;
-
-    while offset < text.len() {
-        let line_end = text[offset..]
-            .find('\n')
-            .map_or(text.len(), |relative| offset + relative);
-        if is_markdown_table_candidate(&text[offset..line_end])
-            && let Some(range) = table_range_at(text, offset)
-            && ranges
-                .last()
-                .is_none_or(|last: &Range<usize>| *last != range)
-        {
-            offset = range.end;
-            ranges.push(range);
-            if offset < text.len() && text[offset..].starts_with('\n') {
-                offset += 1;
-            }
-            continue;
-        }
-
-        offset = if line_end < text.len() {
-            line_end + 1
-        } else {
-            text.len()
-        };
-    }
-
-    ranges
+    };
+    let source = text.get(source_range.clone())?;
+    Some(source_range.start + table_column_width_prefix_len(source)..source_range.end)
 }
 
 /// Drop trailing CR/LF from a pulldown-cmark table event range so the
@@ -144,49 +80,27 @@ pub(crate) fn table_position_at(source: &str, byte_index: usize) -> Option<Table
         .bytes()
         .filter(|byte| *byte == b'\n')
         .count();
-    let separator_index = source
-        .lines()
-        .position(is_markdown_table_separator_line)
-        .unwrap_or(1);
-    let row = if line_index <= separator_index {
-        0
-    } else {
-        line_index - 1
-    };
+    let row = line_index.saturating_sub(1);
     let column = table_column_at_line(line, index - line_start);
 
     Some(TablePosition { row, column })
 }
 
 pub(crate) fn parse_markdown_table(source: &str) -> Option<MarkdownTable> {
-    let lines = source.lines().collect::<Vec<_>>();
-    if lines.len() < 2 {
-        return None;
-    }
-
-    let separator_index = lines
-        .iter()
-        .position(|line| is_markdown_table_separator_line(line))?;
-    if separator_index == 0 {
-        return None;
-    }
-    let alignments = split_markdown_table_row(lines[separator_index])
+    let mut lines = source.lines();
+    let header = lines.next()?;
+    let separator = lines
+        .next()
+        .filter(|line| is_markdown_table_separator_line(line))?;
+    let alignments = split_markdown_table_row(separator)
         .iter()
         .map(|cell| parse_table_alignment(cell))
         .collect::<Vec<_>>();
-
-    let mut rows = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index == separator_index {
-            continue;
-        }
-        if !is_markdown_table_candidate(line) {
-            return None;
-        }
-        rows.push(split_markdown_table_row(line));
-    }
-
-    if rows.is_empty() {
+    let rows = std::iter::once(header)
+        .chain(lines)
+        .map(split_markdown_table_row)
+        .collect::<Vec<_>>();
+    if rows.iter().any(Vec::is_empty) {
         return None;
     }
 
@@ -196,25 +110,18 @@ pub(crate) fn parse_markdown_table(source: &str) -> Option<MarkdownTable> {
 }
 
 pub(crate) fn table_cell_source_ranges(source: &str) -> Option<Vec<TableCellSourceRange>> {
-    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
-    if lines.len() < 2 {
-        return None;
-    }
-    let separator_index = lines
-        .iter()
-        .position(|line| is_markdown_table_separator_line(line.trim_end_matches(['\r', '\n'])))?;
-    if separator_index == 0 {
-        return None;
-    }
-    let separator_columns =
-        markdown_table_cell_ranges(lines[separator_index].trim_end_matches(['\r', '\n'])).len();
+    let separator = source
+        .lines()
+        .nth(1)
+        .filter(|line| is_markdown_table_separator_line(line))?;
+    let separator_columns = markdown_table_cell_ranges(separator).len();
 
     let mut body_rows = Vec::new();
     let mut source_offset = 0usize;
     let mut logical_row = 0usize;
-    for (line_index, line_with_newline) in lines.iter().enumerate() {
+    for (line_index, line_with_newline) in source.split_inclusive('\n').enumerate() {
         let line = line_with_newline.trim_end_matches(['\r', '\n']);
-        if line_index != separator_index {
+        if line_index != 1 {
             let ranges = markdown_table_cell_ranges(line);
             let content_end = line.trim_end().len();
             body_rows.push((logical_row, source_offset, content_end, ranges));
@@ -326,15 +233,11 @@ fn parse_table_alignment(cell: &str) -> TableAlignment {
 }
 
 pub(crate) fn formatted_table_cell_range(
-    table: &MarkdownTable,
+    formatted: &str,
     row_index: usize,
     column_index: usize,
 ) -> Option<Range<usize>> {
-    if table.rows.is_empty() {
-        return None;
-    }
-    let formatted = format_markdown_table(table);
-    table_cell_source_ranges(&formatted)?
+    table_cell_source_ranges(formatted)?
         .into_iter()
         .find(|cell| cell.row == row_index && cell.column == column_index)
         .map(|cell| cell.source_range)
@@ -352,43 +255,13 @@ fn line_bounds_for_table_lookup(text: &str, byte_index: usize) -> Option<(usize,
     Some((start, end))
 }
 
-fn previous_line_bounds(text: &str, line_start: usize) -> Option<(usize, usize)> {
-    if line_start == 0 {
-        return None;
-    }
-
-    let previous_end = line_start - 1;
-    let previous_start = text[..previous_end]
-        .rfind('\n')
-        .map_or(0, |index| index + 1);
-    Some((previous_start, previous_end))
-}
-
-fn next_line_bounds(text: &str, line_end: usize) -> Option<(usize, usize)> {
-    if line_end >= text.len() {
-        return None;
-    }
-
-    let next_start = line_end + 1;
-    let next_end = text[next_start..]
-        .find('\n')
-        .map_or(text.len(), |index| next_start + index);
-    Some((next_start, next_end))
-}
-
-fn is_markdown_table_candidate(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.contains('|') && !split_markdown_table_row(line).is_empty()
-}
-
 pub(crate) fn is_markdown_table_separator_line(line: &str) -> bool {
     let cells = split_markdown_table_row(line);
     !cells.is_empty()
         && line.contains('|')
         && cells.iter().all(|cell| {
             let trimmed = cell.trim();
-            trimmed.chars().filter(|ch| *ch == '-').count() >= 3
-                && trimmed.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+            trimmed.contains('-') && trimmed.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
         })
 }
 
@@ -405,19 +278,7 @@ pub(crate) fn markdown_table_cell_ranges(line: &str) -> Vec<Range<usize>> {
     if content_start >= content_end {
         return Vec::new();
     }
-    let content = &line[content_start..content_end];
-    let mut delimiters = Vec::new();
-    let mut escaped = false;
-    for (offset, ch) in content.char_indices() {
-        if ch == '\\' {
-            escaped = !escaped;
-            continue;
-        }
-        if ch == '|' && !escaped {
-            delimiters.push(content_start + offset);
-        }
-        escaped = false;
-    }
+    let delimiters = table_pipe_delimiters(line).collect::<Vec<_>>();
 
     let leading_pipe = delimiters.first() == Some(&content_start);
     let trailing_pipe = delimiters.last() == Some(&(content_end - 1));
@@ -454,8 +315,9 @@ pub(crate) fn markdown_table_cell_ranges(line: &str) -> Vec<Range<usize>> {
 
 fn table_column_at_line(line: &str, byte_column: usize) -> usize {
     let byte_column = clamp_to_char_boundary(line, byte_column.min(line.len()));
-    let before_cursor = &line[..byte_column];
-    let pipe_count = unescaped_pipe_count(before_cursor);
+    let pipe_count = table_pipe_delimiters(line)
+        .take_while(|&offset| offset < byte_column)
+        .count();
     if line.trim_start().starts_with('|') {
         pipe_count.saturating_sub(1)
     } else {
@@ -463,20 +325,13 @@ fn table_column_at_line(line: &str, byte_column: usize) -> usize {
     }
 }
 
-fn unescaped_pipe_count(text: &str) -> usize {
-    let mut escaped = false;
-    let mut count = 0usize;
-    for ch in text.chars() {
-        if ch == '\\' {
-            escaped = !escaped;
-            continue;
-        }
-        if ch == '|' && !escaped {
-            count += 1;
-        }
-        escaped = false;
-    }
-    count
+fn table_pipe_delimiters(line: &str) -> impl Iterator<Item = usize> + '_ {
+    let bytes = line.as_bytes();
+    // In an active GFM table a pipe following a backslash is cell content,
+    // including after an even-length run of backslashes.
+    bytes.iter().enumerate().filter_map(|(offset, &byte)| {
+        (byte == b'|' && (offset == 0 || bytes[offset - 1] != b'\\')).then_some(offset)
+    })
 }
 
 /// Horizontal padding already applied by GFM table cells (`p_2` on each side).
@@ -672,8 +527,11 @@ pub fn table_column_width_prefix_len(source: &str) -> usize {
     while after < bytes.len() && bytes[after].is_ascii_whitespace() {
         after += 1;
     }
-    let line = source[after..].lines().next().unwrap_or("");
-    if is_markdown_table_candidate(line) {
+    if source[after..]
+        .lines()
+        .nth(1)
+        .is_some_and(is_markdown_table_separator_line)
+    {
         after
     } else {
         0
@@ -871,25 +729,13 @@ pub fn table_column_flex_weights_with_authored(
     table_column_flex_weights(rows, table_font_size)
 }
 
-/// `None` = selection does not start inside a GFM table.
-/// `Some(true)` = fully contained in one cell.
-/// `Some(false)` = starts in a table but is not a single-cell range.
-pub(crate) fn selection_is_within_one_table_cell(text: &str, range: Range<usize>) -> Option<bool> {
-    if range.start > text.len() || range.end > text.len() || range.start > range.end {
-        return None;
-    }
-    let table_range = table_range_at(text, range.start)?;
-    if range.end > table_range.end {
-        return Some(false);
-    }
-    let source = &text[table_range.clone()];
-    let cells = table_cell_source_ranges(source)?;
-    let inside = cells.iter().any(|cell| {
-        let start = table_range.start + cell.source_range.start;
-        let end = table_range.start + cell.source_range.end;
-        start <= range.start && end >= range.end
-    });
-    Some(inside)
+/// The selection is relative to a parser-owned GFM table slice.
+pub(crate) fn selection_is_within_one_table_cell(source: &str, range: Range<usize>) -> bool {
+    table_cell_source_ranges(source).is_some_and(|cells| {
+        cells.iter().any(|cell| {
+            cell.source_range.start <= range.start && cell.source_range.end >= range.end
+        })
+    })
 }
 
 #[cfg(test)]
@@ -941,7 +787,7 @@ mod tests {
             parse_markdown_table("| A | B |\n| --- | --- |\n| x | y |").expect("parsed table");
         table.rows[1][0] = "宽字符 and longer".into();
         let formatted = format_markdown_table(&table);
-        let range = formatted_table_cell_range(&table, 1, 0).expect("formatted cell");
+        let range = formatted_table_cell_range(&formatted, 1, 0).expect("formatted cell");
         assert_eq!(&formatted[range], "宽字符 and longer");
         assert_eq!(parse_markdown_table(&formatted).expect("round trip"), table);
     }
@@ -1224,20 +1070,14 @@ mod tests {
     fn selection_gate_requires_one_table_cell() {
         let source = "| A | B |\n| --- | --- |\n| hello | world |";
         let hello = source.find("hello").unwrap();
-        assert_eq!(
-            selection_is_within_one_table_cell(source, hello..hello + 5),
-            Some(true)
-        );
+        assert!(selection_is_within_one_table_cell(source, hello..hello + 5));
         let pipe = source.find("| hello").unwrap();
-        assert_eq!(
-            selection_is_within_one_table_cell(source, pipe..hello + 5),
-            Some(false)
-        );
+        assert!(!selection_is_within_one_table_cell(source, pipe..hello + 5));
         let world = source.find("world").unwrap();
-        assert_eq!(
-            selection_is_within_one_table_cell(source, hello..world + 5),
-            Some(false)
-        );
-        assert_eq!(selection_is_within_one_table_cell("plain text", 0..5), None);
+        assert!(!selection_is_within_one_table_cell(
+            source,
+            hello..world + 5
+        ));
+        assert!(!selection_is_within_one_table_cell("plain text", 0..5));
     }
 }
