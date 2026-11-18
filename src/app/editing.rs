@@ -241,7 +241,7 @@ struct ResolvedVisualNavigation {
     line_index: Option<usize>,
 }
 
-fn visual_block_transform(block: &VisualBlock) -> Option<BlockTransform> {
+pub(super) fn visual_block_transform(block: &VisualBlock) -> Option<BlockTransform> {
     match &block.kind {
         VisualBlockKind::Heading { level } => Some(BlockTransform::Heading(*level)),
         VisualBlockKind::Paragraph | VisualBlockKind::Whitespace => Some(BlockTransform::Text),

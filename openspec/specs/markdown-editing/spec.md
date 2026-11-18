@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers canonical Markdown source editing, parsing and formatting together with the source-backed, WYSIWYG-oriented Visual Edit surface. Edit and Split modes retain complete raw-source access; Visual Edit keeps exactly mapped constructs rendered or directly editable, progressively reveals only necessary syntax, and preserves complete source islands whenever a lossless mutation cannot be proven.
+
 ## Requirements
+
 ### Requirement: Markdown parsing via CommonMark + GFM
 The parser SHALL parse Markdown using `pulldown-cmark` configured for CommonMark conformance plus the GitHub Flavored Markdown extensions in use (tables, task lists, strikethrough, footnotes, superscript/subscript, highlight, autolinks). Parsing SHALL produce structured data consumed by the preview, Visual Edit, outline, stats, and search subsystems. Source-mapped Visual Edit derivation SHALL incrementally reuse independently parseable top-level regions after a localized source edit and SHALL fall back to a full-document parse whenever global Markdown context, region boundaries, or exact source ranges are uncertain. Incremental and fallback output SHALL be semantically and byte-range equivalent to a full parse of the current canonical source.
 
@@ -3136,3 +3138,25 @@ When Markion creates its initial in-memory welcome document, it SHALL provide a 
 - **WHEN** the welcome document is opened in Visual Edit mode
 - **THEN** ordinary prose and list content remains source-backed and visually editable
 - **AND** constructs requiring conservative source editing retain their source-editing affordance
+
+### Requirement: Visual Edit block grips SHALL identify the current block format
+
+When automatic grip-click popups are enabled, each visible Visual Edit block grip SHALL show a compact, theme-aware format symbol to the left of its drag dots and provide the localized format name on hover. The symbol SHALL reflect the block's current Markdown type, including heading levels H1–H6 and the distinction between bulleted, numbered and task lists. The symbol and dots SHALL share the existing grip gestures. The grip SHALL fit in the leading gutter and its visibility SHALL leave content width, row height and wrapping unchanged.
+
+#### Scenario: Visible grips identify different types
+
+- **WHEN** the user hovers eligible paragraphs, headings, list items, or other supported blocks in Visual Edit
+- **THEN** each grip displays the corresponding format next to the dots
+- **AND** hovering the grip shows the format name in the active language
+
+#### Scenario: The current format follows block edits
+
+- **WHEN** the user clicks the format symbol and converts the block using the quick-settings popup
+- **THEN** the next time its grip is visible, the symbol identifies the new format
+- **AND** Undo restores the previous format symbol
+
+#### Scenario: The entire grip accepts block gestures
+
+- **WHEN** the user Shift-clicks or drags the format side of the grip
+- **THEN** the gesture extends or moves the block selection through the existing grip behavior
+- **AND** the gesture leaves the automatic popup closed

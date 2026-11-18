@@ -12,6 +12,7 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
         app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
         app
     });
     cx.update(|window, cx| {
@@ -25,7 +26,7 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
             app.active_tab().document.visual_blocks_shared(),
         )
     });
-    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    let grip = cx.debug_bounds("visual-block-grip-format-0-Text").unwrap();
     cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
     app.update(cx, |app, _| {
         assert!(
@@ -95,10 +96,20 @@ fn block_grip_click_menu_transform_and_exclusive_boundary(cx: &mut TestAppContex
         assert_eq!(app.active_tab().undo_stack.len(), 1);
         assert!(app.block_menu.is_none());
     });
+    assert!(
+        cx.debug_bounds("visual-block-grip-format-0-Heading 2")
+            .is_some()
+    );
+    app.update(cx, |app, cx| {
+        app.language = Language::ZhHans;
+        cx.notify();
+    });
     cx.dispatch_action(Undo);
+    cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), SOURCE)
     });
+    assert!(cx.debug_bounds("visual-block-grip-format-0-文本").is_some());
 }
 
 #[gpui::test]
@@ -108,15 +119,25 @@ fn block_grip_preference_shift_drag_and_stale_gestures(cx: &mut TestAppContext) 
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
         app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
+        app.sidebar_visible = false;
+        app.outline_visible = false;
         app
     });
+    cx.simulate_resize(size(px(340.), px(260.)));
     cx.update(|window, cx| {
         window.focus(&app.read(cx).focus_handle);
         window.activate_window();
     });
     cx.run_until_parked();
     let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
-    cx.simulate_click(grip.center(), Modifiers::none());
+    let format = cx.debug_bounds("visual-block-grip-format-0-Text").unwrap();
+    let content = cx.debug_bounds("visual-block-content-0").unwrap();
+    let viewport = app.read_with(cx, |app, _| app.active_tab().visual_list.viewport_bounds());
+    assert!(grip.left() >= viewport.left());
+    assert!(grip.right() <= content.left());
+    assert!(grip.contains(&format.center()));
+    cx.simulate_click(format.center(), Modifiers::none());
     cx.run_until_parked();
     let selection = app.update(cx, |app, cx| {
         assert!(app.block_menu.as_ref().unwrap().from_grip);
@@ -127,7 +148,10 @@ fn block_grip_preference_shift_drag_and_stale_gestures(cx: &mut TestAppContext) 
         assert!(!app.current_preferences().block_handle_menu);
         range
     });
-    cx.simulate_click(grip.center(), Modifiers::none());
+    let dots = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    assert!(dots.size.width < grip.size.width);
+    assert_eq!(cx.debug_bounds("visual-block-content-0"), Some(content));
+    cx.simulate_click(dots.center(), Modifiers::none());
     cx.run_until_parked();
     app.update(cx, |app, cx| {
         assert!(app.block_menu.is_none());
@@ -143,7 +167,7 @@ fn block_grip_preference_shift_drag_and_stale_gestures(cx: &mut TestAppContext) 
         .unwrap();
     let second_grip = cx
         .debug_bounds(test_debug_selector(format!(
-            "visual-block-drag-grip-{second}"
+            "visual-block-grip-format-{second}-Text"
         )))
         .unwrap();
     cx.simulate_click(
@@ -161,9 +185,9 @@ fn block_grip_preference_shift_drag_and_stale_gestures(cx: &mut TestAppContext) 
             0..SOURCE.find("###").unwrap()
         );
     });
-    cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_down(format.center(), MouseButton::Left, Modifiers::none());
     cx.simulate_event(MouseMoveEvent {
-        position: grip.center() + point(px(50.), px(5.)),
+        position: format.center() + point(px(50.), px(5.)),
         pressed_button: Some(MouseButton::Left),
         modifiers: Modifiers::none(),
     });
@@ -179,7 +203,7 @@ fn block_grip_preference_shift_drag_and_stale_gestures(cx: &mut TestAppContext) 
     });
     cx.simulate_event(MouseUpEvent {
         button: MouseButton::Left,
-        position: grip.center() + point(px(50.), px(5.)),
+        position: format.center() + point(px(50.), px(5.)),
         modifiers: Modifiers::none(),
         click_count: 1,
     });
@@ -198,6 +222,11 @@ fn block_grip_preference_shift_drag_and_stale_gestures(cx: &mut TestAppContext) 
         assert!(app.block_menu.is_none());
         assert_eq!(app.active_tab().selected_range, selection);
     });
+    app.update(cx, |app, cx| app.set_view_mode(ViewMode::Read, cx));
+    cx.run_until_parked();
+    let read_content = cx.debug_bounds("preview-block-row-0").unwrap();
+    assert_eq!(content.left(), read_content.left());
+    assert_eq!(content.size.width, read_content.size.width);
 }
 
 #[gpui::test]

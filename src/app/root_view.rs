@@ -735,7 +735,9 @@ impl Render for MarkionApp {
                                     .child(
                                         div()
                                             .size_full()
-                                            .pl(px(PANE_INNER_PADDING))
+                                            .when(view_mode != ViewMode::Read, |pane| {
+                                                pane.pl(px(PANE_INNER_PADDING))
+                                            })
                                             .pr(px(PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING))
                                             .bg(palette.surface_bg)
                                             .font_family(
@@ -807,14 +809,11 @@ impl Render for MarkionApp {
                                                                     preview_display_scale,
                                                                     cx,
                                                                 ));
-                                                            if constrain_read_preview {
-                                                                div()
-                                                                    .w_full()
-                                                                    .flex()
-                                                                    .justify_center()
-                                                                    .child(row.max_w(px(
-                                                                        READ_MODE_PREVIEW_MAX_WIDTH,
-                                                                    )))
+                                                            if view_mode == ViewMode::Read {
+                                                                rendered_document_column(
+                                                                    row,
+                                                                    constrain_read_preview,
+                                                                )
                                                                     .into_any_element()
                                                             } else {
                                                                 row.into_any_element()
@@ -2673,6 +2672,26 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl Into
         )
 }
 
+fn rendered_document_column(row: Div, constrain_width: bool) -> Div {
+    if constrain_width {
+        // Center the wide column as before, with a minimum leading margin
+        // so the grip fits even when there is little or no space to center.
+        div()
+            .w_full()
+            .pl(px(PANE_INNER_PADDING))
+            .flex()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(VISUAL_BLOCK_GRIP_GUTTER - PANE_INNER_PADDING)),
+            )
+            .child(row.min_w_0().max_w(px(READ_MODE_PREVIEW_MAX_WIDTH)))
+            .child(div().flex_1())
+    } else {
+        div().w_full().pl(px(VISUAL_BLOCK_GRIP_GUTTER)).child(row)
+    }
+}
+
 pub(super) fn visual_edit_surface_view(
     items: std::sync::Arc<Vec<VisualBlock>>,
     document_dir: Option<PathBuf>,
@@ -2717,16 +2736,7 @@ pub(super) fn visual_edit_surface_view(
                 display_scale,
                 cx,
             ));
-        if constrain_width {
-            div()
-                .w_full()
-                .flex()
-                .justify_center()
-                .child(row.max_w(px(READ_MODE_PREVIEW_MAX_WIDTH)))
-                .into_any_element()
-        } else {
-            row.into_any_element()
-        }
+        rendered_document_column(row, constrain_width).into_any_element()
     });
     div()
         .relative()
@@ -2744,7 +2754,6 @@ pub(super) fn visual_edit_surface_view(
         .child(
             div()
                 .size_full()
-                .pl(px(PANE_INNER_PADDING))
                 .pr(px(PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING))
                 .bg(palette.surface_bg)
                 .font_family(rendered_font_family)
@@ -2766,7 +2775,7 @@ pub(super) fn visual_edit_surface_view(
                     }),
                 )
                 .when(is_empty, |surface| {
-                    surface.child(
+                    surface.pl(px(PANE_INNER_PADDING)).child(
                         div()
                             .p(px(PANE_INNER_PADDING))
                             .text_size(px(typography.rendered_font_size))

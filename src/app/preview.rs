@@ -4029,6 +4029,17 @@ fn callout_label(kind: AlertKind) -> &'static str {
     }
 }
 
+fn callout_menu_label(language: Language, kind: AlertKind) -> &'static str {
+    let message = match kind {
+        AlertKind::Note => ContextMenuMsg::CalloutNote,
+        AlertKind::Tip => ContextMenuMsg::CalloutTip,
+        AlertKind::Important => ContextMenuMsg::CalloutImportant,
+        AlertKind::Warning => ContextMenuMsg::CalloutWarning,
+        AlertKind::Caution => ContextMenuMsg::CalloutCaution,
+    };
+    context_menu_t(language, message)
+}
+
 /// GitHub-style alert accents; readable on both light and dark themes, like
 /// the fixed quote-decoration grays used alongside them.
 fn callout_accent_color(kind: AlertKind) -> Rgba {
@@ -5159,6 +5170,70 @@ fn block_has_context_menu_at(blocks: &[VisualBlock], index: usize) -> bool {
             .is_some_and(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
 }
 
+const VISUAL_BLOCK_FORMAT_GRIP_WIDTH: f32 = 34.;
+const VISUAL_BLOCK_FORMAT_GRIP_GAP: f32 = 3.;
+// The list clips its children to the viewport, including absolute grips.
+pub(super) const VISUAL_BLOCK_GRIP_GUTTER: f32 =
+    VISUAL_BLOCK_FORMAT_GRIP_WIDTH + VISUAL_BLOCK_FORMAT_GRIP_GAP + 4.;
+
+fn visual_block_grip_format(
+    block: &VisualBlock,
+    language: Language,
+    color: Rgba,
+) -> Option<(AnyElement, SharedString)> {
+    use crate::ui::icon::{Icon, icon};
+
+    if let Some(transform) = editing::visual_block_transform(block) {
+        let symbol = match transform {
+            BlockTransform::Heading(level) => div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(10.))
+                .text_color(color)
+                .child(format!("H{level}"))
+                .into_any_element(),
+            _ => icon(
+                block_menu_item_icon(BlockMenuItem::Transform(transform)),
+                13.,
+                color,
+            )
+            .into_any_element(),
+        };
+        return Some((symbol, block_transform_label(language, transform).into()));
+    }
+
+    let (glyph, label) = match &block.kind {
+        VisualBlockKind::CalloutTitle { kind, .. } => {
+            (callout_icon(*kind), callout_menu_label(language, *kind))
+        }
+        VisualBlockKind::MathBlock { .. } => {
+            (Icon::Sigma, t(language, Msg::VisualInlineFormulaLabel))
+        }
+        VisualBlockKind::Image { .. } => (Icon::FileImage, t(language, Msg::ItemImage)),
+        VisualBlockKind::Html { .. } => {
+            (Icon::FileCode, block_grip_t(language, BlockGripMsg::Html))
+        }
+        VisualBlockKind::FrontMatter { .. } => (Icon::FileCog, t(language, Msg::LabelYaml)),
+        VisualBlockKind::FootnoteDefinition { .. } => (
+            Icon::FileText,
+            block_grip_t(language, BlockGripMsg::Footnote),
+        ),
+        VisualBlockKind::DefinitionTerm | VisualBlockKind::DefinitionDetail => (
+            Icon::List,
+            block_grip_t(language, BlockGripMsg::DefinitionList),
+        ),
+        VisualBlockKind::TableOfContents => (
+            Icon::ListOrdered,
+            block_grip_t(language, BlockGripMsg::TableOfContents),
+        ),
+        VisualBlockKind::ReferenceDefinition => (
+            Icon::Link,
+            block_grip_t(language, BlockGripMsg::LinkReference),
+        ),
+        _ => return None,
+    };
+    Some((icon(glyph, 13., color).into_any_element(), label.into()))
+}
+
 fn visual_block_chrome(
     app: &MarkionApp,
     block: &VisualBlock,
@@ -5181,6 +5256,7 @@ fn visual_block_chrome(
     let press_target = target.clone();
     let click_target = target.clone();
     let hover_group = format!("visual-block-row-hover-{}", block.id.as_u64());
+    let can_reveal = !app.typing_chrome_suppressed;
 
     div()
         .relative()
@@ -5203,31 +5279,72 @@ fn visual_block_chrome(
                 .child(content),
         )
         .when(reorderable, |row| {
+            let format = app
+                .block_handle_menu
+                .then(|| visual_block_grip_format(block, app.language, palette.active_text))
+                .flatten();
+            let grip_width = if format.is_some() {
+                VISUAL_BLOCK_FORMAT_GRIP_WIDTH
+            } else {
+                14.
+            };
+            let grip_gap = if format.is_some() {
+                VISUAL_BLOCK_FORMAT_GRIP_GAP
+            } else {
+                0.
+            };
             row.child(
                 div()
                     .id(("visual-block-drag-grip", block.id.as_u64()))
                     .debug_selector(move || format!("visual-block-drag-grip-{block_index}"))
                     .absolute()
-                    .left(px(-14.))
+                    .left(px(-grip_width - grip_gap))
                     .top(px(0.))
-                    .w(px(14.))
+                    .w(px(grip_width))
                     .h(px(22.))
                     .rounded_sm()
                     .text_size(px(12.))
+                    .line_height(px(14.))
                     .text_color(palette.muted)
                     .cursor(CursorStyle::OpenHand)
-                    .opacity(if owns_caret && !app.typing_chrome_suppressed {
-                        1.
-                    } else {
-                        0.
+                    .opacity(if owns_caret && can_reveal { 1. } else { 0. })
+                    .when(can_reveal, |grip| {
+                        grip.group_hover(hover_group, |style| style.opacity(1.))
                     })
-                    .group_hover(hover_group, |style| style.opacity(1.))
                     .active(|style| style.opacity(1.))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .hover(move |style| style.bg(palette.surface_bg))
-                    .child("⠿")
+                    .when_some(format, |grip, (symbol, label)| {
+                        let tooltip_label = label.clone();
+                        grip.border_1()
+                            .border_color(palette.border)
+                            .bg(palette.surface_bg)
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| SearchTooltip {
+                                    palette,
+                                    label: tooltip_label.clone(),
+                                })
+                                .into()
+                            })
+                            .child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("visual-block-grip-format-{block_index}-{label}")
+                                    })
+                                    .w(px(18.))
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(symbol),
+                            )
+                    })
+                    .hover(move |style| {
+                        let style = style.bg(palette.panel_bg);
+                        if can_reveal { style.opacity(1.) } else { style }
+                    })
+                    .child(div().w(px(12.)).text_center().child("⠿"))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |app, event: &MouseDownEvent, window, cx| {
@@ -5756,17 +5873,7 @@ fn block_menu_item_label(
             t(language, Msg::ItemParagraph).into()
         }
         BlockMenuItem::Insert(command) => slash_command_label(language, command),
-        BlockMenuItem::InsertCallout(kind) => context_menu_t(
-            language,
-            match kind {
-                AlertKind::Note => ContextMenuMsg::CalloutNote,
-                AlertKind::Tip => ContextMenuMsg::CalloutTip,
-                AlertKind::Important => ContextMenuMsg::CalloutImportant,
-                AlertKind::Warning => ContextMenuMsg::CalloutWarning,
-                AlertKind::Caution => ContextMenuMsg::CalloutCaution,
-            },
-        )
-        .into(),
+        BlockMenuItem::InsertCallout(kind) => callout_menu_label(language, kind).into(),
         BlockMenuItem::Transform(transform) => block_transform_label(language, transform),
         BlockMenuItem::Submenu(page) => block_menu_submenu_label(language, page, context),
         BlockMenuItem::TableRow(item) => format!(
