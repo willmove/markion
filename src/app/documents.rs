@@ -329,12 +329,10 @@ impl MarkionApp {
                 .map(|path| path.display().to_string())
                 .unwrap_or_default();
             let saved_path = state.document.path().map(Path::to_path_buf);
-            let save_result = state.document.save();
+            let save_result = state.save_explicitly(MarkdownDocument::save);
             if save_result.is_ok() {
                 state.external_conflict = None;
-                if let Some(recovery) = state.last_recovery_file.take() {
-                    let _ = delete_recovery_file(recovery);
-                }
+                state.discard_recovery_state();
             }
             (display_path, saved_path, save_result)
         };
@@ -382,16 +380,14 @@ impl MarkionApp {
         };
         let save_result = self.tabs[index]
             .document_tab_mut()
-            .map(|tab| tab.document.save_as(path));
+            .map(|tab| tab.save_explicitly(|document| document.save_as(path)));
         match save_result {
             Some(Ok(())) => {
                 self.image_operations
                     .observe_document(&self.tabs[index].document);
                 if let Some(state) = self.tabs[index].document_tab_mut() {
                     state.external_conflict = None;
-                    if let Some(recovery) = state.last_recovery_file.take() {
-                        let _ = delete_recovery_file(recovery);
-                    }
+                    state.discard_recovery_state();
                 }
                 self.update_workspace_root_from_document(cx);
                 self.record_recent_path(path);
@@ -805,7 +801,9 @@ impl MarkionApp {
                 return;
             }
         };
-        let save_result = self.active_tab_mut().document.save();
+        let save_result = self
+            .active_tab_mut()
+            .save_explicitly(MarkdownDocument::save);
         if save_result
             .as_ref()
             .is_err_and(|err| err.kind() == io::ErrorKind::AlreadyExists)
@@ -878,7 +876,10 @@ impl MarkionApp {
                             return;
                         }
                     };
-                    match app.active_tab_mut().document.force_save() {
+                    match app
+                        .active_tab_mut()
+                        .save_explicitly(MarkdownDocument::force_save)
+                    {
                         Ok(()) => {
                             app.active_tab_mut().external_conflict = None;
                             app.discard_current_recovery_file();
@@ -980,7 +981,9 @@ impl MarkionApp {
                                 return;
                             }
                         };
-                        let save_result = app.active_tab_mut().document.save_as(&path);
+                        let save_result = app
+                            .active_tab_mut()
+                            .save_explicitly(|document| document.save_as(&path));
                         app.status = match save_result {
                             Ok(()) => {
                                 app.image_operations

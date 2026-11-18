@@ -61,6 +61,14 @@ struct AutosaveGateState {
     cancelled: bool,
     /// Recovery snapshot written by the run and still on disk.
     recovery: Option<PathBuf>,
+    /// A committed autosave whose identity may still be in transit to the UI.
+    saved: Option<AutosaveCommit>,
+}
+
+struct AutosaveCommit {
+    path: PathBuf,
+    baseline_digest: Option<u64>,
+    identity: DiskIdentity,
 }
 
 impl AutosaveGate {
@@ -80,6 +88,31 @@ impl AutosaveGate {
 
     pub(super) fn is_cancelled(&self) -> bool {
         self.lock().cancelled
+    }
+}
+
+impl DocumentTabState {
+    pub(super) fn save_explicitly(
+        &mut self,
+        save: impl FnOnce(&mut MarkdownDocument) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let gate = self.autosave_gate.clone();
+        let mut autosave = gate.as_ref().map(|gate| gate.lock());
+        if let Some(saved) = autosave.as_ref().and_then(|state| state.saved.as_ref())
+            && self.document.path() == Some(saved.path.as_path())
+            && self.document.disk_identity().map(|known| known.digest) == saved.baseline_digest
+        {
+            self.document
+                .record_disk_identity(saved.identity.clone(), false);
+        }
+
+        save(&mut self.document)?;
+        if let Some(state) = &mut autosave {
+            // A worker queued behind the explicit save must see this before
+            // it can start. Recovery cleanup follows on the success path.
+            state.cancelled = true;
+        }
+        Ok(())
     }
 }
 
@@ -159,7 +192,7 @@ pub(super) fn git_watch_event_is_relevant(event: &notify::Event, root: &Path) ->
 /// refused destination save still leaves the text recoverable), then the
 /// destination write. All file I/O for autosave lives here, off the UI
 /// thread. Recovery-file cleanup happens here too — deletes are disk I/O.
-fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveCompletion {
+pub(super) fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveCompletion {
     let _write_admission = request.write_admission;
     let complete = |result| AutosaveCompletion {
         recovery_id: request.recovery_id,
@@ -172,9 +205,9 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
     if gate.cancelled {
         return complete(AutosaveOutcome::Cancelled);
     }
-    let recovery = match markion::write_recovery_copy(
+    let recovery = match markion::write_recovery_snapshot(
         recovery_dir,
-        request.recovery_id,
+        request.previous_recovery.as_deref(),
         request.path.as_deref(),
         request.known.as_ref(),
         &request.text,
@@ -186,11 +219,6 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
             });
         }
     };
-    if let Some(previous) = &request.previous_recovery
-        && *previous != recovery
-    {
-        let _ = delete_recovery_file(previous);
-    }
     gate.recovery = Some(recovery.clone());
     // Untitled tabs, or named tabs with silent_save off: keep recovery only.
     let Some(path) = request.path.as_ref().filter(|_| request.silent_save) else {
@@ -198,6 +226,11 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
     };
     match save_text_snapshot(path, request.known.as_ref(), &request.text) {
         Ok(identity) => {
+            gate.saved = Some(AutosaveCommit {
+                path: path.clone(),
+                baseline_digest: request.known.as_ref().map(|known| known.digest),
+                identity: identity.clone(),
+            });
             let _ = delete_recovery_file(&recovery);
             gate.recovery = None;
             complete(AutosaveOutcome::Saved {
@@ -1933,6 +1966,11 @@ impl MarkionApp {
         }) else {
             return;
         };
+        // Cancellation also retires the in-flight flag. An older completion
+        // must not clear a new autosave started after the explicit save.
+        if outcome.gate.is_cancelled() {
+            return;
+        }
         let language = self.language;
         if let Some(state) = self.tabs[index].document_tab_mut()
             && state
@@ -1942,20 +1980,23 @@ impl MarkionApp {
         {
             state.autosave_gate = None;
         }
-        // An explicitly discarded run must not re-register its snapshot or
-        // identity; the discard already cleaned up after it.
-        if outcome.gate.is_cancelled() {
-            self.tabs[index].autosave_in_flight = false;
-            cx.notify();
-            return;
-        }
         if outcome
             .repository_epoch
             .as_ref()
             .is_some_and(|epoch| !self.git_operations.write_epoch_is_current(epoch))
         {
-            self.tabs[index].autosave_in_flight = false;
-            if index == self.active_tab && self.tabs[index].is_dirty() {
+            let tab = &mut self.tabs[index];
+            tab.autosave_in_flight = false;
+            // A rejected disk identity does not invalidate the copy of the
+            // draft. Reuse that owned path on the next attempt.
+            if tab.is_dirty()
+                && tab.last_recovery_file.is_none()
+                && let AutosaveOutcome::RecoveryOnly { recovery }
+                | AutosaveOutcome::SaveFailed { recovery, .. } = outcome.result
+            {
+                tab.last_recovery_file = Some(recovery);
+            }
+            if index == self.active_tab && tab.is_dirty() {
                 self.schedule_autosave(cx);
             }
             cx.notify();

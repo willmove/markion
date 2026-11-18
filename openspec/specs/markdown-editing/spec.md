@@ -2713,7 +2713,7 @@ Visual Edit SHALL lay out ordinary URL and heading link prose through the source
 - **AND** secondary-modifier clicking the label activates its destination
 
 ### Requirement: Baseline text navigation and selection
-The editor SHALL provide Unicode-aware previous/next-word movement and deletion, Shift+Home/End selection, PageUp/PageDown navigation, and progressive Select All from the current exact text block to the whole document. Word rules SHALL ignore whitespace-only segments, preserve valid UTF-8 boundaries, and avoid scanning unrelated document lines. These commands SHALL use the existing canonical selection and mutation paths, with one undoable mutation for word deletion.
+The editor SHALL provide Unicode-aware previous/next-word movement and deletion, Shift+Home/End selection, PageUp/PageDown navigation, and progressive Select All from the current exact text block to the whole document. Word rules SHALL ignore whitespace-only segments, preserve valid UTF-8 boundaries, and avoid scanning unrelated document lines. These commands SHALL use the existing canonical selection and mutation paths, with one undoable mutation for word deletion. Source paragraph selection SHALL recognize blank separators with LF and CRLF while preserving the original source offsets.
 
 #### Scenario: Word movement and deletion
 - **WHEN** the user invokes previous/next-word movement or deletion in editable text
@@ -2726,6 +2726,11 @@ The editor SHALL provide Unicode-aware previous/next-word movement and deletion,
 - **THEN** that content is selected without including a structural prefix when a narrower payload range exists
 - **WHEN** the user invokes Select All again with that exact content selected
 - **THEN** the complete document is selected
+
+#### Scenario: Source paragraph selection in a CRLF document
+- **WHEN** the user invokes Select All from a collapsed caret inside one of several CRLF-separated paragraphs
+- **THEN** the first invocation selects only the containing paragraph
+- **AND** replacement edits only that paragraph and Undo restores the original bytes
 
 ### Requirement: Mouse block selection and ordinary editor context menu
 Source SHALL support double-click word selection and triple-click current-block selection, and Visual Edit SHALL support triple-click current-block selection. The editor SHALL provide an ordinary context menu offering Cut, Copy, Paste and Select All, using existing command paths and appropriate availability for the current selection. In Visual Edit it SHALL additionally offer selection Delete and share compact presentation with block commands while using a combined catalog of block, selection and applicable table commands. Visual Edit Copy, Cut and Delete SHALL operate only on the captured selected text or structured content, including partial paragraphs, cross-block ranges and table-cell selections; they SHALL be disabled when nothing is selected. Paste SHALL replace the current captured selection or insert at the exact mouse location for pointer invocation or the current caret for keyboard invocation, without expanding to a block or falling back to its content end. Supported inline formatting and Link/Formula/Image settings SHALL target the current exact selection, or exact mouse/caret position when there is no selection; supported inline formats SHALL include Bold, Italic, Inline Code, Strikethrough and Link; unsupported contexts SHALL disable those actions. Whole-block transforms, duplication, movement, Add Below and explicitly labeled Delete Block SHALL also remain reachable in the context menu and SHALL target the clicked block. Generic Copy/Cut/Paste/Delete Selection SHALL retain fine editing semantics. Opening or dismissing the menu SHALL NOT mutate document text, version, history, selection, or derived caches. Visual Edit activation SHALL reject changed document identity/version or selection and SHALL use the document selection even if another input field retains focus.

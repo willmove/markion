@@ -1,6 +1,6 @@
 use super::application::{
-    AutosaveCompletion, AutosaveOutcome, ExternalCheckRequest, file_tree_watch_event_is_relevant,
-    git_watch_event_is_relevant,
+    AutosaveCompletion, AutosaveGate, AutosaveOutcome, AutosaveRequest, ExternalCheckRequest,
+    file_tree_watch_event_is_relevant, git_watch_event_is_relevant, run_autosave,
 };
 use super::editing::visual_selection_format_target_for_block;
 use super::memory::{MemoryProfile, MemoryWarmup};
@@ -20743,6 +20743,247 @@ fn autosave_silent_save_off_keeps_named_file_and_recovery(cx: &mut TestAppContex
     assert_eq!(recovered.text, "in-memory");
 }
 
+#[gpui::test]
+fn issue_28_retained_untitled_recovery_survives_restart_and_new_autosave(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.recovery_dir = recovery_dir.clone();
+        app.session_path = dir.path().join("session.toml");
+        app.auto_save_preferences = AutoSavePreferences::default();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+        app
+    });
+
+    let (retained, retained_bytes) = app.update(cx, |app, cx| {
+        // Reproduce the earlier process having used the same process-local tab ID.
+        let reused_id = app.active_tab().document_tab().unwrap().recovery_id;
+        let retained = MarkdownDocument::from_text("# Retained garden draft\n盆栽\n")
+            .save_recovery_copy_with_id(&recovery_dir, reused_id)
+            .unwrap();
+        let retained_bytes = fs::read(&retained).unwrap();
+        app.present_recovery_inventory(markion::inspect_recovery_files(&recovery_dir).unwrap(), cx);
+        app.close_recovery_manager(cx);
+        app.active_tab_mut()
+            .document
+            .set_text("# New grocery draft");
+        let generation = app.active_tab().autosave_generation;
+        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        (retained, retained_bytes)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(fs::read(&retained).unwrap(), retained_bytes);
+    let new_snapshot = app.update(cx, |app, cx| {
+        let snapshot = app.active_tab().last_recovery_file.clone().unwrap();
+        assert_ne!(snapshot, retained);
+        app.active_tab_mut()
+            .document
+            .set_text("# New grocery draft updated");
+        let generation = app.active_tab().autosave_generation;
+        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        snapshot
+    });
+    cx.run_until_parked();
+
+    assert_eq!(fs::read(&retained).unwrap(), retained_bytes);
+    assert_eq!(
+        markion::inspect_recovery_files(&recovery_dir)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        load_recovery_file(&new_snapshot).unwrap().text,
+        "# New grocery draft updated"
+    );
+    app.update(cx, |app, cx| {
+        assert_eq!(
+            app.active_tab().last_recovery_file.as_ref(),
+            Some(&new_snapshot)
+        );
+        app.present_recovery_inventory(markion::inspect_recovery_files(&recovery_dir).unwrap(), cx);
+        app.restore_recovery_entry(&retained, cx).unwrap();
+        assert_eq!(
+            app.active_tab().document.text(),
+            "# Retained garden draft\n盆栽\n"
+        );
+        assert!(app.active_tab().document.is_dirty());
+    });
+}
+
+fn hold_older_autosave(app: &mut MarkionApp, text: &str) -> AutosaveRequest {
+    let tab = app.active_tab_mut();
+    let gate = Arc::new(AutosaveGate::default());
+    tab.autosave_gate = Some(gate.clone());
+    tab.autosave_in_flight = true;
+    tab.autosave_generation = 2;
+    tab.document.set_text("newer manual text");
+    AutosaveRequest {
+        recovery_id: tab.recovery_id,
+        generation: 1,
+        path: tab.document.path().map(Path::to_path_buf),
+        known: tab.document.disk_identity().cloned(),
+        text: text.into(),
+        previous_recovery: tab.last_recovery_file.clone(),
+        silent_save: true,
+        write_admission: None,
+        repository_epoch: None,
+        gate,
+    }
+}
+
+#[gpui::test]
+fn issue_29_manual_save_reconciles_the_unapplied_autosave(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let path = dir.path().join("handoff.md");
+    fs::write(&path, "baseline").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.session_path = dir.path().join("session.toml");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app
+    });
+
+    let request = app.update(cx, |app, _| hold_older_autosave(app, "older autosave"));
+    let outcome = run_autosave(&recovery_dir, request);
+    assert!(matches!(outcome.result, AutosaveOutcome::Saved { .. }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "older autosave");
+
+    app.update(cx, |app, cx| {
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+        assert!(!app.active_tab().document.is_dirty());
+        assert!(!app.active_tab().autosave_in_flight);
+        assert!(app.active_tab().last_recovery_file.is_none());
+        let manual_identity = app.active_tab().document.disk_identity().cloned();
+
+        // A new autosave can already be queued when the old result arrives.
+        let new_gate = Arc::new(AutosaveGate::default());
+        app.active_tab_mut().autosave_gate = Some(new_gate.clone());
+        app.active_tab_mut().autosave_in_flight = true;
+        app.apply_autosave_outcome(outcome, cx);
+        assert!(app.active_tab().autosave_in_flight);
+        assert!(Arc::ptr_eq(
+            app.active_tab().autosave_gate.as_ref().unwrap(),
+            &new_gate
+        ));
+        assert_eq!(
+            app.active_tab().document.disk_identity(),
+            manual_identity.as_ref()
+        );
+    });
+    assert_eq!(fs::read_to_string(&path).unwrap(), "newer manual text");
+    assert!(
+        markion::list_recovery_files(&recovery_dir)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[gpui::test]
+fn issue_29_conflicted_manual_save_keeps_the_recovery(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let path = dir.path().join("conflict.md");
+    fs::write(&path, "baseline").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.session_path = dir.path().join("session.toml");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app
+    });
+    let request = app.update(cx, |app, _| hold_older_autosave(app, "recoverable text"));
+    fs::write(&path, "externally changed source").unwrap();
+    let outcome = run_autosave(&recovery_dir, request);
+    let AutosaveOutcome::SaveFailed {
+        recovery,
+        external_conflict: true,
+        ..
+    } = &outcome.result
+    else {
+        panic!("autosave should preserve a recovery on conflict");
+    };
+    let recovery = recovery.clone();
+    app.update(cx, |app, cx| {
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Conflict);
+        assert!(app.active_tab().document.is_dirty());
+        app.apply_autosave_outcome(outcome, cx);
+        assert_eq!(
+            app.active_tab().last_recovery_file.as_ref(),
+            Some(&recovery)
+        );
+    });
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "externally changed source"
+    );
+    assert_eq!(
+        load_recovery_file(&recovery).unwrap().text,
+        "recoverable text"
+    );
+}
+
+#[gpui::test]
+fn issue_29_manual_save_still_checks_for_changes_after_an_internal_commit(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("external.md");
+    fs::write(&path, "baseline").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.session_path = dir.path().join("session.toml");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app
+    });
+    let request = app.update(cx, |app, _| hold_older_autosave(app, "older autosave"));
+    let outcome = run_autosave(&dir.path().join("recovery"), request);
+    assert!(matches!(outcome.result, AutosaveOutcome::Saved { .. }));
+    fs::write(&path, "externally changed after autosave").unwrap();
+    app.update(cx, |app, _| {
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Conflict);
+        assert!(app.active_tab().document.is_dirty());
+    });
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "externally changed after autosave"
+    );
+}
+
+#[gpui::test]
+fn issue_29_explicit_save_cancels_an_autosave_before_it_starts(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("queued.md");
+    fs::write(&path, "baseline").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.session_path = dir.path().join("session.toml");
+        app.recovery_dir = dir.path().join("recovery");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app
+    });
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("older autosave");
+        let generation = app.active_tab().autosave_generation;
+        app.run_due_autosave(0, generation, app.recovery_dir.clone(), cx);
+        assert!(app.active_tab().autosave_in_flight);
+        app.active_tab_mut().document.set_text("newer manual text");
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(!app.active_tab().document.is_dirty());
+        assert!(app.active_tab().last_recovery_file.is_none());
+        assert!(app.active_tab().external_conflict.is_none());
+    });
+    assert_eq!(fs::read_to_string(path).unwrap(), "newer manual text");
+    assert!(
+        markion::list_recovery_files(dir.path().join("recovery"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
 fn discard_during_in_flight_autosave_writes_nothing(silent_save: bool, cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("discard.md");
@@ -26784,6 +27025,50 @@ fn sync_completion_messages_name_held_back_files(cx: &mut TestAppContext) {
             !app.git_operations
                 .is_mutating(&directory.path().join("x.md"))
         );
+    });
+}
+
+#[gpui::test]
+fn issue_32_source_select_all_replaces_only_the_current_crlf_paragraph(cx: &mut TestAppContext) {
+    let source = "North cedar.\r\n\r\n中間段落。\r\n\r\nSouth maple.";
+    let start = source.find('中').unwrap();
+    let end = start + "中間段落。".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences.enabled = false;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.move_to(start + '中'.len_utf8(), cx);
+            let version = app.active_tab().document.version();
+            let preview = app.active_tab().document.preview_blocks_shared();
+            app.select_all(&SelectAll, window, cx);
+            assert_eq!(app.active_tab().selected_range, start..end);
+            assert_eq!(app.active_tab().document.version(), version);
+            assert!(Arc::ptr_eq(
+                &preview,
+                &app.active_tab().document.preview_blocks_shared()
+            ));
+            EntityInputHandler::replace_text_in_range(app, None, "x", window, cx);
+            assert_eq!(
+                app.active_tab().document.text(),
+                "North cedar.\r\n\r\nx\r\n\r\nSouth maple."
+            );
+            app.undo(&Undo, window, cx);
+            assert_eq!(
+                app.active_tab().document.text().as_bytes(),
+                source.as_bytes()
+            );
+
+            app.move_to(start, cx);
+            app.select_all(&SelectAll, window, cx);
+            assert_eq!(app.active_tab().selected_range, start..end);
+            app.select_all(&SelectAll, window, cx);
+            assert_eq!(app.active_tab().selected_range, 0..source.len());
+        });
     });
 }
 

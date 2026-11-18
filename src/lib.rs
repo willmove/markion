@@ -355,8 +355,9 @@ use editing::{
 };
 
 use storage::{
+    atomic::{atomic_create, with_document_write_lock},
     atomic_write,
-    recovery::{recovery_file_path, stable_recovery_file_path},
+    recovery::{new_recovery_file_path, recovery_file_path, stable_recovery_file_path},
 };
 
 /// The list shapes [`MarkdownDocument::apply_list`] produces, with toggle
@@ -516,14 +517,28 @@ pub fn save_text_snapshot(
     known: Option<&DiskIdentity>,
     text: &str,
 ) -> io::Result<DiskIdentity> {
-    match check_path_state(path, known, false) {
-        ExternalCheckOutcome::Unchanged { .. } => {}
-        ExternalCheckOutcome::Modified { .. } => return Err(external_change_error(path, false)),
-        ExternalCheckOutcome::Missing => return Err(external_change_error(path, true)),
-        ExternalCheckOutcome::Failed(err) => return Err(err),
-    }
-    atomic_write(path, text.as_bytes())?;
-    DiskIdentity::for_bytes(path, text.as_bytes())
+    save_text_snapshot_before_commit(path, known, text, || {})
+}
+
+fn save_text_snapshot_before_commit(
+    path: &Path,
+    known: Option<&DiskIdentity>,
+    text: &str,
+    before_commit: impl FnOnce(),
+) -> io::Result<DiskIdentity> {
+    with_document_write_lock(path, || {
+        match check_path_state(path, known, false) {
+            ExternalCheckOutcome::Unchanged { .. } => {}
+            ExternalCheckOutcome::Modified { .. } => {
+                return Err(external_change_error(path, false));
+            }
+            ExternalCheckOutcome::Missing => return Err(external_change_error(path, true)),
+            ExternalCheckOutcome::Failed(err) => return Err(err),
+        }
+        before_commit();
+        atomic_write(path, text.as_bytes())?;
+        DiskIdentity::for_bytes(path, text.as_bytes())
+    })
 }
 
 /// Number of content-free mutation records retained per live document.
@@ -886,13 +901,11 @@ impl MarkdownDocument {
             .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
             .clone();
-        match self.check_disk_state()? {
-            DiskState::Unchanged => {}
-            DiskState::Modified => return Err(external_change_error(&path, false)),
-            DiskState::Missing => return Err(external_change_error(&path, true)),
-        }
-        self.write_to_path(&path)?;
-        Ok(())
+        with_document_write_lock(&path, || match self.check_disk_state()? {
+            DiskState::Unchanged => self.write_to_path(&path),
+            DiskState::Modified => Err(external_change_error(&path, false)),
+            DiskState::Missing => Err(external_change_error(&path, true)),
+        })
     }
 
     /// Explicitly replaces the current destination even when its on-disk
@@ -903,7 +916,7 @@ impl MarkdownDocument {
             .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
             .clone();
-        self.write_to_path(&path)
+        with_document_write_lock(&path, || self.write_to_path(&path))
     }
 
     fn write_to_path(&mut self, path: &Path) -> io::Result<()> {
@@ -915,12 +928,11 @@ impl MarkdownDocument {
 
     pub fn save_as(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
-        atomic_write(path, self.text.as_bytes())?;
-        let identity = DiskIdentity::for_bytes(path, self.text.as_bytes())?;
-        self.path = Some(path.to_path_buf());
-        self.disk_identity = Some(identity);
-        self.dirty = false;
-        Ok(())
+        with_document_write_lock(path, || {
+            self.write_to_path(path)?;
+            self.path = Some(path.to_path_buf());
+            Ok(())
+        })
     }
 
     pub fn disk_identity(&self) -> Option<&DiskIdentity> {
@@ -4950,9 +4962,8 @@ impl MarkdownDocument {
     }
 }
 
-/// Body of [`MarkdownDocument::save_recovery_copy_with_id`], free of `&self`
-/// so autosave can write the snapshot on a background thread from captured
-/// path/identity/text state.
+/// Writes a recovery copy addressed by a caller-assigned stable ID.
+/// Use [`write_recovery_snapshot`] when the caller does not already own an ID.
 pub fn write_recovery_copy(
     dir: &Path,
     recovery_id: u64,
@@ -4960,8 +4971,41 @@ pub fn write_recovery_copy(
     identity: Option<&DiskIdentity>,
     text: &str,
 ) -> io::Result<PathBuf> {
-    fs::create_dir_all(dir)?;
     let path = stable_recovery_file_path(dir, original_path, recovery_id);
+    atomic_write(&path, recovery_payload(original_path, identity, text))?;
+    Ok(path)
+}
+
+/// Publishes a new recovery snapshot or updates one this tab already owns.
+/// A new path is committed without replacing any retained recovery.
+pub fn write_recovery_snapshot(
+    dir: &Path,
+    owned_path: Option<&Path>,
+    original_path: Option<&Path>,
+    identity: Option<&DiskIdentity>,
+    text: &str,
+) -> io::Result<PathBuf> {
+    let payload = recovery_payload(original_path, identity, text);
+    if let Some(path) = owned_path {
+        atomic_write(path, &payload)?;
+        return Ok(path.to_path_buf());
+    }
+
+    loop {
+        let path = new_recovery_file_path(dir, original_path);
+        match atomic_create(&path, payload.as_bytes()) {
+            Ok(()) => return Ok(path),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn recovery_payload(
+    original_path: Option<&Path>,
+    identity: Option<&DiskIdentity>,
+    text: &str,
+) -> String {
     let original_path = original_path
         .map(|path| path.display().to_string())
         .unwrap_or_default();
@@ -4978,11 +5022,9 @@ pub fn write_recovery_copy(
                 identity.digest.to_string(),
             )
         });
-    let payload = format!(
+    format!(
         "markion-recovery-v2\npath:{original_path}\ndisk-modified-ms:{modified}\ndisk-len:{len}\ndisk-digest:{digest}\n---\n{text}"
-    );
-    atomic_write(&path, payload.as_bytes())?;
-    Ok(path)
+    )
 }
 
 fn sanitize_visual_field_replacement(
@@ -9138,6 +9180,19 @@ Intro.
     }
 
     #[test]
+    fn issue_32_paragraph_range_keeps_original_offsets_with_mixed_endings() {
+        let text = "first\r\n \t\n第二段\r\n續行\n\r\nlast\r\n";
+        let doc = MarkdownDocument::from_text(text);
+        let start = text.find('第').unwrap();
+        let end = text.find("\n\r\nlast").unwrap();
+        for offset in [start, start + 1, end] {
+            assert_eq!(doc.paragraph_range_at(offset), start..end);
+        }
+        let last = text.find("last").unwrap();
+        assert_eq!(doc.paragraph_range_at(text.len()), last..last + 4);
+    }
+
+    #[test]
     fn view_mode_cycles_through_all_modes() {
         assert_eq!(ViewMode::default_mode(), ViewMode::VisualEdit);
         assert_eq!(ViewMode::default(), ViewMode::VisualEdit);
@@ -9446,6 +9501,56 @@ Intro.
         let err = save_text_snapshot(&path, Some(&saved_identity), "three").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn issue_29_older_autosave_cannot_replace_a_successful_manual_save() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("overlap.md");
+        fs::write(&path, "baseline source").unwrap();
+        let mut doc = MarkdownDocument::open(&path).unwrap();
+        let known = doc.disk_identity().cloned();
+        doc.set_text("newer manual");
+
+        thread::scope(|scope| {
+            let (checked_tx, checked_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let autosave = scope.spawn(|| {
+                save_text_snapshot_before_commit(&path, known.as_ref(), "old", move || {
+                    checked_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                })
+            });
+            checked_rx.recv().unwrap();
+
+            let (finished_tx, finished_rx) = mpsc::channel();
+            let manual = scope.spawn(move || {
+                let result = doc.save();
+                finished_tx.send(()).unwrap();
+                (doc, result)
+            });
+            // If the writers are serialized, the explicit save cannot complete
+            // while the older writer owns the destination. Release it either way.
+            let _ = finished_rx.recv_timeout(Duration::from_secs(2));
+            release_tx.send(()).unwrap();
+            let auto_result = autosave.join().unwrap();
+            let (doc, manual_result) = manual.join().unwrap();
+            let disk = fs::read_to_string(&path).unwrap();
+            match manual_result {
+                Ok(()) => {
+                    assert_eq!(disk, "newer manual");
+                    assert!(!doc.is_dirty());
+                }
+                Err(err) => {
+                    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+                    assert!(doc.is_dirty());
+                    assert!(auto_result.is_ok());
+                    assert_eq!(disk, "old");
+                }
+            }
+        });
     }
 
     #[test]

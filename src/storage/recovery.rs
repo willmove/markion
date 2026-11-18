@@ -193,15 +193,31 @@ pub(crate) fn stable_recovery_file_path(
     original_path: Option<&Path>,
     recovery_id: u64,
 ) -> PathBuf {
+    let label = recovery_file_label(original_path);
+    dir.join(format!("{label}-{recovery_id:016x}.md"))
+}
+
+pub(crate) fn new_recovery_file_path(dir: &Path, original_path: Option<&Path>) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let label = recovery_file_label(original_path);
+    dir.join(format!("{label}-{millis:x}-{pid:x}-{id:x}.md"))
+}
+
+fn recovery_file_label(original_path: Option<&Path>) -> String {
     let label = original_path
         .and_then(Path::file_stem)
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.is_empty())
         .unwrap_or("untitled");
-    dir.join(format!(
-        "{}-{recovery_id:016x}.md",
-        sanitize_file_label(label)
-    ))
+    sanitize_file_label(label)
 }
 
 fn sanitize_file_label(label: &str) -> String {

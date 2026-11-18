@@ -1,38 +1,84 @@
 //! Same-directory atomic file replacement.
 
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, LazyLock, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Document writers share the destination lock from the freshness check
+/// through replacement and disk identity capture.
+pub(crate) fn with_document_write_lock<T>(path: &Path, write: impl FnOnce() -> T) -> T {
+    type WriteLocks = Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>;
+    static ACTIVE: LazyLock<WriteLocks> = LazyLock::new(Mutex::default);
+
+    let key = dunce::canonicalize(path).unwrap_or_else(|_| {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        match (dunce::canonicalize(parent), path.file_name()) {
+            (Ok(parent), Some(name)) => parent.join(name),
+            _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+        }
+    });
+    let lock = {
+        let mut active = ACTIVE.lock().unwrap_or_else(|error| error.into_inner());
+        active.retain(|_, lock| lock.strong_count() > 0);
+        let entry = active.entry(key).or_default();
+        entry.upgrade().unwrap_or_else(|| {
+            let lock = Arc::new(Mutex::new(()));
+            *entry = Arc::downgrade(&lock);
+            lock
+        })
+    };
+    let _guard = lock.lock().unwrap_or_else(|error| error.into_inner());
+    write()
+}
 
 /// Durably writes `bytes` to a temporary sibling and atomically replaces
 /// `path`. The destination is never truncated before the complete replacement
 /// is ready, and the temporary file is removed on every error path.
 pub fn atomic_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
-    let path = path.as_ref();
+    atomic_write_with(path.as_ref(), bytes.as_ref(), true)
+}
+
+/// Publishes a complete file without replacing an existing destination.
+pub(crate) fn atomic_create(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with(path, bytes, false)
+}
+
+fn atomic_write_with(path: &Path, bytes: &[u8], replace_existing: bool) -> io::Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
 
-    let destination_permissions = match fs::metadata(path) {
-        Ok(metadata) => Some(metadata.permissions()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err),
+    let destination_permissions = if replace_existing {
+        match fs::metadata(path) {
+            Ok(metadata) => Some(metadata.permissions()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        }
+    } else {
+        None
     };
 
     let temp = unique_temp_path(path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
-        file.write_all(bytes.as_ref())?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         if let Some(permissions) = destination_permissions {
             file.set_permissions(permissions)?;
@@ -40,7 +86,7 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Resu
             file.sync_all()?;
         }
         drop(file);
-        replace_file(&temp, path)?;
+        commit_file(&temp, path, replace_existing)?;
         sync_parent(parent);
         Ok(())
     })();
@@ -61,18 +107,25 @@ fn unique_temp_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(not(windows))]
-fn replace_file(temp: &Path, target: &Path) -> io::Result<()> {
-    fs::rename(temp, target)
+fn commit_file(temp: &Path, target: &Path, replace_existing: bool) -> io::Result<()> {
+    if replace_existing {
+        fs::rename(temp, target)
+    } else {
+        fs::hard_link(temp, target)?;
+        let _ = fs::remove_file(temp);
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
-fn replace_file(temp: &Path, target: &Path) -> io::Result<()> {
+fn commit_file(temp: &Path, target: &Path, replace_existing: bool) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::{
-        Win32::Storage::FileSystem::{
-            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        Win32::{
+            Foundation::{ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS},
+            Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
         },
-        core::PCWSTR,
+        core::{HRESULT, PCWSTR},
     };
 
     let temp = temp
@@ -85,15 +138,22 @@ fn replace_file(temp: &Path, target: &Path) -> io::Result<()> {
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
-    // SAFETY: both slices are NUL-terminated and remain alive for the call.
-    unsafe {
-        MoveFileExW(
-            PCWSTR(temp.as_ptr()),
-            PCWSTR(target.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
+    let mut flags = MOVEFILE_WRITE_THROUGH;
+    if replace_existing {
+        flags |= MOVEFILE_REPLACE_EXISTING;
     }
-    .map_err(io::Error::other)
+    // SAFETY: both slices are NUL-terminated and remain alive for the call.
+    unsafe { MoveFileExW(PCWSTR(temp.as_ptr()), PCWSTR(target.as_ptr()), flags) }.map_err(|err| {
+        if !replace_existing
+            && [ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS]
+                .iter()
+                .any(|code| HRESULT::from_win32(code.0) == err.code())
+        {
+            io::Error::new(io::ErrorKind::AlreadyExists, err)
+        } else {
+            io::Error::other(err)
+        }
+    })
 }
 
 #[cfg(unix)]
@@ -109,6 +169,17 @@ fn sync_parent(_parent: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_create_does_not_replace_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("retained.md");
+        atomic_create(&path, b"old snapshot").unwrap();
+        let error = atomic_create(&path, b"unrelated snapshot").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"old snapshot");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn atomic_write_creates_and_replaces_without_temp_files() {

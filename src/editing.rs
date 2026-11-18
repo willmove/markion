@@ -11,22 +11,36 @@ pub(crate) fn paragraph_range_at(text: &str, byte_index: usize) -> Range<usize> 
         return 0..0;
     }
 
-    let index = clamp_to_char_boundary(text, byte_index);
-    let mut start = text[..index]
-        .rfind("\n\n")
-        .map_or(0, |position| position + 2);
-    while start < text.len() && text[start..].starts_with('\n') {
-        start += 1;
+    let mut index = clamp_to_char_boundary(text, byte_index);
+    if index == text.len() && text.ends_with('\n') {
+        index -= 1;
+    }
+    let line_start = text[..index].rfind('\n').map_or(0, |offset| offset + 1);
+    let mut end = line_start;
+    let mut next_start = line_start;
+    for line in text[line_start..].split_inclusive('\n') {
+        let content = line
+            .strip_suffix('\n')
+            .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line));
+        if content.trim_matches([' ', '\t']).is_empty() {
+            if next_start == line_start {
+                return line_start..line_start + content.len();
+            }
+            break;
+        }
+        end = next_start + content.len();
+        next_start += line.len();
     }
 
-    let mut end = text[index..]
-        .find("\n\n")
-        .map_or(text.len(), |position| index + position);
-    while end > start && text[..end].ends_with('\n') {
-        end -= 1;
+    let mut start = line_start;
+    for line in text[..line_start].rsplit_terminator('\n') {
+        let content = line.strip_suffix('\r').unwrap_or(line);
+        if content.trim_matches([' ', '\t']).is_empty() {
+            break;
+        }
+        start -= line.len() + 1;
     }
-
-    start..end.max(start)
+    start..end
 }
 
 pub(crate) fn adjust_offset_for_line_marker_removal(

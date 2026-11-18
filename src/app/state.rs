@@ -1200,6 +1200,7 @@ impl DocumentTabState {
         if let Some(gate) = self.autosave_gate.take() {
             gate.cancel();
         }
+        self.autosave_in_flight = false;
         if let Some(recovery) = self.last_recovery_file.take() {
             let _ = delete_recovery_file(recovery);
         }
