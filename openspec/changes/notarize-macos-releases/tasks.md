@@ -4,16 +4,13 @@
 
 ## 1. Signing-mode selection
 
-- [x] 1.1 Add `scripts/configure-macos-signing.sh`. It selects `adhoc`, `developer-id`, or `developer-id` + notarize from the six Apple secrets and the ref: notarize only on `v*` tags and `workflow_dispatch`. It rewrites the working copy's `signing-identity` with a TOML-safe value and exports the cargo-packager variables via `$GITHUB_ENV` only when set. It writes the `.p8` key with mode 0600, fails on partial secret sets or on a non-`Developer ID Application:` identity, and warns on un-notarized tag builds. Verified locally against 10 secret/ref combinations: modes, exported variable names, identity rewrite with quotes, key-file mode, and error/warning messages.
+- [x] 1.1 Add `scripts/configure-macos-signing.sh` to rewrite the build-time signing identity safely and export the signing and notarization settings. Store the private key outside the source tree with mode 0600.
 
 ## 2. Workflow integration
 
 - [x] 2.1 In `.github/workflows/release.yml`, run the configuration script in both macOS jobs before packaging. Map the secrets in through step-level `env:` only.
 - [x] 2.2 Add `scripts/notarize-macos-dmg.sh` and a **Notarize and staple DMG** step gated on `notarize == 'true'`. The step submits with `notarytool --wait --timeout 1h`, requires `Accepted` (printing the notary log otherwise), and staples.
-- [x] 2.3 Replace the ad-hoc-only gate with a mode-aware **Verify macOS code signature** step:
-  - ad-hoc mode requires `Signature=adhoc`;
-  - Developer ID mode requires the authority, team identifier, hardened runtime, and the DMG signature;
-  - notarize mode requires `stapler validate` on the `.app` and DMG, plus `spctl` `source=Notarized Developer ID` when the runner's Gatekeeper is enabled.
+- [x] 2.3 Verify ad-hoc signatures in development CI and require Developer ID signatures plus notarization in release jobs.
 - [x] 2.4 Update the `packager.toml` signing comments. The committed identity stays `"-"`, and the comments note that CI rewrites it.
 
 ## 3. Documentation
@@ -26,6 +23,13 @@
 ## 4. Validation
 
 - [x] 4.1 `openspec validate notarize-macos-releases --strict` and `openspec validate --all --strict --no-interactive`. Parse `release.yml` as YAML. Run `bash -n` on both scripts.
-- [ ] 4.2 Maintainer: enroll in the Apple Developer Program, then create the Developer ID Application certificate and the App Store Connect API key per `docs/macos-signing.md`.
+- [x] 4.2 Verify Apple Developer Program enrollment and issue the G2 Developer ID Application certificate. Verify the certificate and its matching private key by producing a timestamped code signature in a temporary keychain.
+- [ ] 4.2a Obtain App Store Connect API access and create the team key for notarization.
 - [ ] 4.3 Maintainer: add the six repository secrets. Run the release workflow manually on `main` with an empty `mirror_tag`. Confirm that both macOS jobs log `notarize: true` and pass verification, and that a browser-downloaded artifact opens on a Mac without Terminal commands.
 - [ ] 4.4 After the first notarized tag release, drop the "every release up to v0.4.9" qualifiers where they no longer help, then archive this change.
+
+## 5. Required public signing and verification
+
+- [x] 5.1 Require all Apple credentials for tags and manual signing rehearsals. Keep branch and pull request packages ad-hoc. Verify missing credentials, invalid credentials, and the full configuration path with test values.
+- [x] 5.2 Verify the final DMG and its embedded app signatures, tickets and architecture. The new verifier rejected the release's SHA-256-matched v0.6.1 Apple Silicon DMG on macOS with Gatekeeper enabled. The existing app seal passed verification, but Gatekeeper rejected it and the app had no stapled ticket.
+- [x] 5.3 Update the signing and release runbooks to match the gate.

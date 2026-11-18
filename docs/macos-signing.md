@@ -6,28 +6,24 @@ This guide is for maintainers. It explains how to make the macOS DMGs open with 
 
 Browsers tag every download with the `com.apple.quarantine` attribute. When a quarantined app is first opened, Gatekeeper requires a **Developer ID** signature and an Apple **notarization** ticket. Markion's default build is sealed with a free ad-hoc signature (`[macos] signing-identity = "-"` in `packager.toml`). That signature is valid: the v0.4.9 DMG has an intact seal, a bound Info.plist and matching resource hashes. However, an ad-hoc signature carries no developer identity, so current macOS on Apple silicon refuses the quarantined app and words that refusal as "damaged". macOS 15 removed the Control-click → Open bypass. Without notarization, users must clear the quarantine flag (`xattr -cr`) or download with a tool that does not set it (`curl -LO`).
 
-Notarization requires a paid [Apple Developer Program](https://developer.apple.com/programs/) membership (US$99 per year). Once the secrets below are configured, the release workflow signs, notarizes and staples both macOS DMGs automatically. Without them it keeps producing ad-hoc builds and warns on every tag.
+Notarization requires a paid [Apple Developer Program](https://developer.apple.com/programs/) membership. The release workflow requires the secrets below before it can publish. It signs, notarizes and staples both macOS DMGs automatically.
 
 ## What the workflow does
 
-`scripts/configure-macos-signing.sh` runs in both macOS jobs (arm64 and the cross-compiled x86_64) and selects a mode:
+`scripts/configure-macos-signing.sh` runs before packaging both architectures on tagged releases and manual signing rehearsals.
 
-| Secrets configured | Branch / PR build | `v*` tag or manual run |
+| Secrets configured | Branch / PR build | `v*` tag or manual signing rehearsal |
 | --- | --- | --- |
-| none | ad-hoc | ad-hoc, plus a workflow warning |
-| Developer ID only | Developer ID | Developer ID (not notarized), plus a workflow warning |
-| Developer ID + API key | Developer ID | **Developer ID + notarized + stapled** |
-| an incomplete set | job fails | job fails |
+| complete | ad-hoc | **Developer ID + notarized + stapled** |
+| missing any | ad-hoc | job fails before packaging |
 
-In notarizing runs, cargo-packager signs `Markion.app` with the hardened runtime and a secure timestamp. It then notarizes the app with `notarytool` and staples it. Next it builds and signs the DMG, and `scripts/notarize-macos-dmg.sh` notarizes and staples the DMG. The **Verify macOS code signature** step checks the following and fails the job when any check does not hold:
+In signing runs, cargo-packager signs `Markion.app` with the hardened runtime and a secure timestamp. It then notarizes the app with `notarytool` and staples it. Next it builds and signs the DMG, and `scripts/notarize-macos-dmg.sh` notarizes and staples the DMG. The **Verify macOS code signature** step mounts the final DMG read-only and verifies:
 
-- the `Developer ID Application` authority;
-- the team identifier;
-- the hardened runtime;
-- the stapled tickets on the `.app` and the DMG;
-- `spctl` reporting `source=Notarized Developer ID`, where the runner has Gatekeeper enabled.
+- Developer ID Application signatures and stapled tickets on the DMG and its embedded app
+- The embedded app's team identifier, hardened runtime, timestamp and expected executable architecture
+- `spctl` reporting `source=Notarized Developer ID` for the DMG and its embedded app when Gatekeeper assessments are enabled
 
-Fork pull requests receive no secrets and keep building ad-hoc.
+Branch pushes and pull requests build ad-hoc without reading Apple secrets.
 
 ## One-time setup
 
@@ -54,7 +50,7 @@ You need a Mac to create the certificate. Only the **Account Holder** of the dev
 
 ### 2. Create an App Store Connect API key for notarization
 
-1. Go to [App Store Connect → Users and Access → Integrations → App Store Connect API](https://appstoreconnect.apple.com/access/integrations/api), open **Team Keys**, and generate a key with the **Developer** role.
+1. Go to [App Store Connect → Users and Access → Integrations → App Store Connect API](https://appstoreconnect.apple.com/access/integrations/api). If prompted, the Account Holder first requests API access. Open **Team Keys** and generate a key with the **Developer** role.
 2. Download `AuthKey_<KEYID>.p8`. Apple allows this download only once, so store it safely.
 3. Note the **Key ID** and the **Issuer ID** shown above the key list.
 
@@ -86,18 +82,18 @@ Then delete the local `.p12`, `.b64` and `.p8` copies, or keep them only in a pa
 
 1. Open **Actions → release → Run workflow** on `main` and leave `mirror_tag` empty. A manual run notarizes but publishes nothing.
 2. Both macOS jobs should log `macOS signing mode: developer-id; notarize: true`, and both should pass **Notarize and staple DMG** and **Verify macOS code signature**.
-3. Download the `markion-macos-arm64` artifact on a Mac through a browser, so the download is quarantined. Open the DMG, drag Markion to Applications, and double-click it. You should see at most the standard "downloaded from the Internet" confirmation. To verify from the command line:
+3. Download the matching macOS artifact through a browser on a Mac with Gatekeeper assessments enabled. Open the DMG, drag Markion to Applications, and double-click it. You should see at most the standard "downloaded from the Internet" confirmation. Verify the DMG and its embedded app from the command line:
 
    ```bash
-   spctl --assess --type execute -vv /Applications/Markion.app   # source=Notarized Developer ID
-   xcrun stapler validate /Applications/Markion.app
+   bash scripts/verify-macos-release.sh /path/to/Markion_X.Y.Z_aarch64.dmg arm64
+   bash scripts/verify-macos-release.sh /path/to/Markion_X.Y.Z_x64.dmg x86_64
    ```
 
-After that, tag releases as usual (see [release-process.md](release-process.md)).
+Follow the [release process](release-process.md) for the stable tag and repeat verification on the public downloads.
 
 ## Maintenance
 
-- **Certificate expiry:** Developer ID Application certificates are valid for five years. Once one expires, `codesign` fails and so does the tag build; no unsigned DMG is published. Create a new certificate, then update `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` and, if the name changed, `APPLE_SIGNING_IDENTITY`. Apps already notarized keep opening after the certificate expires.
+- **Certificate expiry.** Check the expiry shown in Apple Developer and rotate before that date. Create a new G2 certificate and update `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` and, if the name changed, `APPLE_SIGNING_IDENTITY`. A secure timestamp preserves the validity of existing signatures after the signing certificate expires. [Apple’s Developer ID renewal guidance](https://developer.apple.com/news/?id=w4atic4c).
 - **API key rotation:** revoke the key in App Store Connect, generate a new one, and update `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_PRIVATE_KEY`.
-- **Notarization rejected:** the job prints the notary log. The usual causes are an unsigned nested binary, a missing hardened runtime or a missing secure timestamp, all of which cargo-packager handles. Fix the cause and re-run the workflow on the same tag. Do not move the tag.
+- **Notarization rejected.** The job prints the notary log. If the problem was credentials or an Apple service outage, correct the issue and re-run the failed jobs. If it requires a repository change, fix it in a subsequent release commit under a fresh tag.
 - **Apple service outage:** a stalled notarization fails the job (the DMG submission gives up after one hour) instead of publishing an un-notarized DMG. Re-run the failed jobs once Apple's [system status](https://developer.apple.com/system-status/) is green.
