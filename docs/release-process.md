@@ -111,7 +111,7 @@ Change all Markion-controlled version fields to `X.Y.Z` in one release change:
 - `[workspace.package].version` in `Cargo.toml`.
 - `[package].version` in `Cargo.toml`.
 - Top-level `version` in `packager.toml`.
-- The `export`, `markdown`, `markion`, and `markion-diagram` workspace package entries in `Cargo.lock`.
+- All Markion workspace package versions in `Cargo.lock`.
 
 Let Cargo refresh the lockfile instead of blindly replacing every matching version string; third-party packages can legitimately use the old or new version number.
 

@@ -29,7 +29,7 @@ Non-goals: Mac App Store distribution, a universal binary, in-app macOS self-upd
 
 ### Modified Capabilities
 
-- `release-packaging`: public macOS installers require Developer ID signing and notarization. Development builds retain ad-hoc signing. The macOS packaging gate verifies the final disk image and embedded app. This delta builds on the requirement as renamed by `improve-macos-distribution`, which must be archived first.
+- `release-packaging`: public macOS installers require Developer ID signing and notarization. Development builds retain ad-hoc signing. The macOS packaging gate verifies the final disk image and embedded app. This delta also carries forward the Intel installer and mirror requirements from `improve-macos-distribution` while superseding its public ad-hoc signing requirements.
 
 ## Impact
 
