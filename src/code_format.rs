@@ -3,7 +3,7 @@
 
 use std::{
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -753,7 +753,7 @@ fn prepare_command_request(program: PathBuf, arguments: Vec<OsString>) -> Extern
     {
         let is_ps1 = program
             .extension()
-            .and_then(OsStr::to_str)
+            .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|ext| ext.eq_ignore_ascii_case("ps1"));
         if is_ps1 {
             let shell = find_in_path("pwsh.exe")
