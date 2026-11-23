@@ -2646,6 +2646,78 @@ fn math_atom_hit_testing_and_copy_preserve_complete_authored_source() {
     assert_eq!(html.matches("<svg aria-hidden=\"true\"").count(), 2);
 }
 
+#[gpui::test]
+fn table_cell_math_is_requested_and_shares_the_prose_cache_entry(cx: &mut TestAppContext) {
+    // The same expression appears in a paragraph and in header and body cells,
+    // and a second expression lives only in cells. Request collection used to
+    // skip `PreviewBlock::Table`, so a cell formula never left Pending.
+    let source = "Prose $x^2$.\n\n| Head | Formula |\n| --- | --- |\n\
+                  | cell | $x^2$ and $\\frac{a}{b}$ |\n| $\\frac{a}{b}$ | tail |\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let mut ready = app
+            .math_cache
+            .entries
+            .iter()
+            .filter_map(|(key, entry)| {
+                matches!(entry, MathCacheEntry::Ready(_)).then_some(key.latex.as_str())
+            })
+            .collect::<Vec<_>>();
+        ready.sort_unstable();
+        assert_eq!(ready, ["\\frac{a}{b}", "x^2"]);
+        assert_eq!(
+            app.math_cache.entries.len(),
+            2,
+            "one entry per distinct expression, shared by prose and cells"
+        );
+    });
+}
+
+#[test]
+fn table_cell_math_copy_keeps_authored_syntax() {
+    let document =
+        "| Topology | Diameter |\n| --- | --- |\n| Ring | $\\lfloor N/2 \\rfloor$ end |\n";
+    let blocks = MarkdownDocument::from_text(document).preview_blocks();
+    let PreviewBlock::Table { rows, .. } = &blocks[0] else {
+        panic!("expected the table as the first block");
+    };
+    let cell = &rows[1][1];
+    let math = cell
+        .spans
+        .iter()
+        .find_map(|span| span.math.as_ref())
+        .expect("cell math span");
+    let start = cell.text.find(&math.authored).unwrap();
+    let run_id = PreviewTextRunId::TableCell { row: 1, col: 1 };
+    let selection = PreviewSelection {
+        anchor: PreviewCaret {
+            block_index: 0,
+            run_id,
+            offset: start,
+        },
+        head: PreviewCaret {
+            block_index: 0,
+            run_id,
+            offset: start + math.authored.len(),
+        },
+    };
+    assert_eq!(
+        preview_selection_plain_text(&selection, &blocks).unwrap(),
+        "$\\lfloor N/2 \\rfloor$"
+    );
+}
+
 /// A distinguishable `PreviewBlock` for splice-diff tests. Distinct `tag`s
 /// compare unequal; the concrete variant is irrelevant to the diff.
 fn blk(tag: &str) -> PreviewBlock {
@@ -7204,6 +7276,383 @@ fn visual_table_padding_fallback_preserves_precise_text_clicks(cx: &mut TestAppC
         assert_eq!(app.active_tab().document.text(), source);
         assert!(app.active_tab().undo_stack.is_empty());
     });
+}
+
+const TABLE_MATH_SAMPLE: &str = "| Topology | Diameter | Jumps |\n| --- | --- | --- |\n\
+                                 | Ring | $\\lfloor N/2 \\rfloor$ | total $2N - 2\\sqrt{N}$ |\n";
+
+/// Debug selector of the rendered Visual Edit formula atom whose authored
+/// source starts at `offset`.
+fn visual_math_atom_selector(offset: usize) -> &'static str {
+    test_debug_selector(format!("visual-math-atom-{offset}"))
+}
+
+fn table_cell_range_at(
+    app: &Entity<MarkionApp>,
+    cx: &mut VisualTestContext,
+    row: usize,
+    column: usize,
+) -> Range<usize> {
+    app.update(cx, |app, _| {
+        visual_table_cell_range(&app.active_tab().document, 0, row, column)
+    })
+}
+
+fn assert_table_cell_at_caret(app: &MarkionApp, row: usize, column: usize) {
+    let tab = app.active_tab();
+    let field = tab
+        .document
+        .visual_editor_field_at(&tab.selected_range)
+        .expect("caret inside a table cell");
+    assert_eq!(field.kind, VisualEditorFieldKind::TableCell { row, column });
+}
+
+#[gpui::test]
+fn table_cell_math_renders_in_read_and_split_preview(cx: &mut TestAppContext) {
+    // Debug bounds accumulate for the lifetime of a window, so each surface
+    // gets a window of its own.
+    for mode in [ViewMode::Read, ViewMode::Split] {
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+                TABLE_MATH_SAMPLE,
+            ))];
+            app.view_mode = mode;
+            app
+        });
+        cx.run_until_parked();
+        // The table is block 0; its formulas start at offsets 0 and 6
+        // ("total ") of their cell run text.
+        assert!(
+            cx.debug_bounds("preview-math-0-0").is_some(),
+            "{mode:?} renders the Diameter formula"
+        );
+        assert!(
+            cx.debug_bounds("preview-math-0-6").is_some(),
+            "{mode:?} renders the Jumps formula"
+        );
+    }
+}
+
+#[gpui::test]
+fn table_cell_math_renders_in_visual_edit(cx: &mut TestAppContext) {
+    let diameter = TABLE_MATH_SAMPLE.find("$\\lfloor").unwrap();
+    let jumps = TABLE_MATH_SAMPLE.find("$2N").unwrap();
+    let caret_in_formula = diameter + "$\\l".len();
+    for stable in [false, true] {
+        // Unfocused cells render their formulas.
+        let (app, cx) = visual_table_handle_app(TABLE_MATH_SAMPLE, cx);
+        app.update(cx, |app, cx| {
+            app.stable_visual_inline = stable;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let before = visual_table_document_state(&app, cx);
+        assert!(
+            cx.debug_bounds(visual_math_atom_selector(diameter))
+                .is_some(),
+            "an unfocused cell renders its formula (stable={stable})"
+        );
+        assert!(
+            cx.debug_bounds(visual_math_atom_selector(jumps)).is_some(),
+            "a formula beside text renders too (stable={stable})"
+        );
+        assert_eq!(visual_table_document_state(&app, cx), before);
+
+        // Owning the caret reveals the cell's authored source while the
+        // neighbor stays rendered, with or without inline syntax hidden.
+        // Debug bounds accumulate per window, so the focused cell owns the
+        // caret from this window's first frame. Document versions are unique
+        // per document, so this tab's baseline is its own.
+        let document = MarkdownDocument::from_text(TABLE_MATH_SAMPLE);
+        let focused_before = (TABLE_MATH_SAMPLE.to_string(), document.version(), false, 0);
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(document)];
+            app.active_tab_mut().selected_range = caret_in_formula..caret_in_formula;
+            app.view_mode = ViewMode::VisualEdit;
+            app.stable_visual_inline = stable;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds(visual_math_atom_selector(diameter))
+                .is_none(),
+            "the focused cell shows its authored source, not an atom (stable={stable})"
+        );
+        assert!(
+            cx.debug_bounds(visual_math_atom_selector(jumps)).is_some(),
+            "the unfocused neighbor keeps its atom (stable={stable})"
+        );
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(tab.cursor_offset(), caret_in_formula);
+            let (text, _) = tab
+                .visual_last_projection
+                .clone()
+                .expect("the focused cell paints its projection");
+            assert!(
+                text.contains("$\\lfloor N/2 \\rfloor$"),
+                "authored math source is revealed: {text:?}"
+            );
+        });
+        assert_eq!(
+            visual_table_document_state(&app, cx),
+            focused_before,
+            "rendering and focusing never mutate the document"
+        );
+    }
+}
+
+fn table_math_click_point(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    fraction: f32,
+) -> gpui::Point<gpui::Pixels> {
+    point(
+        bounds.left() + bounds.size.width * fraction,
+        bounds.center().y,
+    )
+}
+
+#[gpui::test]
+fn table_cell_math_click_resolves_to_authored_boundaries(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app(TABLE_MATH_SAMPLE, cx);
+    cx.simulate_resize(size(px(1200.), px(900.)));
+    cx.run_until_parked();
+    let before = visual_table_document_state(&app, cx);
+    let diameter = TABLE_MATH_SAMPLE.find("$\\lfloor").unwrap();
+    let authored = "$\\lfloor N/2 \\rfloor$";
+
+    // The trailing half resolves to the formula's authored end.
+    let atom = cx
+        .debug_bounds(visual_math_atom_selector(diameter))
+        .unwrap();
+    let trailing = table_math_click_point(atom, 0.75);
+    cx.simulate_mouse_down(trailing, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(trailing, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.cursor_offset(), diameter + authored.len())
+    });
+    assert_visual_table_caret_in_cell(&app, cx, 1, 1);
+
+    // The leading half resolves to its start once the cell is unfocused again.
+    let header = table_cell_range_at(&app, cx, 0, 0).start;
+    app.update(cx, |app, cx| app.move_to(header, cx));
+    cx.run_until_parked();
+    let atom = cx
+        .debug_bounds(visual_math_atom_selector(diameter))
+        .unwrap();
+    let leading = table_math_click_point(atom, 0.25);
+    cx.simulate_mouse_down(leading, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(leading, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), diameter));
+
+    // A double-click selects the complete authored formula.
+    let header = table_cell_range_at(&app, cx, 0, 0).start;
+    app.update(cx, |app, cx| app.move_to(header, cx));
+    cx.run_until_parked();
+    let atom = cx
+        .debug_bounds(visual_math_atom_selector(diameter))
+        .unwrap();
+    cx.simulate_event(MouseDownEvent {
+        position: atom.center(),
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(atom.center(), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().selected_range,
+            diameter..diameter + authored.len()
+        );
+    });
+
+    // Shift-click from the Ring cell keeps the rectangular cell selection.
+    let ring = table_cell_range_at(&app, cx, 1, 0).start;
+    app.update(cx, |app, cx| app.move_to(ring, cx));
+    cx.run_until_parked();
+    let atom = cx
+        .debug_bounds(visual_math_atom_selector(diameter))
+        .unwrap();
+    let shifted = table_math_click_point(atom, 0.75);
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::none()
+    };
+    cx.simulate_mouse_down(shifted, MouseButton::Left, shift);
+    cx.simulate_mouse_up(shifted, MouseButton::Left, shift);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let Some(markion::selection::SelectionState::Cells(selection)) =
+            app.active_tab().structured_selection.as_ref()
+        else {
+            panic!("Shift-click on a formula must extend the cell selection");
+        };
+        assert_eq!(selection.bounds(2, 3), (1..2, 0..2));
+    });
+    assert_eq!(
+        visual_table_document_state(&app, cx),
+        before,
+        "pointer interaction never mutates the document"
+    );
+}
+
+fn debug_bounds_for(cx: &mut VisualTestContext, selector: String) -> gpui::Bounds<gpui::Pixels> {
+    cx.debug_bounds(test_debug_selector(selector.clone()))
+        .unwrap_or_else(|| panic!("no painted bounds for {selector}"))
+}
+
+#[gpui::test]
+fn table_cell_math_narrows_with_its_cell_instead_of_overflowing(cx: &mut TestAppContext) {
+    // Four columns in a narrow window leave the second cell narrower than a
+    // long formula. The atom must scale down inside its cell in Read mode and
+    // Visual Edit alike, never reaching the neighboring cell.
+    let source = "| A | Formula | Neighbor | Tail |\n| --- | --- | --- | --- |\n\
+                  | a | $2N - 2\\sqrt{N} + \\frac{a + b}{c}$ | neighbor text | tail |\n";
+    let offset = source.find("$2N").unwrap();
+    for mode in [ViewMode::Read, ViewMode::VisualEdit] {
+        let mut sizes = [(0f32, 0f32); 2];
+        for (index, width) in [1200., 360.].into_iter().enumerate() {
+            let (app, cx) = cx.add_window_view(|_, cx| {
+                let mut app = MarkionApp::new(cx);
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+                app.active_tab_mut().selected_range = 0..0;
+                app.view_mode = mode;
+                app.sidebar_visible = false;
+                app
+            });
+            cx.update(|window, cx| {
+                window.focus(&app.read(cx).focus_handle);
+                window.activate_window();
+            });
+            cx.simulate_resize(size(px(width), px(600.)));
+            cx.run_until_parked();
+            let (cell_selector, atom_selector) = match mode {
+                ViewMode::Read => (
+                    "preview-table-cell-bounds-0-1-".to_string(),
+                    "preview-math-0-0".to_string(),
+                ),
+                _ => (
+                    "visual-table-cell-0-1-".to_string(),
+                    format!("visual-math-atom-{offset}"),
+                ),
+            };
+            let cell = debug_bounds_for(cx, format!("{cell_selector}1"));
+            let neighbor = debug_bounds_for(cx, format!("{cell_selector}2"));
+            let atom = debug_bounds_for(cx, atom_selector);
+            assert!(
+                atom.left() >= cell.left() && atom.right() <= cell.right(),
+                "{mode:?} at {width}px: formula {atom:?} stays inside its cell {cell:?}"
+            );
+            assert!(
+                atom.right() <= neighbor.left(),
+                "{mode:?} at {width}px: formula {atom:?} must not reach {neighbor:?}"
+            );
+            sizes[index] = (f32::from(atom.size.width), f32::from(atom.size.height));
+        }
+        let (wide, narrow) = (sizes[0], sizes[1]);
+        assert!(
+            narrow.0 < wide.0,
+            "{mode:?}: a narrow cell scales its formula down: {sizes:?}"
+        );
+        assert!(
+            (narrow.1 / narrow.0 - wide.1 / wide.0).abs() < 0.05,
+            "{mode:?}: the scaled formula keeps its aspect ratio: {sizes:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn table_cell_math_mixes_with_text_and_images_and_keeps_column_navigation(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([10, 20, 30]))
+        .save(dir.path().join("panel.png"))
+        .unwrap();
+    let path = dir.path().join("table.md");
+    fs::write(
+        &path,
+        "| Mixed | Only formula |\n| --- | --- |\n| ring $N/2$ ![panel](panel.png) | $k$ |\n",
+    )
+    .unwrap();
+    let document = MarkdownDocument::open(path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.simulate_resize(size(px(1200.), px(900.)));
+    cx.run_until_parked();
+    let before = visual_table_document_state(&app, cx);
+    let (first, second) = app.update(cx, |app, _| {
+        let text = app.active_tab().document.text();
+        (text.find("$N/2$").unwrap(), text.find("$k$").unwrap())
+    });
+    let formula = cx
+        .debug_bounds(visual_math_atom_selector(first))
+        .expect("formula beside text and an image");
+    let image = cx
+        .debug_bounds("visual-table-image-0-1-0-0")
+        .expect("image beside the formula");
+    cx.debug_bounds(visual_math_atom_selector(second))
+        .expect("formula-only cell");
+    let cell = cx
+        .debug_bounds(test_debug_selector("visual-table-cell-0-1-0".into()))
+        .unwrap();
+    assert!(
+        formula.left() >= cell.left()
+            && formula.right() <= cell.right()
+            && image.right() <= cell.right(),
+        "formula {formula:?} and image {image:?} stay inside the cell {cell:?}"
+    );
+    assert!(
+        formula.right() <= image.left() || formula.bottom() <= image.top(),
+        "the formula {formula:?} must not overlap the image {image:?}"
+    );
+
+    // Down from each header cell enters the same column: the mixed cell and
+    // the formula-only cell are both navigation stops.
+    for column in 0..2 {
+        let header = table_cell_range_at(&app, cx, 0, column).start;
+        app.update(cx, |app, cx| app.move_to(header, cx));
+        cx.run_until_parked();
+        cx.dispatch_action(Down);
+        cx.run_until_parked();
+        app.update(cx, |app, _| assert_table_cell_at_caret(app, 1, column));
+        assert_visual_table_caret_in_cell(&app, cx, 1, column);
+        cx.dispatch_action(Up);
+        cx.run_until_parked();
+        app.update(cx, |app, _| assert_table_cell_at_caret(app, 0, column));
+    }
+
+    // Tab selects the formula-only cell's content in the next column.
+    let mixed = table_cell_range_at(&app, cx, 1, 0).start;
+    app.update(cx, |app, cx| app.move_to(mixed, cx));
+    cx.run_until_parked();
+    cx.dispatch_action(Indent);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_table_cell_at_caret(app, 1, 1);
+        assert_eq!(
+            app.active_tab().selected_range,
+            visual_table_cell_range(&app.active_tab().document, 0, 1, 1)
+        );
+    });
+    assert_eq!(visual_table_document_state(&app, cx), before);
 }
 
 #[gpui::test]

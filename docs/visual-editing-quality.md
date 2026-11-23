@@ -56,6 +56,40 @@ caret ownership/bounds, wrapping, Tab/Shift-Tab, CJK/emoji composition, undo,
 precise text versus padding clicks, source preservation and shared cache reuse.
 These are automated layout/input checks; no manual app smoke test is implied.
 
+### GFM table cell math coverage
+
+Inline and `$$` display math inside native Markdown table cells render through
+the same offline typesetting and bounded math cache as prose in Read, Split
+Preview, and Visual Edit. Render requests walk every header and body cell, so an
+expression shared with a paragraph reuses one cache entry. An unfocused Visual
+Edit cell shows each ready formula as a baseline-aligned atom in its mixed
+layout beside text, images, and authored line breaks; a formula whose render is
+pending or has failed keeps its exact authored source in place. A cell that owns
+the caret keeps the whole-cell source reveal, including while Keep inline syntax
+hidden is on — the floating payload editor stays a prose affordance.
+
+Each cell formula atom resolves a plain click to its authored leading or trailing
+`$` boundary, Shift/Alt clicks go through the rectangular cell-selection gate,
+and a double-click selects the complete authored expression. Rendering and
+pointer interaction never mutate document text, version, dirty state, undo
+history, or the per-version derived caches. Up/Down and Tab still treat a
+formula-only cell as a navigation stop. An atom wider than its cell scales down
+proportionally to the cell's content width in every surface, so a wide table in
+a narrow Split Preview pane never paints a formula over its neighbor.
+
+GPUI regressions `table_cell_math_is_requested_and_shares_the_prose_cache_entry`,
+`table_cell_math_copy_keeps_authored_syntax`,
+`table_cell_math_renders_in_read_and_split_preview`,
+`table_cell_math_renders_in_visual_edit`,
+`table_cell_math_click_resolves_to_authored_boundaries`,
+`table_cell_math_mixes_with_text_and_images_and_keeps_column_navigation`, and
+`table_cell_math_narrows_with_its_cell_instead_of_overflowing` cover request
+collection and cache sharing, source-preserving copy, all three surfaces,
+source reveal with the preference off and on, boundary clicks, double-click,
+Shift-click, mixed text/formula/image cells, a formula-only cell, Up/Down/Tab
+traversal, and proportional scaling inside a narrow cell. These are automated
+layout/input checks.
+
 ### Caret source-line boundary regression coverage
 
 Terminal LF/CRLF stays with the preceding heading or paragraph. Visual Edit

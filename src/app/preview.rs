@@ -2300,7 +2300,7 @@ fn visual_inline_text_metrics(
 ///
 /// When `inline_metrics` is `Some((font_size, line_height))`, the atom is
 /// baseline-compensated for an `items_end` prose row. Display/block callers
-/// pass `None`.
+/// pass `None`. With `fit_cell` the atom may narrow with its table cell.
 fn preview_math_atom(
     app: &MarkionApp,
     image: Arc<MathImage>,
@@ -2309,13 +2309,13 @@ fn preview_math_atom(
     authored_range: Range<usize>,
     run_text: SharedString,
     inline_metrics: Option<(f32, f32)>,
+    fit_cell: bool,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let selected = active_preview_run_selection(app, block_index, run_id, run_text.as_ref())
         .is_some_and(|range| range.start < authored_range.end && range.end > authored_range.start);
     let start = math_atom_boundary(&authored_range, false);
     let end = math_atom_boundary(&authored_range, true);
-    let metric_height = image.ascent + image.descent;
     let baseline_margin = inline_metrics.map_or(px(0.), |(font_size, line_height)| {
         inline_math_baseline_margin(
             cx,
@@ -2325,45 +2325,18 @@ fn preview_math_atom(
             image.descent,
         )
     });
-    div()
-        .relative()
-        .flex_none()
-        .w(image.size.width)
-        .h(metric_height)
-        .mb(baseline_margin)
-        .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
-        .child(
-            img(ImageSource::Render(image.image.clone()))
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(image.size.width)
-                .h(image.size.height),
-        )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .right_0()
-                .bottom_0()
-                .left_0()
-                .flex()
-                .child(preview_math_hit_target(
-                    block_index,
-                    run_id,
-                    start,
-                    run_text.clone(),
-                    cx,
-                ))
-                .child(preview_math_hit_target(
-                    block_index,
-                    run_id,
-                    end,
-                    run_text,
-                    cx,
-                )),
-        )
-        .into_any_element()
+    formula_atom_frame(
+        image,
+        baseline_margin,
+        fit_cell,
+        format!("preview-math-{block_index}-{}", authored_range.start),
+        selected,
+    )
+    .child(math_hit_overlay(vec![
+        preview_math_hit_target(block_index, run_id, start, run_text.clone(), cx),
+        preview_math_hit_target(block_index, run_id, end, run_text, cx),
+    ]))
+    .into_any_element()
 }
 
 /// Mixed prose/math preview path. Text fragments retain their offsets in the
@@ -2457,6 +2430,9 @@ pub(super) fn rich_text_with_math_element(
                         span_range,
                         run_text.clone(),
                         inline_metrics,
+                        // A cell may be narrower than its formula; prose and
+                        // display atoms keep their measured width.
+                        matches!(run_id, PreviewTextRunId::TableCell { .. }),
                         cx,
                     ),
                 ),
@@ -3105,21 +3081,125 @@ fn visual_math_hit_target(
         )
 }
 
-fn visual_math_atom(
+/// Leading/trailing hit target of a formula atom inside an unfocused Visual
+/// Edit table cell. Unlike the prose target it owns the click, so the outer
+/// cell's padding fallback cannot replace the formula's exact source boundary,
+/// and modified clicks still enter the shared cell-selection gate.
+fn visual_table_math_hit_target(
+    block_index: usize,
+    source_range: Range<usize>,
+    boundary: usize,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    div()
+        .flex_1()
+        .h_full()
+        .cursor(CursorStyle::IBeam)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&app.focus_handle);
+                if event.click_count >= 2 && !event.modifiers.shift {
+                    app.move_to_visual_editor_target(source_range.clone(), cx);
+                    return;
+                }
+                if app.structured_pointer_down(block_index, boundary, event, cx) {
+                    return;
+                }
+                app.file_tree_query_focused = false;
+                app.search_focus = None;
+                app.search_control_focus = None;
+                app.input_marked_len = 0;
+                app.active_tab_mut().clear_preview_selection();
+                app.active_tab_mut().is_selecting = true;
+                if app.token_editor.is_some() {
+                    app.cancel_token_editor(cx);
+                }
+                if event.modifiers.shift {
+                    app.select_to(boundary, cx);
+                } else {
+                    app.move_to(boundary, cx);
+                }
+            }),
+        )
+        .on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
+            if event.dragging() && app.active_tab().is_selecting {
+                app.select_to(boundary, cx);
+            }
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _, _| {
+                app.active_tab_mut().is_selecting = false;
+            }),
+        )
+}
+
+/// Lets a formula atom narrow with its table cell. The box never exceeds the
+/// cell's content width, and keeps the raster's aspect ratio so a clamped box
+/// scales the formula down instead of overflowing into the neighboring cell.
+fn formula_atom_fits_cell(mut atom: Div, raster: Size<Pixels>) -> Div {
+    // GPUI has no builder for `aspect-ratio`; refine the style directly.
+    let style = atom.style();
+    style.aspect_ratio = Some(f32::from(raster.width) / f32::from(raster.height));
+    atom.max_w_full()
+}
+
+/// Image box of a rendered formula: the raster, an optional selection
+/// highlight, the bottom margin that lifts its baseline to the surrounding
+/// text, and its debug selector. With `fit_cell` the box may narrow with a
+/// table cell (see `formula_atom_fits_cell`); otherwise it keeps the raster's
+/// metric height. Callers attach the hit targets suited to their context.
+fn formula_atom_frame(
+    image: Arc<MathImage>,
+    baseline_margin: Pixels,
+    fit_cell: bool,
+    selector: String,
+    selected: bool,
+) -> Div {
+    let scalable = fit_cell && image.size.width > Pixels::ZERO && image.size.height > Pixels::ZERO;
+    let frame = div()
+        .relative()
+        .flex_none()
+        .w(image.size.width)
+        .mb(baseline_margin);
+    let frame = if scalable {
+        formula_atom_fits_cell(frame, image.size)
+    } else {
+        frame.h(image.ascent + image.descent)
+    };
+    let raster = img(ImageSource::Render(image.image.clone()))
+        .absolute()
+        .top_0()
+        .left_0();
+    let raster = if scalable {
+        raster.w_full().h_full()
+    } else {
+        raster.w(image.size.width).h(image.size.height)
+    };
+    frame
+        .debug_selector(move || selector.clone())
+        .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
+        .child(raster)
+}
+
+/// Image frame of a Visual Edit formula atom; `inline_metrics` is `None` for
+/// display/block callers.
+fn visual_math_atom_frame(
     app: &MarkionApp,
     image: Arc<MathImage>,
     source_range: Range<usize>,
     inline_metrics: Option<(f32, f32)>,
-    open_editor: bool,
+    fit_cell: bool,
     cx: &mut Context<MarkionApp>,
-) -> gpui::AnyElement {
+) -> Div {
     let selected = {
         let selection = &app.active_tab().selected_range;
         !selection.is_empty()
             && selection.start < source_range.end
             && selection.end > source_range.start
     };
-    let metric_height = image.ascent + image.descent;
     let baseline_margin = inline_metrics.map_or(px(0.), |(font_size, line_height)| {
         inline_math_baseline_margin(
             cx,
@@ -3129,43 +3209,72 @@ fn visual_math_atom(
             image.descent,
         )
     });
+    formula_atom_frame(
+        image,
+        baseline_margin,
+        fit_cell,
+        format!("visual-math-atom-{}", source_range.start),
+        selected,
+    )
+}
+
+/// Two equal hit halves filling an absolutely positioned box.
+fn math_hit_overlay(children: Vec<Div>) -> Div {
     div()
-        .relative()
-        .flex_none()
-        .w(image.size.width)
-        .h(metric_height)
-        .mb(baseline_margin)
-        .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
-        .child(
-            img(ImageSource::Render(image.image.clone()))
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(image.size.width)
-                .h(image.size.height),
-        )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .right_0()
-                .bottom_0()
-                .left_0()
-                .flex()
-                .child(visual_math_hit_target(
-                    source_range.clone(),
-                    source_range.start,
-                    open_editor,
-                    cx,
-                ))
-                .child(visual_math_hit_target(
-                    source_range.clone(),
-                    source_range.end,
-                    open_editor,
-                    cx,
-                )),
-        )
+        .absolute()
+        .top_0()
+        .right_0()
+        .bottom_0()
+        .left_0()
+        .flex()
+        .children(children)
+}
+
+fn visual_math_atom(
+    app: &MarkionApp,
+    image: Arc<MathImage>,
+    source_range: Range<usize>,
+    inline_metrics: Option<(f32, f32)>,
+    open_editor: bool,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let source_start = source_range.start;
+    let source_end = source_range.end;
+    visual_math_atom_frame(app, image, source_range.clone(), inline_metrics, false, cx)
+        .child(math_hit_overlay(vec![
+            visual_math_hit_target(source_range.clone(), source_start, open_editor, cx),
+            visual_math_hit_target(source_range, source_end, open_editor, cx),
+        ]))
         .into_any_element()
+}
+
+/// Rendered formula inside an unfocused Visual Edit table cell. The frame is
+/// the prose atom's, narrowed to the cell when needed; the halves use the
+/// cell-scoped target so the outer cell's padding fallback cannot replace the
+/// formula's exact source boundary.
+fn visual_table_math_atom(
+    app: &MarkionApp,
+    image: Arc<MathImage>,
+    source_range: Range<usize>,
+    block_index: usize,
+    inline_metrics: (f32, f32),
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let source_start = source_range.start;
+    let source_end = source_range.end;
+    visual_math_atom_frame(
+        app,
+        image,
+        source_range.clone(),
+        Some(inline_metrics),
+        true,
+        cx,
+    )
+    .child(math_hit_overlay(vec![
+        visual_table_math_hit_target(block_index, source_range.clone(), source_start, cx),
+        visual_table_math_hit_target(block_index, source_range, source_end, cx),
+    ]))
+    .into_any_element()
 }
 
 /// Test-only counter of inline HTML image atoms built during rendering.
@@ -4939,9 +5048,14 @@ fn visual_block_content_view(
                 )
                 .child(div().mt(px(5.)).h(px(1.)).bg(rgb(0xcbd5e1)))
         }
-        VisualBlockKind::Table { rows, .. } => {
-            div().child(visual_table_view(app, block, block_index, rows, cx))
-        }
+        VisualBlockKind::Table { rows, .. } => div().child(visual_table_view(
+            app,
+            block,
+            block_index,
+            rows,
+            display_scale,
+            cx,
+        )),
         VisualBlockKind::CalloutTitle { kind, title } => {
             if owns_caret {
                 // Focused, the projection reveals the authored marker line
@@ -6235,6 +6349,191 @@ pub(super) fn visual_reference_definition_view(
         })
 }
 
+/// Whether the canonical caret sits inside this field, making its row the one
+/// that paints the caret and, for a table cell, the one that reveals source.
+fn visual_field_owns_caret(
+    app: &MarkionApp,
+    block_index: usize,
+    field: &VisualEditorField,
+) -> bool {
+    let source_cursor = app.active_tab().cursor_offset();
+    visual_block_owns_caret(app, block_index)
+        && source_cursor >= field.source_range.start
+        && source_cursor <= field.source_range.end
+}
+
+/// Content of a Visual Edit table cell with a proven field. A cell that owns
+/// the caret reveals its authored source through the ordinary field editor.
+/// Otherwise a cell with an authored line break, an image, a script run, or a
+/// rendered formula lays out as mixed prose: ready formulas become
+/// baseline-aligned image atoms whose halves resolve to their authored source
+/// boundaries, while images, text, and pending or failed formulas keep the
+/// same wrapped rows.
+fn visual_table_cell_element(
+    app: &MarkionApp,
+    block_index: usize,
+    field: &VisualEditorField,
+    rich: &RichText,
+    element_id: ElementId,
+    display_scale: f32,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let VisualEditorFieldKind::TableCell { row, column } = field.kind else {
+        return visual_editor_field_element(
+            app,
+            block_index,
+            field,
+            element_id,
+            None,
+            Some(rich),
+            cx,
+        );
+    };
+    if visual_field_owns_caret(app, block_index, field) {
+        return visual_editor_field_element(
+            app,
+            block_index,
+            field,
+            element_id,
+            None,
+            Some(rich),
+            cx,
+        );
+    }
+    let typography = app.typography_metrics();
+    let math_entry = |math: &MathSource| {
+        app.math_entry(
+            &math.latex,
+            math.style,
+            typography.math_font_size(math.style),
+            1.0,
+            display_scale,
+            app.palette().text,
+        )
+    };
+    // A formula that has not rendered yet leaves the cell in its ordinary
+    // single-text form, so the layout only changes when an atom replaces it.
+    let has_ready_math = rich.spans.iter().any(|span| {
+        span.math
+            .as_ref()
+            .is_some_and(|math| matches!(math_entry(math), MathCacheEntry::Ready(_)))
+    });
+    let mixed = rich.text.contains('\n')
+        || has_ready_math
+        || rich
+            .spans
+            .iter()
+            .any(|span| span.image.is_some() || span.style.superscript || span.style.subscript);
+    if !mixed {
+        return visual_editor_field_element(
+            app,
+            block_index,
+            field,
+            element_id,
+            None,
+            Some(rich),
+            cx,
+        );
+    }
+    let metrics = (
+        typography.table_font_size,
+        typography.text_line_height(typography.table_font_size),
+    );
+    let mut lines = vec![Vec::new()];
+    let mut index = field.source_range.start;
+    let mut image_index = 0;
+    for span in &rich.spans {
+        if let Some(image) = &span.image {
+            let document_dir = app.active_tab().document.path().and_then(Path::parent);
+            let selector = format!("visual-table-image-{block_index}-{row}-{column}-{image_index}");
+            mixed_prose_push(
+                &mut lines,
+                preview_inline_image_view(
+                    app,
+                    &image.url,
+                    &image.identity,
+                    &image.alt,
+                    document_dir,
+                    None,
+                    None,
+                )
+                .debug_selector(move || selector.clone())
+                .into_any_element(),
+            );
+            image_index += 1;
+            index += 1;
+            continue;
+        }
+        if let Some(math) = &span.math
+            && let MathCacheEntry::Ready(image) = math_entry(math)
+        {
+            mixed_prose_push(
+                &mut lines,
+                visual_table_math_atom(
+                    app,
+                    image,
+                    math.source_range.clone(),
+                    block_index,
+                    metrics,
+                    cx,
+                ),
+            );
+            index += 1;
+            continue;
+        }
+        for piece in span.text.split_inclusive('\n') {
+            for fragment in piece
+                .trim_end_matches('\n')
+                .split_inclusive(char::is_whitespace)
+            {
+                if fragment.is_empty() {
+                    continue;
+                }
+                let child = visual_projection_fragment(
+                    block_index,
+                    index,
+                    fragment.to_string(),
+                    field.source_range.clone(),
+                    visual_highlight_style(span.style, span.link.is_some()),
+                    &mut None,
+                    true,
+                    px(resolved_script_metrics(span.style, metrics, app, cx)
+                        .map_or(0., |(_, _, top)| top)),
+                    span.footnote.as_deref(),
+                    app,
+                    cx,
+                    #[cfg(test)]
+                    None,
+                    #[cfg(test)]
+                    None,
+                );
+                mixed_prose_push(
+                    &mut lines,
+                    script_fragment(child, span.style, metrics, app, cx),
+                );
+                index += 1;
+            }
+            if piece.ends_with('\n') {
+                mixed_prose_break_line(&mut lines);
+            }
+        }
+    }
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .children(lines.into_iter().map(|line| {
+            div()
+                .w_full()
+                .min_h(px(metrics.1))
+                .flex()
+                .flex_wrap()
+                .items_end()
+                .children(line)
+        }))
+        .into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn visual_editor_field_element(
     app: &MarkionApp,
@@ -6248,9 +6547,7 @@ fn visual_editor_field_element(
     let source = app.active_tab().document.text();
     let source_cursor = app.active_tab().cursor_offset();
     let block_owns_caret = visual_block_owns_caret(app, block_index);
-    let caret_active = block_owns_caret
-        && source_cursor >= field.source_range.start
-        && source_cursor <= field.source_range.end;
+    let caret_active = visual_field_owns_caret(app, block_index, field);
     #[cfg(test)]
     {
         // Counting here (rather than in the projection builders) captures
@@ -6264,99 +6561,6 @@ fn visual_editor_field_element(
     let marked_range = app.active_tab().marked_range.clone().filter(|marked| {
         marked.start >= field.source_range.start && marked.end <= field.source_range.end
     });
-
-    if !caret_active
-        && let Some(rich) = cell_rich
-        && let VisualEditorFieldKind::TableCell { row, column } = field.kind
-        && (rich.text.contains('\n')
-            || rich
-                .spans
-                .iter()
-                .any(|span| span.image.is_some() || span.style.superscript || span.style.subscript))
-    {
-        let typography = app.typography_metrics();
-        let metrics = (
-            typography.table_font_size,
-            typography.text_line_height(typography.table_font_size),
-        );
-        let mut lines = vec![Vec::new()];
-        let mut index = field.source_range.start;
-        let mut image_index = 0;
-        for span in &rich.spans {
-            if let Some(image) = &span.image {
-                let document_dir = app.active_tab().document.path().and_then(Path::parent);
-                let selector =
-                    format!("visual-table-image-{block_index}-{row}-{column}-{image_index}");
-                mixed_prose_push(
-                    &mut lines,
-                    preview_inline_image_view(
-                        app,
-                        &image.url,
-                        &image.identity,
-                        &image.alt,
-                        document_dir,
-                        None,
-                        None,
-                    )
-                    .debug_selector(move || selector.clone())
-                    .into_any_element(),
-                );
-                image_index += 1;
-                index += 1;
-                continue;
-            }
-            for piece in span.text.split_inclusive('\n') {
-                for fragment in piece
-                    .trim_end_matches('\n')
-                    .split_inclusive(char::is_whitespace)
-                {
-                    if fragment.is_empty() {
-                        continue;
-                    }
-                    let child = visual_projection_fragment(
-                        block_index,
-                        index,
-                        fragment.to_string(),
-                        field.source_range.clone(),
-                        visual_highlight_style(span.style, span.link.is_some()),
-                        &mut None,
-                        true,
-                        px(resolved_script_metrics(span.style, metrics, app, cx)
-                            .map_or(0., |(_, _, top)| top)),
-                        span.footnote.as_deref(),
-                        app,
-                        cx,
-                        #[cfg(test)]
-                        None,
-                        #[cfg(test)]
-                        None,
-                    );
-                    mixed_prose_push(
-                        &mut lines,
-                        script_fragment(child, span.style, metrics, app, cx),
-                    );
-                    index += 1;
-                }
-                if piece.ends_with('\n') {
-                    mixed_prose_break_line(&mut lines);
-                }
-            }
-        }
-        return div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .children(lines.into_iter().map(|line| {
-                div()
-                    .w_full()
-                    .min_h(px(metrics.1))
-                    .flex()
-                    .flex_wrap()
-                    .items_end()
-                    .children(line)
-            }))
-            .into_any_element();
-    }
 
     // Table cells render inline formatting (bold, links, etc.) while unfocused,
     // and reveal the authored source markup when focused for editing -
@@ -7586,6 +7790,7 @@ pub(super) fn visual_table_view(
     block: &VisualBlock,
     block_index: usize,
     rows: &[Vec<RichText>],
+    display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let typography = app.typography_metrics();
@@ -7798,13 +8003,35 @@ pub(super) fn visual_table_view(
                             ))
                         })
                         .child(if let Some(field) = field {
-                            visual_editor_field_element(
+                            visual_table_cell_element(
                                 app,
                                 block_index,
                                 field,
+                                cell,
                                 ElementId::from(("visual-table-cell", cell_key)),
+                                display_scale,
+                                cx,
+                            )
+                        } else if cell
+                            .spans
+                            .iter()
+                            .any(|span| span.image.is_some() || span.math.is_some())
+                        {
+                            // A cell without a proven field stays read-only,
+                            // but keeps the preview grid's mixed layout.
+                            rich_text_with_math_element(
+                                app,
+                                "visual-table-cell-readonly",
+                                cell,
+                                block_index,
+                                PreviewTextRunId::TableCell {
+                                    row: row_index,
+                                    col: cell_index,
+                                },
+                                display_scale,
+                                typography.table_font_size,
+                                typography.text_line_height(typography.table_font_size),
                                 None,
-                                Some(cell),
                                 cx,
                             )
                         } else {
@@ -9302,6 +9529,7 @@ pub(super) fn preview_block_view(
                                     0..authored.len(),
                                     SharedString::from(authored.clone()),
                                     None,
+                                    false,
                                     cx,
                                 )),
                         ),
@@ -9455,8 +9683,17 @@ pub(super) fn preview_block_view(
                                 style.border_r_1().border_color(palette.control_border)
                             })
                             .text_size(px(font_size))
+                            .debug_selector(move || {
+                                format!("preview-table-cell-bounds-{block_index}-{row_index}-{cell_index}")
+                            })
+                            // Images and formulas need the mixed layout;
+                            // every other cell keeps one shaped text run.
                             .child(
-                                if cell.spans.iter().any(|span| span.image.is_some()) {
+                                if cell
+                                    .spans
+                                    .iter()
+                                    .any(|span| span.image.is_some() || span.math.is_some())
+                                {
                                     rich_text_with_math_element(
                                         app,
                                         "preview-table-cell",

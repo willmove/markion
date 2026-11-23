@@ -78,6 +78,37 @@ fn rgba_bytes(color: Rgba) -> [u8; 4] {
     ]
 }
 
+/// Inline math a preview block presents as a typeset formula: prose text,
+/// block-quote children, and GFM table cells (header and body).
+fn preview_inline_math<'a>(block: &'a PreviewBlock, visit: &mut impl FnMut(&'a MathSource)) {
+    match block {
+        PreviewBlock::Heading { text, .. }
+        | PreviewBlock::Paragraph { text, .. }
+        | PreviewBlock::ListItem { text, .. }
+        | PreviewBlock::FootnoteDefinition { text, .. } => {
+            for math in text.spans.iter().filter_map(|span| span.math.as_ref()) {
+                visit(math);
+            }
+        }
+        PreviewBlock::BlockQuote { children, .. } => {
+            for child in children {
+                preview_inline_math(child, visit);
+            }
+        }
+        PreviewBlock::Table { rows, .. } => {
+            for math in rows
+                .iter()
+                .flatten()
+                .flat_map(|cell| cell.spans.iter())
+                .filter_map(|span| span.math.as_ref())
+            {
+                visit(math);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct MathImage {
     pub(super) image: Arc<RenderImage>,
@@ -284,58 +315,30 @@ impl MarkionApp {
     ) {
         let typography = self.typography_metrics();
         let mut requested = HashSet::new();
+        let inline_key = |math: &MathSource| {
+            self.math_key(
+                &math.latex,
+                math.style,
+                typography.math_font_size(math.style),
+                zoom,
+                display_scale,
+                foreground,
+            )
+        };
         for block in preview {
-            match block {
-                PreviewBlock::Heading { text, .. }
-                | PreviewBlock::Paragraph { text, .. }
-                | PreviewBlock::ListItem { text, .. }
-                | PreviewBlock::FootnoteDefinition { text, .. } => {
-                    for span in &text.spans {
-                        if let Some(math) = &span.math {
-                            requested.insert(self.math_key(
-                                &math.latex,
-                                math.style,
-                                typography.math_font_size(math.style),
-                                zoom,
-                                display_scale,
-                                foreground,
-                            ));
-                        }
-                    }
-                }
-                PreviewBlock::BlockQuote { children, .. } => {
-                    let child_texts = children.iter().filter_map(|child| match child {
-                        PreviewBlock::Heading { text, .. }
-                        | PreviewBlock::Paragraph { text, .. }
-                        | PreviewBlock::ListItem { text, .. }
-                        | PreviewBlock::FootnoteDefinition { text, .. } => Some(text),
-                        _ => None,
-                    });
-                    for span in child_texts.flat_map(|rich| rich.spans.iter()) {
-                        if let Some(math) = &span.math {
-                            requested.insert(self.math_key(
-                                &math.latex,
-                                math.style,
-                                typography.math_font_size(math.style),
-                                zoom,
-                                display_scale,
-                                foreground,
-                            ));
-                        }
-                    }
-                }
-                PreviewBlock::MathBlock { latex, .. } => {
-                    requested.insert(self.math_key(
-                        latex,
-                        MathLayoutStyle::Display,
-                        typography.display_math_font_size,
-                        zoom,
-                        display_scale,
-                        foreground,
-                    ));
-                }
-                _ => {}
+            if let PreviewBlock::MathBlock { latex, .. } = block {
+                requested.insert(self.math_key(
+                    latex,
+                    MathLayoutStyle::Display,
+                    typography.display_math_font_size,
+                    zoom,
+                    display_scale,
+                    foreground,
+                ));
             }
+            preview_inline_math(block, &mut |math| {
+                requested.insert(inline_key(math));
+            });
         }
         for block in visual {
             if let VisualBlockKind::MathBlock { latex, .. } = &block.kind {
@@ -348,17 +351,12 @@ impl MarkionApp {
                     foreground,
                 ));
             }
-            for run in &block.editable_runs {
-                if let Some(math) = &run.math {
-                    requested.insert(self.math_key(
-                        &math.latex,
-                        math.style,
-                        typography.math_font_size(math.style),
-                        zoom,
-                        display_scale,
-                        foreground,
-                    ));
-                }
+            for math in block
+                .editable_runs
+                .iter()
+                .filter_map(|run| run.math.as_ref())
+            {
+                requested.insert(inline_key(math));
             }
         }
 
