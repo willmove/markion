@@ -25,6 +25,7 @@ pub(super) fn button(
     id: &'static str,
     selected: bool,
     enabled: bool,
+    destructive: bool,
     label: SharedString,
 ) -> Stateful<Div> {
     div()
@@ -45,10 +46,24 @@ pub(super) fn button(
         .gap_2()
         .rounded_md()
         .text_size(px(15.))
-        .when(selected, |button| {
+        .when(destructive, |button| {
+            button
+                .bg(if selected {
+                    palette.control_hover_bg
+                } else {
+                    palette.control_bg
+                })
+                .text_color(palette.destructive_text)
+        })
+        .when(selected && !destructive, |button| {
             button.bg(palette.active_bg).text_color(palette.active_text)
         })
         .when(!selected && enabled, |button| {
-            button.hover(move |style| style.bg(palette.surface_bg))
+            let hover_bg = if destructive {
+                palette.control_hover_bg
+            } else {
+                palette.surface_bg
+            };
+            button.hover(move |style| style.bg(hover_bg))
         })
 }

@@ -4541,7 +4541,7 @@ fn about_dialog_renders_with_readable_theme_derived_chrome(cx: &mut TestAppConte
         app.update(cx, |app, cx| {
             app.theme = theme;
             app.custom_theme = None;
-            app.selected_theme_name = theme.name().to_string();
+            app.set_theme_selection(theme.name());
             cx.notify();
         });
         cx.run_until_parked();
@@ -4679,7 +4679,7 @@ fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContex
         app.update(cx, |app, cx| {
             app.theme = theme;
             app.custom_theme = None;
-            app.selected_theme_name = theme.name().to_string();
+            app.set_theme_selection(theme.name());
             cx.notify();
         });
         cx.run_until_parked();
@@ -24054,7 +24054,7 @@ fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_state
             app.language = language;
             app.theme = theme;
             app.custom_theme = None;
-            app.selected_theme_name = theme.name().to_string();
+            app.set_theme_selection(theme.name());
             cx.notify();
         });
         cx.run_until_parked();
@@ -27604,7 +27604,7 @@ fn slash_and_inline_editors_anchor_near_the_source(cx: &mut TestAppContext) {
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("$x$"))];
         app.active_tab_mut().selected_range = 1..1;
         app.stable_visual_inline = true;
-        app.selected_theme_name = "One Dark".into();
+        app.set_theme_selection("One Dark");
         app.open_inline_math_editor(0..3, cx);
     });
     cx.run_until_parked();

@@ -2215,13 +2215,13 @@ struct ThemePalette {
     invalid: Rgba,
     table_header_bg: Rgba,
     table_body_bg: Rgba,
-    table_border: Rgba,
+    control_border: Rgba,
     table_selected_bg: Rgba,
     table_drop_target_bg: Rgba,
-    table_control_bg: Rgba,
-    table_control_hover_bg: Rgba,
-    table_control_text: Rgba,
-    table_control_hover_text: Rgba,
+    control_bg: Rgba,
+    control_hover_bg: Rgba,
+    control_text: Rgba,
+    control_hover_text: Rgba,
     destructive_text: Rgba,
 }
 
@@ -2260,296 +2260,30 @@ fn rgb_distance(a: Rgba, b: Rgba) -> f32 {
     (dr * dr + dg * dg + db * db).sqrt()
 }
 
-fn shift_for_min_contrast(
-    color: Rgba,
-    against: Rgba,
-    target_dark: bool,
-    min_contrast: f32,
-) -> Rgba {
-    if contrast_ratio(color, against) >= min_contrast {
-        return color;
-    }
-    let extreme = if target_dark {
-        rgb(0x000000)
-    } else {
-        rgb(0xffffff)
-    };
-    for step in 1..=20 {
-        let candidate = mix_rgba(color, extreme, step as f32 * 0.05);
-        if contrast_ratio(candidate, against) >= min_contrast {
-            return candidate;
-        }
-    }
-    extreme
-}
-
 fn is_valid_surface_for_polarity(bg: Rgba, text: Rgba, is_dark: bool) -> bool {
     let lum = rgba_luminance(bg);
     contrast_ratio(bg, text) >= 4.5 && if is_dark { lum < 0.45 } else { lum > 0.45 }
 }
 
-fn resolve_table_body_bg(
-    app_bg: Rgba,
-    panel_bg: Rgba,
-    surface_bg: Rgba,
-    text: Rgba,
-    is_dark: bool,
-) -> Rgba {
-    for candidate in [surface_bg, app_bg, panel_bg] {
-        if is_valid_surface_for_polarity(candidate, text, is_dark) {
-            return candidate;
-        }
-    }
-    let fallback = if is_dark {
-        rgb(0x141820)
+fn resolve_destructive_text(backgrounds: [Rgba; 3], is_dark: bool) -> Rgba {
+    let (red, extreme) = if is_dark {
+        (rgb(0xf87171), rgb(0xffffff))
     } else {
-        rgb(0xffffff)
+        (rgb(0xdc2626), rgb(0x000000))
     };
-    shift_for_min_contrast(fallback, text, is_dark, 4.5)
-}
-
-fn resolve_table_header_bg(
-    app_bg: Rgba,
-    panel_bg: Rgba,
-    table_body_bg: Rgba,
-    text: Rgba,
-    is_dark: bool,
-) -> Rgba {
-    const MIN_HEADER_BODY_DIST: f32 = 0.025;
-    if is_valid_surface_for_polarity(panel_bg, text, is_dark)
-        && rgb_distance(panel_bg, table_body_bg) >= MIN_HEADER_BODY_DIST
+    if backgrounds
+        .into_iter()
+        .all(|bg| contrast_ratio(red, bg) >= 4.5)
     {
-        return panel_bg;
-    }
-    if is_valid_surface_for_polarity(app_bg, text, is_dark)
-        && rgb_distance(app_bg, table_body_bg) >= MIN_HEADER_BODY_DIST
-    {
-        let tinted = mix_rgba(table_body_bg, app_bg, 0.85);
-        if is_valid_surface_for_polarity(tinted, text, is_dark)
-            && rgb_distance(tinted, table_body_bg) >= MIN_HEADER_BODY_DIST
-        {
-            return tinted;
-        }
-        return app_bg;
-    }
-    for weight in [0.10, 0.14, 0.18] {
-        let candidate = mix_rgba(table_body_bg, text, weight);
-        if is_valid_surface_for_polarity(candidate, text, is_dark)
-            && rgb_distance(candidate, table_body_bg) >= MIN_HEADER_BODY_DIST
-        {
-            return candidate;
-        }
-    }
-    let extreme = if is_dark {
-        rgb(0x000000)
+        red
     } else {
-        rgb(0xffffff)
-    };
-    for weight in [0.18, 0.28, 0.40] {
-        let candidate = mix_rgba(table_body_bg, extreme, weight);
-        if is_valid_surface_for_polarity(candidate, text, is_dark)
-            && rgb_distance(candidate, table_body_bg) >= MIN_HEADER_BODY_DIST
-        {
-            return candidate;
-        }
+        mix_rgba(red, extreme, 0.40)
     }
-    table_body_bg
-}
-
-fn resolve_table_border(
-    border: Rgba,
-    muted: Rgba,
-    text: Rgba,
-    table_header_bg: Rgba,
-    table_body_bg: Rgba,
-    is_dark: bool,
-) -> Rgba {
-    let looks_like_light_fallback =
-        is_dark && rgba_luminance(border) > 0.45 && contrast_ratio(border, table_body_bg) > 5.0;
-    if !looks_like_light_fallback
-        && contrast_ratio(border, table_body_bg) >= 1.12
-        && contrast_ratio(border, table_header_bg) >= 1.12
-    {
-        return border;
-    }
-    let muted_usable = !is_dark || rgba_luminance(muted) < 0.45;
-    if muted_usable {
-        for weight in [0.42, 0.58, 0.75, 0.90] {
-            let candidate = mix_rgba(table_body_bg, muted, weight);
-            if contrast_ratio(candidate, table_body_bg) >= 1.25
-                && contrast_ratio(candidate, table_header_bg) >= 1.25
-            {
-                return candidate;
-            }
-        }
-    }
-    for weight in [0.18, 0.28, 0.40, 0.55] {
-        let candidate = mix_rgba(table_body_bg, text, weight);
-        if contrast_ratio(candidate, table_body_bg) >= 1.25
-            && contrast_ratio(candidate, table_header_bg) >= 1.25
-        {
-            return candidate;
-        }
-    }
-    muted
-}
-
-fn resolve_table_accent_bg(
-    active_bg: Rgba,
-    active_text: Rgba,
-    table_header_bg: Rgba,
-    table_body_bg: Rgba,
-    text: Rgba,
-    is_dark: bool,
-    avoid_bg: Option<Rgba>,
-    prefer_stronger: bool,
-) -> Rgba {
-    let acceptable = |candidate: Rgba| {
-        let lum = rgba_luminance(candidate);
-        contrast_ratio(candidate, text) >= 4.5
-            && if is_dark { lum < 0.45 } else { lum > 0.45 }
-            && rgb_distance(candidate, table_body_bg) >= 0.055
-            && rgb_distance(candidate, table_header_bg) >= 0.055
-            && avoid_bg.is_none_or(|other| rgb_distance(candidate, other) >= 0.035)
-    };
-    if !prefer_stronger && acceptable(active_bg) {
-        return active_bg;
-    }
-    let active_bg_usable = (!is_dark || rgba_luminance(active_bg) < 0.55)
-        && rgb_distance(active_bg, table_body_bg) >= 0.055;
-    if active_bg_usable {
-        let weights: &[f32] = if prefer_stronger {
-            &[0.55, 0.70, 0.40, 0.85]
-        } else {
-            &[0.42, 0.34, 0.52, 0.26]
-        };
-        for &weight in weights {
-            let candidate = mix_rgba(table_body_bg, active_bg, weight);
-            if acceptable(candidate) {
-                return candidate;
-            }
-            let shifted = shift_for_min_contrast(candidate, text, is_dark, 4.55);
-            if acceptable(shifted) {
-                return shifted;
-            }
-        }
-    }
-    let accent_weights: &[f32] = if prefer_stronger {
-        &[0.34, 0.44, 0.54, 0.26]
-    } else {
-        &[0.22, 0.30, 0.16, 0.38]
-    };
-    for &weight in accent_weights {
-        let candidate = mix_rgba(table_body_bg, active_text, weight);
-        if acceptable(candidate) {
-            return candidate;
-        }
-        let shifted = shift_for_min_contrast(candidate, text, is_dark, 4.55);
-        if acceptable(shifted) {
-            return shifted;
-        }
-    }
-    let extreme = if is_dark {
-        rgb(0x000000)
-    } else {
-        rgb(0xffffff)
-    };
-    let extreme_weights: &[f32] = if prefer_stronger {
-        &[0.36, 0.48, 0.26, 0.60, 0.18]
-    } else {
-        &[0.24, 0.34, 0.16, 0.44, 0.56]
-    };
-    for &weight in extreme_weights {
-        let candidate = mix_rgba(extreme, active_text, weight);
-        if acceptable(candidate) {
-            return candidate;
-        }
-        let shifted = shift_for_min_contrast(candidate, text, is_dark, 4.55);
-        if acceptable(shifted) {
-            return shifted;
-        }
-    }
-    let fallback_accents = if is_dark {
-        [
-            rgb(0x1e3a8a),
-            rgb(0x1d4ed8),
-            rgb(0x312e81),
-            rgb(0x0f3b5f),
-            rgb(0x334155),
-        ]
-    } else {
-        [
-            rgb(0xdbeafe),
-            rgb(0xbfdbfe),
-            rgb(0xe0e7ff),
-            rgb(0xc7d2fe),
-            rgb(0xe2e8f0),
-        ]
-    };
-    for accent in fallback_accents {
-        for &weight in if prefer_stronger {
-            &[0.55_f32, 0.75, 0.40, 0.90, 1.0][..]
-        } else {
-            &[0.38_f32, 0.50, 0.28, 0.68, 0.85][..]
-        } {
-            let candidate = mix_rgba(table_body_bg, accent, weight);
-            if acceptable(candidate) {
-                return candidate;
-            }
-            let shifted = shift_for_min_contrast(candidate, text, is_dark, 4.55);
-            if acceptable(shifted) {
-                return shifted;
-            }
-        }
-    }
-    shift_for_min_contrast(
-        mix_rgba(table_body_bg, active_text, 0.45),
-        text,
-        is_dark,
-        4.55,
-    )
-}
-
-fn resolve_destructive_text(bg_primary: Rgba, bg_secondary: Rgba) -> Rgba {
-    let dark_bg = rgba_luminance(bg_primary) < 0.35;
-    let base = if dark_bg {
-        rgb(0xf87171)
-    } else {
-        rgb(0xdc2626)
-    };
-    let extreme = if dark_bg {
-        rgb(0xffffff)
-    } else {
-        rgb(0x000000)
-    };
-    if contrast_ratio(base, bg_primary) >= 4.5 && contrast_ratio(base, bg_secondary) >= 4.5 {
-        return base;
-    }
-    for step in 1..=20 {
-        let candidate = mix_rgba(base, extreme, step as f32 * 0.05);
-        if contrast_ratio(candidate, bg_primary) >= 4.5
-            && contrast_ratio(candidate, bg_secondary) >= 4.5
-        {
-            return candidate;
-        }
-    }
-    extreme
 }
 
 fn theme_palette_from_definition(theme: &ThemeDefinition) -> ThemePalette {
-    theme_palette_from_colors_with_polarity(theme.colors, theme.is_dark)
-}
-
-#[allow(dead_code)]
-fn theme_palette_from_colors(colors: ThemeColors) -> ThemePalette {
-    let app_bg = rgb(colors.app_bg);
-    let text = rgb(colors.text);
-    let inferred_dark =
-        rgba_luminance(app_bg) < 0.35 && rgba_luminance(text) > rgba_luminance(app_bg);
-    theme_palette_from_colors_with_polarity(colors, inferred_dark)
-}
-
-fn theme_palette_from_colors_with_polarity(colors: ThemeColors, is_dark: bool) -> ThemePalette {
+    let colors = theme.colors;
+    let is_dark = theme.is_dark;
     let app_bg = rgb(colors.app_bg);
     let panel_bg = rgb(colors.panel_bg);
     let surface_bg = rgb(colors.surface_bg);
@@ -2559,51 +2293,80 @@ fn theme_palette_from_colors_with_polarity(colors: ThemeColors, is_dark: bool) -
     let active_bg = rgb(colors.active_bg);
     let active_text = rgb(colors.active_text);
 
-    let table_body_bg = resolve_table_body_bg(app_bg, panel_bg, surface_bg, text, is_dark);
-    let table_header_bg = resolve_table_header_bg(app_bg, panel_bg, table_body_bg, text, is_dark);
-    let table_border =
-        resolve_table_border(border, muted, text, table_header_bg, table_body_bg, is_dark);
-    let table_selected_bg = resolve_table_accent_bg(
-        active_bg,
-        active_text,
-        table_header_bg,
-        table_body_bg,
-        text,
-        is_dark,
-        None,
-        false,
-    );
-    let table_drop_target_bg = resolve_table_accent_bg(
-        active_bg,
-        active_text,
-        table_header_bg,
-        table_body_bg,
-        text,
-        is_dark,
-        Some(table_selected_bg),
-        true,
-    );
-    let table_control_bg = if is_valid_surface_for_polarity(panel_bg, text, is_dark) {
+    let black = rgb(0x000000);
+    let white = rgb(0xffffff);
+    let valid_surface = |bg| is_valid_surface_for_polarity(bg, text, is_dark);
+    let table_body_bg = if valid_surface(surface_bg) {
+        surface_bg
+    } else if valid_surface(app_bg) {
+        app_bg
+    } else if valid_surface(panel_bg) {
+        panel_bg
+    } else if is_dark {
+        black
+    } else {
+        white
+    };
+    let valid_header = |bg| valid_surface(bg) && rgb_distance(bg, table_body_bg) >= 0.025;
+    let table_header_bg = if valid_header(panel_bg) {
+        panel_bg
+    } else if valid_header(app_bg) {
+        app_bg
+    } else if is_dark {
+        mix_rgba(table_body_bg, black, 0.25)
+    } else {
+        mix_rgba(table_body_bg, text, 0.07)
+    };
+    let control_border = if (!is_dark || rgba_luminance(border) < 0.45)
+        && contrast_ratio(border, table_body_bg) >= 1.12
+        && contrast_ratio(border, table_header_bg) >= 1.12
+    {
+        border
+    } else {
+        mix_rgba(table_body_bg, text, 0.32)
+    };
+
+    let valid_accent = |bg| {
+        valid_surface(bg)
+            && rgb_distance(bg, table_body_bg) >= 0.055
+            && rgb_distance(bg, table_header_bg) >= 0.055
+    };
+    let table_selected_bg = if valid_accent(active_bg) {
+        active_bg
+    } else if is_dark {
+        // 深色主题以强调文字的色相为基础，降低亮度以保留单元格文字对比度。
+        mix_rgba(black, active_text, 0.40)
+    } else {
+        // 浅色主题加深强调背景，保留 Solarized Light 等主题的暖色。
+        mix_rgba(active_bg, black, 0.17)
+    };
+    let table_drop_target_bg =
+        if valid_accent(active_text) && rgb_distance(active_text, table_selected_bg) >= 0.035 {
+            active_text
+        } else if is_dark {
+            mix_rgba(black, active_bg, 0.20)
+        } else {
+            mix_rgba(table_body_bg, active_text, 0.20)
+        };
+
+    let control_bg = if valid_surface(panel_bg) {
         panel_bg
     } else {
         table_header_bg
     };
-    let table_control_text = text;
-    let table_control_hover_bg = if rgb_distance(active_bg, table_control_bg) >= 0.05
-        && if is_dark {
-            rgba_luminance(active_bg) < 0.55
+    let control_hover_bg =
+        if valid_surface(active_bg) && rgb_distance(active_bg, control_bg) >= 0.04 {
+            active_bg
         } else {
-            rgba_luminance(active_bg) > 0.45
-        } {
-        active_bg
+            table_selected_bg
+        };
+    let control_hover_text = if contrast_ratio(active_text, control_hover_bg) >= 4.5 {
+        active_text
     } else {
-        table_selected_bg
+        text
     };
-    let table_control_hover_text = [active_text, text, rgb(0xffffff), rgb(0x0f172a)]
-        .into_iter()
-        .find(|&candidate| contrast_ratio(candidate, table_control_hover_bg) >= 4.5)
-        .unwrap_or(text);
-    let destructive_text = resolve_destructive_text(table_control_bg, table_header_bg);
+    let destructive_text =
+        resolve_destructive_text([control_bg, control_hover_bg, table_header_bg], is_dark);
 
     ThemePalette {
         app_bg,
@@ -2629,13 +2392,13 @@ fn theme_palette_from_colors_with_polarity(colors: ThemeColors, is_dark: bool) -
         invalid: rgb(0xdc2626),
         table_header_bg,
         table_body_bg,
-        table_border,
+        control_border,
         table_selected_bg,
         table_drop_target_bg,
-        table_control_bg,
-        table_control_hover_bg,
-        table_control_text,
-        table_control_hover_text,
+        control_bg,
+        control_hover_bg,
+        control_text: text,
+        control_hover_text,
         destructive_text,
     }
 }
@@ -3478,6 +3241,7 @@ struct MarkionApp {
     /// built-in theme table and user-loaded `.theme` files. Empty/unknown
     /// values fall back to the legacy `theme`/`custom_theme` fields.
     selected_theme_name: String,
+    theme_palette: ThemePalette,
     /// Whether the in-app Preferences panel (theme + language picker +
     /// shortcut editor) is open.
     preferences_panel_open: bool,

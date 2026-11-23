@@ -6002,8 +6002,9 @@ fn block_menu_item_button(
     let current = block_menu_item_is_current(item, presentation);
     let enabled = presentation.item_enabled(item);
     let label = block_menu_item_label(language, item, state.context);
-    let color = if matches!(item, BlockMenuItem::Delete | BlockMenuItem::DeleteSelection) && enabled
-    {
+    let destructive =
+        enabled && matches!(item, BlockMenuItem::Delete | BlockMenuItem::DeleteSelection);
+    let color = if destructive {
         palette.destructive_text
     } else if (selected || current) && enabled {
         palette.active_text
@@ -6039,6 +6040,7 @@ fn block_menu_item_button(
         id,
         (selected || current) && enabled,
         enabled,
+        destructive,
         SharedString::from(label.clone()),
     )
     .debug_selector(move || {
@@ -6887,6 +6889,7 @@ fn visual_math_editor(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let palette = app.palette();
     let typography = app.typography_metrics();
     let entry = app.math_entry(
         latex,
@@ -6894,7 +6897,7 @@ fn visual_math_editor(
         typography.display_math_font_size,
         1.0,
         display_scale,
-        app.palette().text,
+        palette.text,
     );
     let forced = !matches!(entry, MathCacheEntry::Ready(_));
     let presentation = match entry {
@@ -6923,11 +6926,7 @@ fn visual_math_editor(
             .child(app.math_error_message(&error)),
     };
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
-        div()
-            .border_t_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
-            .p_2()
+        visual_source_payload_container(palette)
             .font(code_slot_font(&app.resolved_font_families.code))
             .text_size(px(typography.code_font_size))
             .line_height(px(typography.code_line_height))
@@ -7011,11 +7010,7 @@ fn visual_html_editor(
         .iter()
         .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
-        div()
-            .border_t_1()
-            .border_color(palette.table_border)
-            .bg(palette.table_header_bg)
-            .p_2()
+        visual_source_payload_container(palette)
             .font(code_slot_font(&app.resolved_font_families.code))
             .text_size(px(typography.source_island_font_size))
             .line_height(px(typography.source_island_line_height))
@@ -7051,12 +7046,13 @@ fn visual_front_matter_editor(
     payload: &VisualEditorField,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let palette = app.palette();
     let typography = app.typography_metrics();
     let payload_start = payload.source_range.start;
     let presentation = div()
         .px_3()
         .py_2()
-        .bg(rgb(0xf8fafc))
+        .bg(palette.control_bg)
         .flex()
         .items_center()
         .gap_2()
@@ -7070,22 +7066,18 @@ fn visual_front_matter_editor(
                 .text_size(px(11.))
                 .line_height(px(14.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x475569))
+                .text_color(palette.control_text)
                 .child(app.tr(Msg::LabelYaml)),
         )
         .children(title.filter(|title| !title.is_empty()).map(|title| {
             div()
                 .text_size(px(typography.rendered_font_size))
                 .line_height(px(typography.paragraph_line_height))
-                .text_color(rgb(0x0f172a))
+                .text_color(palette.control_text)
                 .child(title.to_string())
         }));
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
-        div()
-            .border_t_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
-            .p_2()
+        visual_source_payload_container(palette)
             .font(code_slot_font(&app.resolved_font_families.code))
             .text_size(px(typography.source_island_font_size))
             .line_height(px(typography.source_island_line_height))
@@ -7131,6 +7123,7 @@ fn visual_diagram_editor(
     info: &VisualEditorField,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let palette = app.palette();
     let typography = app.typography_metrics();
     // Read the authored source through the same document slice the cache key
     // uses, so the visual-blocks render and the Split Preview render share one
@@ -7179,11 +7172,7 @@ fn visual_diagram_editor(
             .child(t(app.language, Msg::DiagramLoading)),
     };
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
-        div()
-            .border_t_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
-            .p_2()
+        visual_source_payload_container(palette)
             .font(code_slot_font(&app.resolved_font_families.code))
             .text_size(px(typography.code_font_size))
             .line_height(px(typography.code_line_height))
@@ -7223,6 +7212,14 @@ fn visual_diagram_editor(
 }
 
 /// Shared source chrome for non-image math, diagrams, HTML and front matter.
+fn visual_source_payload_container(palette: ThemePalette) -> Div {
+    div()
+        .border_t_1()
+        .border_color(palette.control_border)
+        .bg(palette.control_bg)
+        .p_2()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn visual_collapsible_source_block(
     app: &MarkionApp,
@@ -7275,7 +7272,7 @@ fn visual_collapsible_source_block(
         .when(bordered, |chrome| {
             chrome
                 .border_1()
-                .border_color(palette.table_border)
+                .border_color(palette.control_border)
                 .rounded_md()
                 .overflow_hidden()
         })
@@ -7311,16 +7308,16 @@ fn visual_collapsible_source_block(
                     .py(px(2.))
                     .rounded_sm()
                     .border_1()
-                    .border_color(palette.table_border)
-                    .bg(palette.table_control_bg)
+                    .border_color(palette.control_border)
+                    .bg(palette.control_bg)
                     .text_size(px(11.))
                     .line_height(px(14.))
-                    .text_color(palette.table_control_text)
+                    .text_color(palette.control_text)
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |style| {
                         style
-                            .bg(palette.table_control_hover_bg)
-                            .text_color(palette.table_control_hover_text)
+                            .bg(palette.control_hover_bg)
+                            .text_color(palette.control_hover_text)
                     })
                     .on_mouse_down(
                         MouseButton::Left,
@@ -7649,7 +7646,7 @@ pub(super) fn visual_table_view(
     let grid = div()
         .debug_selector(move || format!("visual-table-chrome-{block_index}"))
         .border_1()
-        .border_color(palette.table_border)
+        .border_color(palette.control_border)
         .rounded_md()
         .overflow_hidden()
         .children(rows.iter().enumerate().map(|(row_index, row)| {
@@ -7663,7 +7660,7 @@ pub(super) fn visual_table_view(
                 .flex()
                 .bg(background)
                 .when(!is_last_row, |style| {
-                    style.border_b_1().border_color(palette.table_border)
+                    style.border_b_1().border_color(palette.control_border)
                 })
                 .when(cells.is_some() && row_index >= 1, |row| {
                     row.drag_over::<DraggedTableRow>(move |style, dragged, _, _| {
@@ -7707,7 +7704,7 @@ pub(super) fn visual_table_view(
                             rows.contains(&row_index) && columns.contains(&cell_index)),
                             |style| style.bg(palette.table_selected_bg))
                         .when(!is_last_cell, |style| {
-                            style.border_r_1().border_color(palette.table_border)
+                            style.border_r_1().border_color(palette.control_border)
                         })
                         .text_size(px(typography.table_font_size))
                         .cursor(CursorStyle::IBeam)
@@ -7975,7 +7972,7 @@ fn visual_table_grip(
     };
     let draggable = !matches!(target.axis, VisualTableAxis::Row(0));
     let pill_color = if menu_open {
-        palette.table_control_hover_text
+        palette.control_hover_text
     } else {
         mix_rgba(palette.muted, palette.text, 0.25)
     };
@@ -7995,8 +7992,8 @@ fn visual_table_grip(
         } else {
             CursorStyle::PointingHand
         })
-        .when(menu_open, |style| style.bg(palette.table_control_hover_bg))
-        .hover(move |style| style.bg(palette.table_control_hover_bg))
+        .when(menu_open, |style| style.bg(palette.control_hover_bg))
+        .hover(move |style| style.bg(palette.control_hover_bg))
         .child(
             div()
                 .rounded_full()
@@ -8060,15 +8057,15 @@ fn visual_table_edge_strip(
         .items_center()
         .justify_center()
         .rounded_sm()
-        .bg(palette.table_control_bg)
+        .bg(palette.control_bg)
         .hover(move |style| {
             style
-                .bg(palette.table_control_hover_bg)
-                .text_color(palette.table_control_hover_text)
+                .bg(palette.control_hover_bg)
+                .text_color(palette.control_hover_text)
         })
         .text_size(px(10.))
         .line_height(px(10.))
-        .text_color(palette.table_control_text)
+        .text_color(palette.control_text)
         .cursor_pointer()
         .child("+")
         .on_mouse_down(
@@ -8276,7 +8273,7 @@ fn html_table_grid_view(
 ) -> Div {
     let columns = grid.columns.max(1).min(u16::MAX as usize) as u16;
     let palette = app.palette();
-    let border = palette.table_border;
+    let border = palette.control_border;
     let font_size = typography.table_font_size;
     let padding = 8.0f32;
 
@@ -8418,7 +8415,7 @@ pub(super) fn assert_accessible_table_palette(name: &str, palette: ThemePalette,
         ("body", palette.table_body_bg),
         ("selected", palette.table_selected_bg),
         ("drop_target", palette.table_drop_target_bg),
-        ("control", palette.table_control_bg),
+        ("control", palette.control_bg),
     ] {
         let ratio = contrast_ratio(palette.text, bg);
         assert!(
@@ -8441,18 +8438,15 @@ pub(super) fn assert_accessible_table_palette(name: &str, palette: ThemePalette,
     }
 
     assert!(
-        contrast_ratio(palette.table_control_text, palette.table_control_bg) >= 4.5,
+        contrast_ratio(palette.control_text, palette.control_bg) >= 4.5,
         "{name} control text contrast < 4.5"
     );
     assert!(
-        contrast_ratio(
-            palette.table_control_hover_text,
-            palette.table_control_hover_bg
-        ) >= 4.5,
+        contrast_ratio(palette.control_hover_text, palette.control_hover_bg) >= 4.5,
         "{name} control hover text contrast < 4.5"
     );
     assert!(
-        contrast_ratio(palette.destructive_text, palette.table_control_bg) >= 4.5,
+        contrast_ratio(palette.destructive_text, palette.control_bg) >= 4.5,
         "{name} destructive text contrast on menu panel < 4.5"
     );
     assert!(
@@ -8460,11 +8454,11 @@ pub(super) fn assert_accessible_table_palette(name: &str, palette: ThemePalette,
         "{name} destructive text contrast on header bg < 4.5"
     );
     assert!(
-        contrast_ratio(palette.table_border, palette.table_body_bg) >= 1.12,
+        contrast_ratio(palette.control_border, palette.table_body_bg) >= 1.12,
         "{name} border contrast against body < 1.12"
     );
     assert!(
-        contrast_ratio(palette.table_border, palette.table_header_bg) >= 1.12,
+        contrast_ratio(palette.control_border, palette.table_header_bg) >= 1.12,
         "{name} border contrast against header < 1.12"
     );
     assert!(
@@ -8488,7 +8482,7 @@ pub(super) fn assert_accessible_table_palette(name: &str, palette: ThemePalette,
         "{name} drop target background not distinct from selection"
     );
     assert!(
-        rgb_distance(palette.table_control_hover_bg, palette.table_control_bg) >= 0.04,
+        rgb_distance(palette.control_hover_bg, palette.control_bg) >= 0.04,
         "{name} control hover background collapsed"
     );
 }
@@ -9433,7 +9427,7 @@ pub(super) fn preview_block_view(
                 .debug_selector(move || format!("preview-table-{block_index}"))
                 .mb_3()
                 .border_1()
-                .border_color(palette.table_border)
+                .border_color(palette.control_border)
                 .rounded_md()
                 .overflow_hidden()
                 .children(rows.iter().enumerate().map(|(row_index, row)| {
@@ -9443,7 +9437,7 @@ pub(super) fn preview_block_view(
                         .flex()
                         .bg(background)
                         .when(!is_last_row, |style| {
-                            style.border_b_1().border_color(palette.table_border)
+                            style.border_b_1().border_color(palette.control_border)
                         })
                         .children(row.iter().enumerate().map(|(cell_index, cell)| {
                             let is_last_cell = cell_index + 1 == row.len();
@@ -9458,7 +9452,7 @@ pub(super) fn preview_block_view(
                             )
                             .p_2()
                             .when(!is_last_cell, |style| {
-                                style.border_r_1().border_color(palette.table_border)
+                                style.border_r_1().border_color(palette.control_border)
                             })
                             .text_size(px(font_size))
                             .child(
@@ -9618,9 +9612,9 @@ pub(super) fn visual_table_menu_view(
         .w(px(190.))
         .occlude()
         .p(px(4.))
-        .bg(palette.panel_bg)
+        .bg(palette.control_bg)
         .border_1()
-        .border_color(palette.border)
+        .border_color(palette.control_border)
         .rounded_lg()
         .shadow_lg()
         .flex()
@@ -9677,31 +9671,14 @@ pub(super) fn visual_table_menu_view(
                         .child(if current { "✓" } else { "" }),
                 )
                 .when(enabled, |row| {
-                    let hover_bg = if rgb_distance(palette.surface_bg, palette.panel_bg) >= 0.03
-                        && (!destructive
-                            || contrast_ratio(palette.destructive_text, palette.surface_bg) >= 4.5)
-                    {
-                        palette.surface_bg
-                    } else if rgb_distance(palette.table_header_bg, palette.panel_bg) >= 0.03
-                        && (!destructive
-                            || contrast_ratio(palette.destructive_text, palette.table_header_bg)
-                                >= 4.5)
-                    {
-                        palette.table_header_bg
+                    let hover_text = if destructive {
+                        palette.destructive_text
                     } else {
-                        palette.table_control_hover_bg
+                        palette.control_hover_text
                     };
-                    let hover_destructive_text = (destructive
-                        && contrast_ratio(palette.destructive_text, hover_bg) < 4.5)
-                        .then(|| resolve_destructive_text(hover_bg, hover_bg));
                     row.cursor_pointer()
                         .hover(move |style| {
-                            let style = style.bg(hover_bg);
-                            if let Some(color) = hover_destructive_text {
-                                style.text_color(color)
-                            } else {
-                                style
-                            }
+                            style.bg(palette.control_hover_bg).text_color(hover_text)
                         })
                         .on_mouse_up(
                             MouseButton::Left,

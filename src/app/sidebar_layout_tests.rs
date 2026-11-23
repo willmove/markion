@@ -39,7 +39,7 @@ fn sidebar_tab_bar_keeps_content_gap_across_themes_widths_and_tabs(cx: &mut Test
             app.update(cx, |app, cx| {
                 app.theme = theme;
                 app.custom_theme = None;
-                app.selected_theme_name = theme.name().to_string();
+                app.set_theme_selection(theme.name());
                 cx.notify();
             });
             cx.run_until_parked();
