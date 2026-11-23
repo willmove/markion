@@ -1,0 +1,46 @@
+name: Intel release verification
+on:
+  push:
+    branches: [codex/macos-intel-verification]
+    paths: [.github/workflows/intel-release-verification.yml]
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  SIGNED_RUN_ID: "44339741078"
+
+jobs:
+  verify:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect Intel launch environment
+        run: |
+          uname -m
+          sw_vers
+          test "$(uname -m)" = x86_64
+          spctl --status
+          swift -e 'import Metal; print("Metal device:", MTLCreateSystemDefaultDevice()?.name ?? "unavailable")'
+      - name: Download signed Intel DMG
+        if: env.SIGNED_RUN_ID != ''
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SIGNED_RUN_ID }}
+          name: markion-macos-x86_64
+          path: signed
+      - name: Exercise the release workflow launch gate on Intel
+        if: env.SIGNED_RUN_ID != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/smoke-test-macos-release.sh signed/Markion_0.6.2_x64.dmg x86_64 "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        if: always() && env.SIGNED_RUN_ID != ''
+        with:
+          name: macos-launch-x86_64
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
