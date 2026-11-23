@@ -38,7 +38,12 @@ impl MarkionApp {
         // theme file dropped into the themes dir since launch shows up, and the
         // installed-font list so the panel's advisory warning stays current.
         self.ensure_sample_custom_theme();
+        let previous_theme = self.active_theme_definition();
         self.custom_themes = list_theme_definitions(&self.themes_dir).unwrap_or_default();
+        let theme = self.active_theme_definition();
+        if theme.colors != previous_theme.colors || theme.is_dark != previous_theme.is_dark {
+            self.theme_palette = theme_palette_from_definition(&theme);
+        }
         self.installed_font_names = cx.text_system().all_font_names();
         self.font_picker = None;
         self.preferences_tab = PreferencesTab::General;
@@ -114,7 +119,7 @@ impl MarkionApp {
                     let preferences = AppPreferences::default();
                     app.theme = AppTheme::from_name(&preferences.theme).unwrap_or(AppTheme::Paper);
                     app.custom_theme = None;
-                    app.selected_theme_name = preferences.theme.clone();
+                    app.set_theme_selection(&preferences.theme);
                     app.preferences_panel_open = false;
                     app.focus_mode = preferences.focus_mode;
                     app.typewriter_mode = preferences.typewriter_mode;

@@ -307,6 +307,10 @@ impl MarkionApp {
                 (!name.is_empty()).then(|| name.to_string())
             })
             .unwrap_or_else(|| "Paper".to_string());
+        let theme_palette = theme_palette_from_definition(&Self::resolve_theme_definition(
+            &selected_theme_name,
+            &custom_themes,
+        ));
         let language = Language::from_code(&preferences.language);
         let app = Self {
             tabs: vec![initial_tab],
@@ -352,6 +356,7 @@ impl MarkionApp {
             custom_themes,
             themes_dir,
             selected_theme_name,
+            theme_palette,
             preferences_panel_open: false,
             preferences_tab: PreferencesTab::default(),
             preferences_panel_focus: cx.focus_handle(),
@@ -2506,34 +2511,42 @@ impl MarkionApp {
     /// Resolve the active theme definition by `selected_theme_name`, checking
     /// built-ins first, then custom themes, then falling back to Paper.
     pub(super) fn active_theme_definition(&self) -> ThemeDefinition {
-        let name = self.selected_theme_name.trim();
-        builtin_theme_definitions()
-            .into_iter()
+        Self::resolve_theme_definition(&self.selected_theme_name, &self.custom_themes)
+    }
+
+    fn resolve_theme_definition(name: &str, custom_themes: &[ThemeDefinition]) -> ThemeDefinition {
+        let mut builtins = builtin_theme_definitions().into_iter();
+        let fallback = builtins.next().expect("builtin theme table is non-empty");
+        if fallback.name.eq_ignore_ascii_case(name) {
+            return fallback;
+        }
+        builtins
             .find(|theme| theme.name.eq_ignore_ascii_case(name))
             .or_else(|| {
-                self.custom_themes
+                custom_themes
                     .iter()
                     .find(|theme| theme.name.eq_ignore_ascii_case(name))
                     .cloned()
             })
-            .unwrap_or_else(|| {
-                builtin_theme_definitions()
-                    .into_iter()
-                    .next()
-                    .expect("builtin theme table is non-empty")
-            })
+            .unwrap_or(fallback)
     }
 
     pub(super) fn palette(&self) -> ThemePalette {
-        theme_palette_from_definition(&self.active_theme_definition())
+        self.theme_palette
+    }
+
+    pub(super) fn set_theme_selection(&mut self, name: &str) -> ThemeDefinition {
+        self.selected_theme_name = name.trim().to_string();
+        let resolved = self.active_theme_definition();
+        self.theme_palette = theme_palette_from_definition(&resolved);
+        resolved
     }
 
     /// Apply a theme by its display name (used by the Preferences panel and by
     /// `cycle_theme`). Updates both the name-based selection and the legacy
     /// `theme`/`custom_theme` fields so old code paths keep working.
     pub(super) fn apply_theme_by_name(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.selected_theme_name = name.trim().to_string();
-        let resolved = self.active_theme_definition();
+        let resolved = self.set_theme_selection(name);
         // Keep the legacy `custom_theme` field in sync: set it only when the
         // selection is a user-loaded `.theme` file.
         self.custom_theme = self

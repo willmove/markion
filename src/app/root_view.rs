@@ -1565,7 +1565,7 @@ fn completion_palette_button(
     selected: bool,
     label: SharedString,
 ) -> Stateful<Div> {
-    palette_controls::button(app.palette(), id, selected, true, label).cursor_pointer()
+    palette_controls::button(app.palette(), id, selected, true, false, label).cursor_pointer()
 }
 
 fn completion_palette_anchor(app: &MarkionApp, source_offset: usize) -> Point<Pixels> {

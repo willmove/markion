@@ -2213,23 +2213,170 @@ struct ThemePalette {
     search_match: Rgba,
     search_current: Rgba,
     invalid: Rgba,
+    table_header_bg: Rgba,
+    table_body_bg: Rgba,
+    control_border: Rgba,
+    table_selected_bg: Rgba,
+    table_drop_target_bg: Rgba,
+    control_bg: Rgba,
+    control_hover_bg: Rgba,
+    control_text: Rgba,
+    control_hover_text: Rgba,
+    destructive_text: Rgba,
+}
+
+fn rgba_luminance(color: Rgba) -> f32 {
+    fn linear(channel: f32) -> f32 {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+}
+
+fn contrast_ratio(a: Rgba, b: Rgba) -> f32 {
+    let la = rgba_luminance(a);
+    let lb = rgba_luminance(b);
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+fn mix_rgba(a: Rgba, b: Rgba, weight_b: f32) -> Rgba {
+    let wb = weight_b.clamp(0.0, 1.0);
+    let wa = 1.0 - wb;
+    Rgba {
+        r: (a.r * wa + b.r * wb).clamp(0.0, 1.0),
+        g: (a.g * wa + b.g * wb).clamp(0.0, 1.0),
+        b: (a.b * wa + b.b * wb).clamp(0.0, 1.0),
+        a: 1.0,
+    }
+}
+
+fn rgb_distance(a: Rgba, b: Rgba) -> f32 {
+    let dr = a.r - b.r;
+    let dg = a.g - b.g;
+    let db = a.b - b.b;
+    (dr * dr + dg * dg + db * db).sqrt()
+}
+
+fn is_valid_surface_for_polarity(bg: Rgba, text: Rgba, is_dark: bool) -> bool {
+    let lum = rgba_luminance(bg);
+    contrast_ratio(bg, text) >= 4.5 && if is_dark { lum < 0.45 } else { lum > 0.45 }
+}
+
+fn resolve_destructive_text(backgrounds: [Rgba; 3], is_dark: bool) -> Rgba {
+    let (red, extreme) = if is_dark {
+        (rgb(0xf87171), rgb(0xffffff))
+    } else {
+        (rgb(0xdc2626), rgb(0x000000))
+    };
+    if backgrounds
+        .into_iter()
+        .all(|bg| contrast_ratio(red, bg) >= 4.5)
+    {
+        red
+    } else {
+        mix_rgba(red, extreme, 0.40)
+    }
 }
 
 fn theme_palette_from_definition(theme: &ThemeDefinition) -> ThemePalette {
-    theme_palette_from_colors(theme.colors)
-}
-
-fn theme_palette_from_colors(colors: ThemeColors) -> ThemePalette {
+    let colors = theme.colors;
+    let is_dark = theme.is_dark;
+    let app_bg = rgb(colors.app_bg);
+    let panel_bg = rgb(colors.panel_bg);
+    let surface_bg = rgb(colors.surface_bg);
+    let text = rgb(colors.text);
+    let muted = rgb(colors.muted);
+    let border = rgb(colors.border);
     let active_bg = rgb(colors.active_bg);
+    let active_text = rgb(colors.active_text);
+
+    let black = rgb(0x000000);
+    let white = rgb(0xffffff);
+    let valid_surface = |bg| is_valid_surface_for_polarity(bg, text, is_dark);
+    let table_body_bg = if valid_surface(surface_bg) {
+        surface_bg
+    } else if valid_surface(app_bg) {
+        app_bg
+    } else if valid_surface(panel_bg) {
+        panel_bg
+    } else if is_dark {
+        black
+    } else {
+        white
+    };
+    let valid_header = |bg| valid_surface(bg) && rgb_distance(bg, table_body_bg) >= 0.025;
+    let table_header_bg = if valid_header(panel_bg) {
+        panel_bg
+    } else if valid_header(app_bg) {
+        app_bg
+    } else if is_dark {
+        mix_rgba(table_body_bg, black, 0.25)
+    } else {
+        mix_rgba(table_body_bg, text, 0.07)
+    };
+    let control_border = if (!is_dark || rgba_luminance(border) < 0.45)
+        && contrast_ratio(border, table_body_bg) >= 1.12
+        && contrast_ratio(border, table_header_bg) >= 1.12
+    {
+        border
+    } else {
+        mix_rgba(table_body_bg, text, 0.32)
+    };
+
+    let valid_accent = |bg| {
+        valid_surface(bg)
+            && rgb_distance(bg, table_body_bg) >= 0.055
+            && rgb_distance(bg, table_header_bg) >= 0.055
+    };
+    let table_selected_bg = if valid_accent(active_bg) {
+        active_bg
+    } else if is_dark {
+        // 深色主题以强调文字的色相为基础，降低亮度以保留单元格文字对比度。
+        mix_rgba(black, active_text, 0.40)
+    } else {
+        // 浅色主题加深强调背景，保留 Solarized Light 等主题的暖色。
+        mix_rgba(active_bg, black, 0.17)
+    };
+    let table_drop_target_bg =
+        if valid_accent(active_text) && rgb_distance(active_text, table_selected_bg) >= 0.035 {
+            active_text
+        } else if is_dark {
+            mix_rgba(black, active_bg, 0.20)
+        } else {
+            mix_rgba(table_body_bg, active_text, 0.20)
+        };
+
+    let control_bg = if valid_surface(panel_bg) {
+        panel_bg
+    } else {
+        table_header_bg
+    };
+    let control_hover_bg =
+        if valid_surface(active_bg) && rgb_distance(active_bg, control_bg) >= 0.04 {
+            active_bg
+        } else {
+            table_selected_bg
+        };
+    let control_hover_text = if contrast_ratio(active_text, control_hover_bg) >= 4.5 {
+        active_text
+    } else {
+        text
+    };
+    let destructive_text =
+        resolve_destructive_text([control_bg, control_hover_bg, table_header_bg], is_dark);
+
     ThemePalette {
-        app_bg: rgb(colors.app_bg),
-        panel_bg: rgb(colors.panel_bg),
-        surface_bg: rgb(colors.surface_bg),
-        text: rgb(colors.text),
-        muted: rgb(colors.muted),
-        border: rgb(colors.border),
+        app_bg,
+        panel_bg,
+        surface_bg,
+        text,
+        muted,
+        border,
         active_bg,
-        active_text: rgb(colors.active_text),
+        active_text,
         input_selection: Rgba {
             a: 0.24,
             ..active_bg
@@ -2243,6 +2390,16 @@ fn theme_palette_from_colors(colors: ThemeColors) -> ThemePalette {
             ..active_bg
         },
         invalid: rgb(0xdc2626),
+        table_header_bg,
+        table_body_bg,
+        control_border,
+        table_selected_bg,
+        table_drop_target_bg,
+        control_bg,
+        control_hover_bg,
+        control_text: text,
+        control_hover_text,
+        destructive_text,
     }
 }
 
@@ -3084,6 +3241,7 @@ struct MarkionApp {
     /// built-in theme table and user-loaded `.theme` files. Empty/unknown
     /// values fall back to the legacy `theme`/`custom_theme` fields.
     selected_theme_name: String,
+    theme_palette: ThemePalette,
     /// Whether the in-app Preferences panel (theme + language picker +
     /// shortcut editor) is open.
     preferences_panel_open: bool,
