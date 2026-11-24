@@ -70,7 +70,7 @@
 
 - candidate 适用用例完成情况：NOT_RUN。
 - 最终 tag 包哈希/资源映射、P01/P02 核心冒烟与 P06 真实升级：NOT_RUN。
-- 七包、两签名、update.json、GitHub/OSS、全部构建与发布作业、双语说明：NOT_RUN。
+- 八包（含 pacman `.pkg.tar.zst`）、两签名、update.json、GitHub/OSS、全部构建与发布作业、双语说明：NOT_RUN。
 - 必需 MarkNice/Word 平台矩阵链接及本次结果：待填。
 - 当前结论：**尚未验收／不可据此宣称已就绪**。
 - 未修复缺陷、未覆盖范围与本次明确授权例外：待填。

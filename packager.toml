@@ -19,12 +19,15 @@
 # then wraps that binary into:
 #   - macOS:   .app + .dmg        (--formats app,dmg)
 #   - Linux:   .deb + .AppImage   (--formats deb,appimage)
+#              plus .rpm and Arch/Omarchy .pkg.tar.zst via supplementary builders
 #   - Windows: NSIS .exe installer (--formats nsis)
 #
-# cargo-packager 0.11.x has no zip or rpm PackageFormat. CI additionally emits:
+# cargo-packager 0.11.x has no zip, rpm or pacman PackageFormat. CI additionally emits:
 #   - Windows: markion_<version>_x64-portable.zip  (scripts/build-windows-portable.ps1)
 #   - Linux:   markion_<version>_x86_64.rpm        (scripts/build-linux-rpm.sh, from the DEB payload)
-# Those two artifacts still go through scripts/verify-packaged-workspace.ps1.
+#   - Linux:   markion-<version>-1-x86_64.pkg.tar.zst
+#              (scripts/build-linux-arch.sh, from the DEB payload via Arch makepkg)
+# Those artifacts still go through scripts/verify-packaged-workspace.ps1.
 #
 # NOTE on signing: Windows builds have no Authenticode certificate, so
 # SmartScreen warns. macOS bundles are ad-hoc sealed by default (see [macos]
@@ -36,8 +39,8 @@
 #
 # Aliyun OSS mirror (release.yml `mirror-oss` job):
 #   After a successful `v*` tag build, the release workflow also uploads the
-#   seven packages (NSIS, portable zip, arm64 DMG, x64 DMG, DEB, RPM,
-#   AppImage), updater `update.json` + both installer `.sig` files, this
+#   eight packages (NSIS, portable zip, arm64 DMG, x64 DMG, DEB, RPM,
+#   AppImage, pacman .pkg.tar.zst), updater `update.json` + both installer `.sig` files, this
 #   `packager.toml`, a generated `manifest.json`,
 #   and `sha256sums.txt` to an Aliyun OSS Bucket at:
 #       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
@@ -60,7 +63,7 @@ product-name = "Markion"
 # Providing `name` skips that buggy path entirely.
 name = "markion"
 identifier = "dev.markion.app"
-version = "0.6.2"
+version = "0.6.3"
 category = "Productivity"
 publisher = "Willmove"
 # cargo-packager 0.11.8 writes the Debian control `Maintainer` from this
