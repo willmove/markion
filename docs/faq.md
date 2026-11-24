@@ -14,9 +14,9 @@ Markion is a native desktop Markdown editor built in Rust with the [GPUI](https:
 |---|---|---|
 | Windows | `x86_64-pc-windows-msvc` | Windows 10 and later; NSIS `.exe` installer |
 | macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Apple Silicon and Intel Macs each get a native build; **min macOS 11.0**. A universal binary is a future task. |
-| Linux | `x86_64-unknown-linux-gnu` | Built on Ubuntu 22.04; ships as `.deb` and `.AppImage` |
+| Linux | `x86_64-unknown-linux-gnu` | Built on Ubuntu 22.04; ships as `.deb`, `.rpm`, `.AppImage`, and Arch/Omarchy-compatible `.pkg.tar.zst` |
 
-Windows releases may trigger SmartScreen. For macOS, check the release notes for the DMG signing status. For a Developer ID signed and notarized DMG, drag Markion to Applications and open it normally. [Troubleshooting](#troubleshooting) covers older ad-hoc releases such as v0.6.1. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen; AppImage-launched Linux installs update through the same signed flow (see [Updating Markion](#updating-markion)). macOS and Linux `.deb`/`.rpm` update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
+Windows releases may trigger SmartScreen. For macOS, check the release notes for the DMG signing status. For a Developer ID signed and notarized DMG, drag Markion to Applications and open it normally. [Troubleshooting](#troubleshooting) covers older ad-hoc releases such as v0.6.1. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen; AppImage-launched Linux installs update through the same signed flow (see [Updating Markion](#updating-markion)). macOS and Linux system-package update actions open the matching release download in the system browser. DEB and pacman installations pull in the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) automatically.
 
 ## Updating Markion
 
@@ -24,7 +24,7 @@ Windows releases may trigger SmartScreen. For macOS, check the release notes for
 
 - **Windows (NSIS install):** one-click download, Minisign verification, passive reinstall — no browser needed. The update refuses to start while any document has unsaved changes.
 - **Linux (AppImage):** the same signed one-click flow. Markion downloads the new AppImage, verifies its Minisign signature, replaces the running `.AppImage` file in place, and relaunches itself. No root password or package manager is involved.
-- **Linux (`.deb` / `.rpm`) and macOS:** Markion opens the matching release file in the system browser; download and install it as before. A DEB/RPM install lives in system directories owned by root and cannot replace itself silently — switch to the AppImage if you want in-app self-updates.
+- **Linux (`.deb` / `.rpm` / `.pkg.tar.zst`) and macOS:** Markion opens the matching release file in the system browser; download and install it as before. On Arch/Omarchy, run `sudo pacman -U markion-<version>-1-x86_64.pkg.tar.zst`. These system packages live in root-owned directories and cannot replace themselves silently — switch to the AppImage if you want in-app self-updates.
 
 AppImage first launch on Ubuntu 24.04+ can fail with a missing-FUSE error (`libfuse.so.2: cannot open shared object file`); install it once with `sudo apt install libfuse2`, or launch the AppImage with `--appimage-extract-and-run`.
 

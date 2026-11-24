@@ -49,17 +49,17 @@
 
 ## 다운로드하고 바로 시작하세요
 
-| 플랫폼 | v0.6.2 다운로드 |
+| 플랫폼 | v0.6.3 다운로드 |
 | --- | --- |
-| **Windows x64** | [설치 프로그램](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [포터블 ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
+| **Windows x64** | [설치 프로그램](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [포터블 ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman(Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
 
 [모든 릴리스와 검증 정보](https://github.com/willmove/markion/releases)
 
 - **Windows:** 설치 프로그램을 실행하거나 ZIP을 풀어 주세요. 아직 Authenticode 서명이 없어 SmartScreen에서 **추가 정보 → 실행**이 필요할 수 있습니다.
 - **macOS.** Mac에 맞는 Apple Silicon 또는 Intel DMG를 열고 Markion을 응용 프로그램 폴더로 옮긴 다음 두 번 클릭하세요. 두 DMG 모두 Developer ID 서명과 Apple 공증을 받았습니다. [첫 실행 안내](docs/user-guide.md#install).
-- **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x markion*.AppImage`) 실행하거나 DEB/RPM을 설치하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
+- **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x markion*.AppImage`) 실행하거나 DEB/RPM/pacman을 설치하세요. Arch Linux와 Omarchy에서는 `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`를 실행하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
 
 Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 예제를 수정하기 전에는 **이미지를 포함한 examples 폴더 전체를 먼저 복사하세요**. [시작 안내와 템플릿](assets/examples/README.md).
 
@@ -102,7 +102,7 @@ Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 
 
 - Markdown이 문서의 원본입니다. 지원하지 않거나 바이트 경계가 불확실한 문법은 소스 편집으로 처리합니다. GFM 병합 셀과 이미지 픽셀 자르기는 지원하지 않습니다. [지원 범위와 남은 과제](docs/visual-editing-quality.md).
 - 내장 PDF/DOCX는 외부 변환기가 필요 없습니다. 선택한 Pandoc이 실패하면 내장 내보내기로 전환하며 형식별 재현도는 다릅니다. MarkNice 브라우저 작업 공간은 고정 버전의 편집기 외관을 따릅니다. Word 가져오기는 현재 세션에만 적용되고 Markion에 저장되지 않으므로 **Copy MD** 또는 명시적인 Markdown 저장으로 가져와야 합니다. 브라우저 Word와 테마 적용 인쇄 PDF는 네이티브 내보내기와 다릅니다. 해당 작업 공간에는 Markdown/PDF/이미지 가져오기 및 예제 작업이 없습니다.
-- Windows 설치 버전과 Linux AppImage는 Minisign으로 검증한 앱 내 업데이트 설치를 지원합니다. macOS와 DEB/RPM은 다운로드를 엽니다. 업데이트 검증과 OS 코드 서명은 별개입니다.
+- Windows 설치 버전과 Linux AppImage는 Minisign으로 검증한 앱 내 업데이트 설치를 지원합니다. macOS와 DEB/RPM/pacman은 다운로드를 엽니다. 업데이트 검증과 OS 코드 서명은 별개입니다.
 - **README와 UI 모두 8개 언어**: 영어, 중국어 간체/번체, 일본어, 한국어, 프랑스어, 독일어, 스페인어. 환경설정에서 **한국어**를 선택하세요.
 
 ## 빌드와 기여

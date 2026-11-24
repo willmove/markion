@@ -42,17 +42,17 @@
 
 ## 下載，即刻開始
 
-| 平臺 | v0.6.2 下載 |
+| 平臺 | v0.6.3 下載 |
 | --- | --- |
-| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
+| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman（Arch/Omarchy）](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
 
 [全部版本與資源校驗資訊](https://github.com/willmove/markion/releases)
 
 - **Windows：**執行安裝程式或解壓 ZIP。暫未提供 Authenticode 簽名，SmartScreen 可能需要選擇**更多資訊 → 仍要執行**。
 - **macOS。**下載與晶片對應的 Apple Silicon 或 Intel DMG，開啟後把 Markion 拖到「應用程式」，再按兩下啟動。兩個安裝檔皆已通過 Developer ID 簽署與 Apple 公證。[首次啟動說明](docs/user-guide.md#安装)。
-- **Linux：**為 AppImage 新增執行許可權（`chmod +x markion*.AppImage`）後執行，或安裝 DEB/RPM。無 FUSE 時可用 `--appimage-extract-and-run`。
+- **Linux：**為 AppImage 新增執行許可權（`chmod +x markion*.AppImage`）後執行，或安裝 DEB/RPM/pacman。Arch Linux 與 Omarchy 執行 `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`。無 FUSE 時可用 `--appimage-extract-and-run`。
 
 開啟 Markdown 檔案或資料夾即可寫作。試用內建樣例時，請**先複製整個 examples 資料夾及其中的圖片，再開始編輯**。[上手與模板](assets/examples/README.md)。
 
@@ -95,7 +95,7 @@
 
 - Markdown 始終是文件源資料；不支援或無法精確定位的語法保留原始碼編輯路徑。暫不支援 GFM 合併單元格與圖片畫素裁剪。[覆蓋範圍與已知缺口](docs/visual-editing-quality.md)。
 - 內建 PDF/DOCX 無需外部轉換器；可選 Pandoc，失敗時回退內建匯出，不同格式保真度不同。MarkNice 瀏覽器工作區沿用固定版本的編輯器外觀；Word 匯入僅在當前會話生效、不寫回 Markion，需**複製 MD**或顯式儲存 Markdown 帶回。其 Word 匯出和主題化列印 PDF 有別於原生匯出；該工作區不提供 Markdown/PDF/圖片匯入與樣例操作。
-- Windows 安裝版與 Linux AppImage 支援 Minisign 驗證的一鍵更新；macOS 與 DEB/RPM 開啟下載連結。更新驗證與作業系統程式碼簽名不同。
+- Windows 安裝版與 Linux AppImage 支援 Minisign 驗證的一鍵更新；macOS 與 DEB/RPM/pacman 開啟下載連結。更新驗證與作業系統程式碼簽名不同。
 - **8 種 README 與 8 種介面語言**：英語、簡體/繁體中文、日語、韓語、法語、德語和西班牙語。在偏好設定中選擇 **한국어** 即可使用韓語介面。
 
 ## 構建與貢獻

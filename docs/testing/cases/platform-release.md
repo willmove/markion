@@ -6,7 +6,7 @@
 
 **优先级：** P0
 
-**前置与素材：** 实际候选 NSIS/ZIP/DMG/DEB/RPM/AppImage（见[素材说明](../fixtures/README.md)）。
+**前置与素材：** 实际候选 NSIS/ZIP/DMG/DEB/RPM/AppImage/pacman `.pkg.tar.zst`（见[素材说明](../fixtures/README.md)）。
 
 **步骤：**
 
@@ -16,7 +16,7 @@
 
 **预期：** 每格式可用、架构正确，打包资源可找到；不会借仓库回退掩盖缺包；升级不丢文档/配置；如未公证按实际说明反馈，不宣称已公证。
 
-**变体（逐项建行）：** README矩阵每包；Linux兼容发行版；有/无系统Vulkan；macOS arm64和真实Intel。
+**变体（逐项建行）：** README矩阵每包；Linux兼容发行版；Arch与可用的Omarchy pacman安装分别记录；有/无系统Vulkan；macOS arm64和真实Intel。
 
 **证据与收尾：** 安装日志、包/实际exe哈希、资源清单、首次启动截图、系统安全提示。
 
@@ -105,9 +105,9 @@
 3. dirty拒绝；再测断网/坏清单/下载/签名/启动失败和浏览器fallback（需既有可控测试源，无此能力记BLOCKED）。
 4. 核对默认自动下载、关闭自动下载、到期后台检查、已验证包的“稍后”与菜单重开；自动下载不等于安装授权，安装前再次检查 dirty。
 
-**预期：** 默认可后台下载并验证，关闭自动下载时等待用户动作；安装始终需要明确确认且dirty拒绝；“稍后”保留本会话已就绪包；未验证payload不执行；失败现安装仍可用；macOS/DEB/RPM走正确手动下载，不声称自替换。
+**预期：** 默认可后台下载并验证，关闭自动下载时等待用户动作；安装始终需要明确确认且dirty拒绝；“稍后”保留本会话已就绪包；未验证payload不执行；失败现安装仍可用；macOS/DEB/RPM/pacman走正确手动下载，不声称自替换。
 
-**变体（逐项建行）：** Windows/AppImage成功；每种失败；自动下载开/关；后台到期/手动检查；Later/重开/dirty确认；macOS/DEB/RPM/不带公钥构建fallback。
+**变体（逐项建行）：** Windows/AppImage成功；每种失败；自动下载开/关；后台到期/手动检查；Later/重开/dirty确认；macOS/DEB/RPM/pacman/不带公钥构建fallback。
 
 **证据与收尾：** 旧新版本/hash、签名/manifest、安装日志和重开内容；禁止改生产latest或伪造新公开tag只为造场景。
 
@@ -119,7 +119,7 @@
 
 **步骤：**
 
-1. 按发布流程逐个核对7包、NSIS/AppImage各.sig、update.json、镜像manifest/checksums及签名。
+1. 按发布流程逐个核对8包、NSIS/AppImage各.sig、update.json、镜像manifest/checksums及签名。
 2. 下载最终包，记录哈希与候选的差别；安装实际包复测P01/P02和核心D01/E05/R02，再执行可用P06。
 3. 核对发布title/tag、非draft稳定状态、双语说明及报告链接，登记所有例外。
 

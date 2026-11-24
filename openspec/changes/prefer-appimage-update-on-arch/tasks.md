@@ -13,7 +13,7 @@
 ## 3. Validation
 
 - [x] 3.1 Run `openspec validate prefer-appimage-update-on-arch`
-- [ ] 3.2 On the Omarchy machine, confirm "Check for Updates…" on a newer release offers the AppImage asset (may be verified during the next release's manual checks)
+- [ ] 3.2 On an Omarchy machine, confirm "Check for Updates…" offers the pacman `.pkg.tar.zst` asset for a non-AppImage installation and retains AppImage for an AppImage launch; this supersedes the original AppImage-only expectation through `add-arch-pacman-package` and remains unverified
 
 ## Release validation repair — 2026-11-18
 

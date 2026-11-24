@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("nsis", "app", "dmg", "deb", "appimage", "zip", "rpm")]
+    [ValidateSet("nsis", "app", "dmg", "deb", "appimage", "zip", "rpm", "pacman")]
     [string]$Format,
     [string]$ArtifactsRoot = "dist"
 )
@@ -155,6 +155,11 @@ echo 'AppImage permissions OK: AppRun and directories are world-executable, file
             Invoke-Native "RPM extraction" {
                 bash -lc "cd '$($cleanupRoot -replace '\\','/')' && rpm2cpio '$($package.FullName -replace '\\','/')' | cpio -idmu --quiet"
             }
+        }
+        "pacman" {
+            $package = Get-ChildItem -LiteralPath $artifacts -Filter "*.pkg.tar.zst" -File | Select-Object -First 1
+            if (-not $package) { throw "Pacman package not found" }
+            Invoke-Native "Pacman package extraction" { bsdtar -xf $package.FullName -C $cleanupRoot }
         }
     }
 

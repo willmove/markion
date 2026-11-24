@@ -1,5 +1,7 @@
 # Proposal: prefer-appimage-update-on-arch
 
+> **Superseded for the non-AppImage Arch-family path by `add-arch-pacman-package`.** The AppImage mapping below records the original interim proposal. Current and future synchronization must retain AppImage only for AppImage launches and offer the native pacman package to other Arch-family installations. Do not use this historical proposal to restore the old mapping.
+
 ## Why
 
 The "Check for Updates…" dialog maps every Linux x86_64 machine to the `.deb` asset (`update.rs` `browser_download_url` hardcodes `_amd64.deb`). On pacman-based distributions such as Arch Linux and Omarchy — where the PDF font fidelity of this project was actually verified — the offered artifact does not match the system's package manager; the portable `.AppImage` is the artifact Arch users can actually use.

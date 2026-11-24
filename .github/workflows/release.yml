@@ -35,7 +35,7 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             formats: deb,appimage
-            verify_formats: deb,appimage,rpm
+            verify_formats: deb,appimage,rpm,pacman
             artifact_name: markion-linux-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -93,7 +93,9 @@ jobs:
             libasound2-dev \
             rpm \
             rpm2cpio \
-            cpio
+            cpio \
+            libarchive-tools \
+            zstd
 
       - name: Install appimagetool
         if: runner.os == 'Linux'
@@ -259,6 +261,15 @@ jobs:
       - name: Package Linux RPM from DEB payload
         if: runner.os == 'Linux'
         run: bash scripts/build-linux-rpm.sh
+
+      - name: Package and install-test Arch Linux pacman package
+        if: runner.os == 'Linux'
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}:/workspace"
+          -w /workspace
+          archlinux:base-devel
+          bash scripts/build-linux-arch.sh
 
       - name: Verify packaged workspace and examples (${{ matrix.verify_formats }})
         shell: pwsh
@@ -584,7 +595,7 @@ jobs:
   # Mirrors the tagged release's installers and packaging config to a domestic
   # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
   # generated `manifest.json` for mirror metadata and future clients.
-  # Packages: Windows NSIS + portable zip, macOS DMGs (arm64 + x64), Linux DEB + RPM + AppImage.
+  # Packages: Windows NSIS + portable zip, macOS DMGs (arm64 + x64), Linux DEB + RPM + AppImage + pacman.
   # The mirrored `update.json` is the Release's manifest with every platform's
   # installer URL rewritten to the OSS host, so each distribution channel
   # serves a self-consistent manifest/installer pair with identical signatures.
@@ -661,6 +672,16 @@ jobs:
             --pattern "markion_${VERSION}_x64-setup.exe.sig" \
             --pattern "markion_${VERSION}_x86_64.AppImage.sig" \
             --pattern "update.json"
+          pacman_asset="markion-${VERSION}-1-x86_64.pkg.tar.zst"
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets[].name' | grep -Fqx "${pacman_asset}"; then
+            gh release download "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --dir dist \
+              --pattern "${pacman_asset}"
+          else
+            echo "Historical release has no pacman asset; mirroring its original package set"
+          fi
 
       - name: List artifacts to mirror
         run: ls -laR dist
@@ -668,7 +689,12 @@ jobs:
       - name: Compute SHA-256 digests for each installer
         run: |
           cd dist
-          sha256sum *.exe *.dmg *.deb *.rpm *.AppImage *.zip > sha256sums.txt
+          shopt -s nullglob
+          packages=(*.exe *.dmg *.deb *.rpm *.AppImage *.zip *.pkg.tar.zst)
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            test -f "markion-${VERSION}-1-x86_64.pkg.tar.zst"
+          fi
+          sha256sum "${packages[@]}" > sha256sums.txt
           cat sha256sums.txt
 
       - name: Rewrite update.json installer URLs to the OSS host
@@ -724,6 +750,11 @@ jobs:
               "linux-rpm":      f"markion_{version}_x86_64.rpm",
               "linux-appimage": f"markion_{version}_x86_64.AppImage",
           }
+          pacman = pathlib.Path(f"dist/markion-{version}-1-x86_64.pkg.tar.zst")
+          if pacman.is_file():
+              assets["linux-arch-x86_64"] = pacman.name
+          elif os.environ["GITHUB_EVENT_NAME"] != "workflow_dispatch":
+              raise SystemExit(f"required pacman package is missing: {pacman}")
           out = {
               "version": version,
               "tag": release_tag,
@@ -937,6 +968,12 @@ jobs:
           upload "dist/markion_${VERSION}_amd64.deb" "${prefix_dir}/markion_${VERSION}_amd64.deb"
           upload "dist/markion_${VERSION}_x86_64.rpm" "${prefix_dir}/markion_${VERSION}_x86_64.rpm"
           upload "dist/markion_${VERSION}_x86_64.AppImage" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage"
+          if [[ -f "dist/markion-${VERSION}-1-x86_64.pkg.tar.zst" ]]; then
+            upload "dist/markion-${VERSION}-1-x86_64.pkg.tar.zst" "${prefix_dir}/markion-${VERSION}-1-x86_64.pkg.tar.zst"
+          elif [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "Required pacman package is missing" >&2
+            exit 1
+          fi
           upload "dist/markion_${VERSION}_x64-setup.exe.sig" "${prefix_dir}/markion_${VERSION}_x64-setup.exe.sig"
           upload "dist/markion_${VERSION}_x86_64.AppImage.sig" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage.sig"
           upload "dist/update.json" "${prefix_dir}/update.json"
@@ -974,6 +1011,15 @@ jobs:
             }
             echo "Verified ${f}"
           done
+          pacman_asset="markion-${VERSION}-1-x86_64.pkg.tar.zst"
+          if [[ -f "dist/${pacman_asset}" || "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 30 --max-time 300 "${base}/${pacman_asset}")"
+            test "${code}" = "200" || {
+              echo "Mirror verification failed: ${base}/${pacman_asset} returned HTTP ${code}" >&2
+              exit 1
+            }
+            echo "Verified ${pacman_asset}"
+          fi
           curl -fsSL "${base}/update.json" | grep -q "\"version\": \"${VERSION}\"" || {
             echo "Mirror verification failed: update.json version != ${VERSION}" >&2
             exit 1

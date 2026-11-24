@@ -51,7 +51,7 @@ pwsh.exe -File scripts/verify-examples.ps1
 | Windows x86_64 | NSIS、portable ZIP | Microsoft Pinyin、CF_HTML、系统对话框、签名升级 |
 | macOS Apple Silicon | arm64 DMG | 浏览器下载后启动、实际签名公证、Cmd/Option、系统 IME、public.html |
 | macOS Intel | x64 DMG，在实际 Intel 环境 | 同上；交叉编译通过不能代替实机 |
-| Linux X11 x86_64 | DEB、RPM 在兼容发行版；AppImage | IBus/Fcitx、剪贴板、GPU／软件 Vulkan、窗口边角 |
+| Linux X11 x86_64 | DEB、RPM 在兼容发行版；Arch/Omarchy 的 pacman `.pkg.tar.zst`；AppImage | IBus/Fcitx、剪贴板、GPU／软件 Vulkan、窗口边角 |
 | Linux Wayland x86_64 | 适用的包格式 | 记录 compositor；窗口控制、首帧光标、IME、剪贴板 |
 
 每个平台至少完整执行一轮适用用例；同平台其他包格式复用功能结果前必须证明相同应用／资源身份，仍逐包执行 P01/P02/P06。浏览器、Office 查看器和 IME 矩阵不能因此省略。

@@ -44,17 +44,17 @@
 
 ## Download and start writing
 
-| Platform | v0.6.2 downloads |
+| Platform | v0.6.3 downloads |
 | --- | --- |
-| **Windows x64** | [Installer](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [Portable ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
+| **Windows x64** | [Installer](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [Portable ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman (Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
 
 [All releases and verification](https://github.com/willmove/markion/releases)
 
 - **Windows:** run the installer or extract the ZIP. No Authenticode signature yet; SmartScreen may require **More info → Run anyway**.
 - **macOS.** Choose the Apple Silicon or Intel DMG for your Mac. Open it, drag Markion to Applications, then double-click Markion. Both DMGs are Developer ID signed and Apple notarized. [First-launch details](docs/user-guide.md#install).
-- **Linux:** make the AppImage executable (`chmod +x markion*.AppImage`) and run it, or install DEB/RPM. Without FUSE, use `--appimage-extract-and-run`.
+- **Linux:** make the AppImage executable (`chmod +x markion*.AppImage`) and run it, or install DEB/RPM/pacman. On Arch Linux and Omarchy, run `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`. Without FUSE, use `--appimage-extract-and-run`.
 
 Open a Markdown file or folder. To try the examples, **copy the entire examples folder, including images, before editing**. [Getting started](assets/examples/README.md).
 
@@ -111,7 +111,7 @@ In a separate **1080-system-key-event** run on a 1 MiB document, application cal
 
 - Visual Edit keeps Markdown canonical; unsupported or byte-ambiguous syntax uses conservative source editing. GFM merged cells and image pixel cropping are unsupported. [Coverage and remaining gaps](docs/visual-editing-quality.md).
 - Built-in PDF/DOCX need no external converter; optional Pandoc falls back to built-in export. Fidelity varies by format. The MarkNice browser workspace follows its pinned editor skin; Word import is session-local, never writes back, and requires **Copy MD** or an explicit Markdown save to bring work back. Its Word export and themed print-to-PDF differ from native export; Markdown/PDF/image import and sample actions are unavailable there.
-- Windows installers and Linux AppImages support Minisign-verified in-app installation; macOS and DEB/RPM updates open a download. Update verification is separate from OS code signing.
+- Windows installers and Linux AppImages support Minisign-verified in-app installation; macOS and DEB/RPM/pacman updates open a download. Update verification is separate from OS code signing.
 - **8 README and 8 UI languages:** English, Simplified/Traditional Chinese, Japanese, Korean, French, German and Spanish. Choose **한국어** in Preferences for the Korean UI.
 
 <a id="development"></a><a id="开发"></a>

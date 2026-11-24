@@ -34,10 +34,10 @@ Download the latest build from [GitHub Releases](https://github.com/willmove/mar
 | Platform | Release packages | Target |
 |---|---|---|
 | Windows | NSIS `.exe` installer and portable `.zip` | x86_64 |
-| Linux | `.deb`, `.rpm`, and AppImage | x86_64 |
+| Linux | `.deb`, `.rpm`, AppImage, and Arch/Omarchy-compatible pacman `.pkg.tar.zst` | x86_64 |
 | macOS | DMGs containing the `.app` | Apple Silicon (arm64) and Intel (x64), macOS 11+ |
 
-Windows releases can trigger SmartScreen. Choose **More info → Run anyway** if prompted. The macOS release notes show the signing and notarization status of each DMG. **Help → Check for Updates…** offers an actionable update prompt on every platform: tagged Windows x86_64 NSIS installations and Linux AppImage launches get a cryptographically verified (cargo-packager Minisign) one-click download-and-install that refuses to start while any document has unsaved changes — on Linux the running AppImage is replaced in place and Markion relaunches itself — while macOS and Linux `.deb`/`.rpm` installs open the matching release file in the system browser. Apple Silicon and Intel Macs each get a native DMG; a universal binary is not currently provided.
+Windows releases can trigger SmartScreen. Choose **More info → Run anyway** if prompted. The macOS release notes show the signing and notarization status of each DMG. **Help → Check for Updates…** offers an actionable update prompt on every platform: tagged Windows x86_64 NSIS installations and Linux AppImage launches get a cryptographically verified (cargo-packager Minisign) one-click download-and-install that refuses to start while any document has unsaved changes — on Linux the running AppImage is replaced in place and Markion relaunches itself — while macOS and Linux system-package installs open the matching release file in the system browser. On Arch Linux and Omarchy, install the pacman asset with `sudo pacman -U markion-<version>-1-x86_64.pkg.tar.zst`; pacman resolves the declared runtime dependencies. Apple Silicon and Intel Macs each get a native DMG; a universal binary is not currently provided.
 
 **macOS first launch.** A notarized DMG opens like any other Mac app: drag Markion to Applications and double-click it, and macOS asks once to confirm an app downloaded from the Internet. A build that is not notarized — including v0.6.1 — is refused by Gatekeeper after a browser download, usually as "Markion is damaged and can't be opened" (older macOS versions may instead say Apple "cannot check it for malicious software" and offer *System Settings → Privacy & Security → Open Anyway*). The file is not damaged; macOS blocks apps that Apple has not notarized. For such builds, download with `curl -LO` (curl does not set the quarantine flag), or clear the flag once after a browser download:
 
@@ -48,7 +48,7 @@ xattr -cr /Applications/Markion.app
 Repeat the `xattr` command after each browser-downloaded update of a non-notarized build; prefix `sudo` if your install location requires it. The download itself is intact either way — the OSS mirror provides `sha256sums.txt`, and GitHub asset metadata also exposes SHA-256 digests.
 
 
-Background checks run every five hours, including an overdue check after startup. **Preferences → General** enables automatic update downloads by default. Signed Windows/AppImage packages are staged first; choose **Restart and Update** or **Later**. Installation requires confirmation and rechecks unsaved documents. macOS and DEB/RPM keep their browser-download path.
+Background checks run every five hours, including an overdue check after startup. **Preferences → General** enables automatic update downloads by default. Signed Windows/AppImage packages are staged first; choose **Restart and Update** or **Later**. Installation requires confirmation and rechecks unsaved documents. macOS and DEB/RPM/pacman keep their browser-download path.
 
 ## Editing modes
 
@@ -220,7 +220,7 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 - Visual Edit is WYSIWYG-first while retaining canonical Markdown; constructs without a proven byte-exact rendering expose exact source as a transitional affordance (tracked on the [WYSIWYG coverage roadmap](visual-editing-quality.md)) rather than accepting a guessed rich-tree mutation, and block reordering is offered only when non-overlapping source boundaries are provable. Remaining gaps include multiline/malformed images and residual source ranges whose exact ownership cannot be proven; the matrix tracks these individually.
 - On-screen rendering (Split/Read preview and Visual Edit) typesets math with the embedded RaTeX engine; LaTeX export keeps native `$...$`/`$$...$$` source for the reader's own toolchain, and the built-in DOCX exporter converts supported formulas to native Word math, with readable source fallbacks for unsupported formulas.
 - Visual Edit table cells support direct editing plus Bold/Italic/Inline Code/Link on a selection that stays inside one cell. GFM column widths can be dragged and persisted as an HTML comment (`<!-- markion-cols:… -->`) immediately before the table. Inline images accept integer widths from 10–100% and can be drag-resized. Single-line reference-style block images retain their picture and exact source editor; multiline/malformed images and unparseable tables retain conservative source-backed paths. GFM merged cells, arbitrary multi-block cells, and image pixel cropping are not supported.
-- One-click updates install the Windows NSIS distribution and replace a running Linux AppImage in place after Minisign verification (the updated AppImage relaunches automatically); macOS bundle replacement and Linux `.deb`/`.rpm` self-replacement remain future work, and updater authentication is not Windows Authenticode or Apple notarization.
+- One-click updates install the Windows NSIS distribution and replace a running Linux AppImage in place after Minisign verification (the updated AppImage relaunches automatically); macOS bundle replacement and Linux system-package self-replacement remain future work, and updater authentication is not Windows Authenticode or Apple notarization.
 - A full custom-theme installation UI is not implemented.
 - Export uses format-specific layouts rather than capturing editor pixels; very large documents do not yet use a rope or fully incremental parsing across every derived subsystem.
 
@@ -286,10 +286,10 @@ Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器�
 | 平台 | 发布包 | 目标架构 |
 |---|---|---|
 | Windows | NSIS `.exe` 安装程序与便携 `.zip` | x86_64 |
-| Linux | `.deb`、`.rpm` 与 AppImage | x86_64 |
+| Linux | `.deb`、`.rpm`、AppImage，以及 Arch/Omarchy 兼容的 pacman `.pkg.tar.zst` | x86_64 |
 | macOS | 内含 `.app` 的 DMG | Apple Silicon（arm64）与 Intel（x64），macOS 11+ |
 
-Windows 发布包可能触发 SmartScreen，可选择“更多信息 → 仍要运行”。macOS DMG 的签名和公证状态见各版本的发布说明。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制。
+Windows 发布包可能触发 SmartScreen，可选择“更多信息 → 仍要运行”。macOS DMG 的签名和公证状态见各版本的发布说明。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Arch Linux 与 Omarchy 可运行 `sudo pacman -U markion-<版本>-1-x86_64.pkg.tar.zst` 安装，由 pacman 解析声明的运行依赖。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制。
 
 **macOS 首次启动。** 已公证的 DMG 与普通 Mac 应用一样打开：把 Markion 拖入“应用程序”后双击，macOS 只会询问一次是否打开从互联网下载的应用。未公证的构建（包括 v0.6.1）通过浏览器下载后会被 Gatekeeper 拒绝，通常提示“Markion 已损坏，无法打开”（较旧的 macOS 可能改为提示“无法检查其是否包含恶意软件”，并在“系统设置 → 隐私与安全性”中提供“仍要打开”）。文件本身并未损坏，这是 macOS 对未经 Apple 公证应用的拦截。对此类构建，可用 `curl -LO` 下载（curl 不会设置隔离标记），或在浏览器下载后清除一次隔离标记：
 
@@ -300,7 +300,7 @@ xattr -cr /Applications/Markion.app
 未公证的构建每次通过浏览器下载更新后需重新执行 `xattr` 命令；安装位置需要权限时在命令前加 `sudo`。无论哪种方式，下载文件本身都完好——每个 Release 都附有 `sha256sums.txt` 可供校验。
 
 
-后台每五小时检查更新，启动后补做已到期的检查。**偏好设置 → 通用**默认启用自动下载更新。Windows/AppImage 会先下载并验证签名，再由用户选择“重启并更新”或“稍后”；安装前再次检查未保存文档。macOS 与 DEB/RPM 仍通过浏览器下载。
+后台每五小时检查更新，启动后补做已到期的检查。**偏好设置 → 通用**默认启用自动下载更新。Windows/AppImage 会先下载并验证签名，再由用户选择“重启并更新”或“稍后”；安装前再次检查未保存文档。macOS 与 DEB/RPM/pacman 仍通过浏览器下载。
 
 ## 编辑模式
 
@@ -444,7 +444,7 @@ PDF 与 DOCX 默认使用内置导出器，无需外部转换工具。在导出�
 - 可视化编辑以所见即所得为默认呈现契约，同时保留标准 Markdown；暂无字节精确渲染证明的结构会以源码作为过渡编辑通道（登记在 [WYSIWYG 覆盖路线图](visual-editing-quality.md)中），而不会猜测富文本树变更；仅当可证明存在不重叠的源码边界时才提供块级重排。剩余缺口包括多行或畸形图片，以及无法证明精确归属的残余源码范围；矩阵逐项追踪这些缺口。
 - 屏幕渲染（分栏/阅读预览与可视化编辑）使用内嵌的 RaTeX 引擎排版数学公式；LaTeX 导出保留原生 `$...$`/`$$...$$` 源码交给读者自己的工具链处理，内置 DOCX 导出器会把支持的公式转换为原生 Word 数学公式，不能转换的公式保留可读源码后备。
 - 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。图片在可视化编辑中保留图片或有界错误呈现，通过“图片属性”编辑可精确定位的实例；不确定形式和原始语法请在整篇源码模式中编辑，无法解析的表格保留保守的源码路径。GFM 合并格、任意多块单元格和图片像素裁剪不受支持。
-- 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本，或原地替换运行中的 Linux AppImage 并自动重启；macOS 包替换与 Linux `.deb`/`.rpm` 自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
+- 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本，或原地替换运行中的 Linux AppImage 并自动重启；macOS 包替换与 Linux 系统包自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
 - 尚未实现完整的自定义主题安装界面。
 - 导出使用各格式的排版而非截取编辑器像素；超大文档尚未在所有派生子系统中使用 rope 或完全增量解析。
 

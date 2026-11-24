@@ -880,7 +880,7 @@ fn browser_download_url_with_os_release(
         // An AppImage install offers the AppImage on any distro — the user
         // picked that package type and the signed updater replaces it.
         ("linux", "x86_64") if appimage => "_x86_64.AppImage",
-        ("linux", "x86_64") if linux_wants_appimage(os_release) => "_x86_64.AppImage",
+        ("linux", "x86_64") if linux_is_arch_family(os_release) => "-x86_64.pkg.tar.zst",
         ("linux", "x86_64") => "_amd64.deb",
         _ => return Ok(release.html_url.clone()),
     };
@@ -895,9 +895,9 @@ fn browser_download_url_with_os_release(
 /// Classifies a Linux system from its `/etc/os-release` contents: a
 /// pacman-based distribution — the `ID` value, or any token of the
 /// space-separated `ID_LIKE` list, equals `arch` (Arch, Omarchy, Manjaro,
-/// EndeavourOS, …) — takes the portable AppImage, and every other or
-/// undecidable system keeps the DEB default.
-fn linux_wants_appimage(os_release: Option<&str>) -> bool {
+/// EndeavourOS, …) — takes the native pacman package unless the running
+/// installation is an AppImage. Every other or undecidable system keeps DEB.
+fn linux_is_arch_family(os_release: Option<&str>) -> bool {
     let Some(text) = os_release else {
         return false;
     };
@@ -1215,6 +1215,7 @@ mod tests {
                 ("Markion_9.9.9_x64.dmg", "macos-x64"),
                 ("markion_9.9.9_amd64.deb", "linux"),
                 ("markion_9.9.9_x86_64.AppImage", "appimage"),
+                ("markion-9.9.9-1-x86_64.pkg.tar.zst", "arch"),
             ]
             .into_iter()
             .map(|(name, platform)| GitHubReleaseAsset {
@@ -1372,6 +1373,7 @@ mod tests {
         let release = release_with_version("9.9.9");
         let appimage_url = "https://github.com/willmove/markion/releases/download/v9.9.9/appimage";
         let deb_url = "https://github.com/willmove/markion/releases/download/v9.9.9/linux";
+        let arch_url = "https://github.com/willmove/markion/releases/download/v9.9.9/arch";
         let offered = |os_release: Option<&str>, appimage: bool| {
             browser_download_url_with_os_release(&release, "linux", "x86_64", appimage, os_release)
                 .unwrap()
@@ -1389,8 +1391,8 @@ mod tests {
         ] {
             assert_eq!(
                 offered(os_release, false),
-                appimage_url,
-                "pacman-based {os_release:?} should be offered the AppImage"
+                arch_url,
+                "pacman-based {os_release:?} should be offered the native package"
             );
         }
         for os_release in [Some(debian), None] {
@@ -1400,16 +1402,30 @@ mod tests {
                 "deb-based or unknown {os_release:?} should keep the DEB"
             );
         }
-        assert_eq!(
-            offered(Some(debian), true),
-            appimage_url,
-            "an AppImage install must be offered the AppImage even on deb systems"
-        );
-        assert_eq!(
-            offered(None, true),
-            appimage_url,
-            "an AppImage install must be offered the AppImage even when os-release is unreadable"
-        );
+        for os_release in [Some(arch_id), Some(debian), None] {
+            assert_eq!(
+                offered(os_release, true),
+                appimage_url,
+                "an AppImage install must keep the AppImage for {os_release:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_pacman_asset_is_a_recoverable_error() {
+        let mut release = release_with_version("9.9.9");
+        release
+            .assets
+            .retain(|asset| !asset.name.ends_with("-x86_64.pkg.tar.zst"));
+        let error = browser_download_url_with_os_release(
+            &release,
+            "linux",
+            "x86_64",
+            false,
+            Some("ID=omarchy\nID_LIKE=arch\n"),
+        )
+        .unwrap_err();
+        assert!(error.contains("-x86_64.pkg.tar.zst"));
     }
 
     #[test]

@@ -11,7 +11,7 @@ When ready, the application SHALL offer localized Restart and Update and Later a
 On macOS, non-AppImage Linux installations, unsupported architectures or keyless builds, a newer-release notification SHALL retain the matching platform asset browser-download action (or Release-page fallback), without automatic browser opening or unsigned self-installation. Manual checks SHALL report current-version and error results with an actionable browser fallback. Routine background current-version and discovery failures SHALL remain silent; automatic download failures SHALL retain manual recovery without repeated modal interruption. Network, verification and package I/O SHALL run off the render path and SHALL NOT recompute version-cached Markdown state.
 
 
-On Linux x86_64 browser-download paths, the offered asset SHALL follow the distribution family read from `/etc/os-release`: if `ID` or a space-separated `ID_LIKE` token equals `arch`, offer the `.AppImage`; otherwise offer `.deb`, including absent or unparseable os-release. Authenticated AppImage self-updates remain governed by the existing signed-update lifecycle.
+On Linux x86_64 browser-download paths, an AppImage launch SHALL retain the AppImage asset. For other launches, the offered asset SHALL follow the distribution family read from `/etc/os-release`: if `ID` or a space-separated `ID_LIKE` token equals `arch`, offer the pacman `.pkg.tar.zst` package; otherwise offer `.deb`, including absent or unparseable os-release. Authenticated AppImage self-updates remain governed by the existing signed-update lifecycle, and pacman downloads remain browser-only.
 
 #### Scenario: User invokes Check for Updates and a newer version is available
 - **WHEN** a newer release is discovered on a supported signed-update installation with automatic downloads enabled
@@ -89,6 +89,7 @@ On Linux x86_64 browser-download paths, the offered asset SHALL follow the distr
 
 #### Scenario: Linux download follows the distribution family
 - **WHEN** a newer release is offered through the Linux x86_64 browser-download path
-- **THEN** a pacman-based system whose os-release ID or ID_LIKE contains arch is offered the AppImage asset
-- **AND** every other Linux system, including missing or unparseable os-release, is offered the DEB asset
+- **THEN** an AppImage launch is offered the AppImage asset regardless of distribution
+- **AND** a non-AppImage pacman-based system whose os-release ID or ID_LIKE contains arch is offered the pacman `.pkg.tar.zst` asset
+- **AND** every other non-AppImage Linux system, including missing or unparseable os-release, is offered the DEB asset
 - **AND** the browser opens only after the user chooses Download Update

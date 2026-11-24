@@ -42,17 +42,17 @@
 
 ## Herunterladen und losschreiben
 
-| Plattform | Downloads für v0.6.2 |
+| Plattform | Downloads für v0.6.3 |
 | --- | --- |
-| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.2/Markion_0.6.2_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.2/markion_0.6.2_x86_64.rpm) |
+| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman (Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
 
 [Alle Versionen und Prüfinformationen](https://github.com/willmove/markion/releases)
 
 - **Windows:** Installer ausführen oder ZIP entpacken. Noch keine Authenticode-Signatur; SmartScreen erfordert gegebenenfalls **Weitere Informationen → Trotzdem ausführen**.
 - **macOS.** Öffnen Sie die passende DMG für Apple Silicon oder Intel, ziehen Sie Markion in „Programme“ und starten Sie es per Doppelklick. Beide DMGs sind mit Developer ID signiert und von Apple notarisiert. [Erster Start](docs/user-guide.md#install).
-- **Linux:** AppImage ausführbar machen (`chmod +x markion*.AppImage`) und starten oder DEB/RPM installieren. Ohne FUSE: `--appimage-extract-and-run`.
+- **Linux:** AppImage ausführbar machen (`chmod +x markion*.AppImage`) und starten oder DEB/RPM/pacman installieren. Unter Arch Linux und Omarchy: `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`. Ohne FUSE: `--appimage-extract-and-run`.
 
 Eine Markdown-Datei oder einen Ordner öffnen. Vor dem Bearbeiten der Beispiele **den gesamten examples-Ordner einschließlich Bildern kopieren**. [Einstieg und Vorlagen](assets/examples/README.md).
 
@@ -95,7 +95,7 @@ Bei einem separaten Lauf mit **1080 System-Tastenereignissen** in einem 1-MiB-Do
 
 - Markdown bleibt die maßgebliche Quelle. Nicht unterstützte oder auf Byte-Ebene mehrdeutige Syntax nutzt konservative Quelltextbearbeitung. Keine verbundenen GFM-Zellen oder pixelgenauen Bildzuschnitte. [Abdeckung und Lücken](docs/visual-editing-quality.md).
 - Integriertes PDF/DOCX benötigt keinen externen Konverter; optionales Pandoc fällt bei Fehlern auf den integrierten Export zurück. Die Wiedergabe unterscheidet sich je Format. Der MarkNice-Browserbereich folgt der Oberfläche seiner festgelegten Editorversion. Word-Import bleibt in der Sitzung und schreibt nicht nach Markion zurück; zur Übernahme **Copy MD** oder ausdrücklich Markdown speichern. Word und thematischer PDF-Druck im Browser unterscheiden sich vom nativen Export. Markdown-/PDF-/Bildimport und Beispielaktionen werden dort nicht angeboten.
-- Windows-Installationen und Linux-AppImages unterstützen die Installation Minisign-geprüfter Updates in der App. macOS und DEB/RPM öffnen einen Download. Diese Prüfung ist von der OS-Codesignatur getrennt.
+- Windows-Installationen und Linux-AppImages unterstützen die Installation Minisign-geprüfter Updates in der App. macOS und DEB/RPM/pacman öffnen einen Download. Diese Prüfung ist von der OS-Codesignatur getrennt.
 - **README und Oberfläche in 8 Sprachen**: Englisch, vereinfachtes/traditionelles Chinesisch, Japanisch, Koreanisch, Französisch, Deutsch und Spanisch. **한국어** in den Einstellungen wählen.
 
 ## Bauen und beitragen

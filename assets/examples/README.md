@@ -44,7 +44,7 @@
 
 ## 文档放在哪里
 
-Windows 安装版和便携版通常在应用资源目录的 `assets/examples` 中；macOS 位于应用包的 `Contents/Resources/assets/examples`；Linux 的资源位置随 DEB、RPM、AppImage 布局而变化。**帮助 → 样例与模板** 会定位实际位置，无需记忆安装路径。AppImage 的运行时资源可能位于临时挂载目录，请复制到自己的目录后再使用。
+Windows 安装版和便携版通常在应用资源目录的 `assets/examples` 中；macOS 位于应用包的 `Contents/Resources/assets/examples`；Linux 的资源位置随 DEB、RPM、AppImage、pacman 布局而变化。**帮助 → 样例与模板** 会定位实际位置，无需记忆安装路径。AppImage 的运行时资源可能位于临时挂载目录，请复制到自己的目录后再使用。
 
 这些文件是普通 UTF-8 Markdown。切换界面语言不会翻译文档正文。在线链接仅供选读，不影响离线练习。样例中的人物、项目、数据和联系方式均为演示占位内容；请在正式使用前替换。
 

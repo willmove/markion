@@ -1,5 +1,7 @@
 # Design: prefer-appimage-update-on-arch
 
+> **Superseded design note:** `add-arch-pacman-package` replaces the non-AppImage Arch-family AppImage download with the native `.pkg.tar.zst` asset. The os-release detection and AppImage-first launch rule remain relevant; Arch-family → AppImage decisions below are historical and must not be reapplied.
+
 ## Context
 
 Release-preflight reconciliation (2026-11-18): this change's delta now uses the current archived update requirement as its base, retaining five-hour discovery, automatic authenticated staging, Later/reopen and explicit clean-document installation consent. The distribution-family mapping only affects the browser-download path; it does not replace authenticated AppImage self-updates.
