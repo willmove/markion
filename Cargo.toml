@@ -76,7 +76,6 @@ rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal",
 raw-window-handle = "0.6"
 reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots"] }
 tokio.workspace = true
-font8x8 = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 pulldown-cmark.workspace = true
 percent-encoding.workspace = true
