@@ -21,7 +21,7 @@ The project SHALL provide a GitHub Actions workflow that builds a release binary
 - **THEN** the cargo registry, git dependencies, and `target/` are restored from cache so the build skips already-compiled crates
 
 ### Requirement: Each release build SHALL be packaged into a native installer
-After a successful per-platform build, the workflow SHALL run `cargo-packager` (driven by `Packager.toml`) to wrap the release binary into the platform-appropriate distributable format(s): a Windows NSIS `.exe` installer (current-user install mode) plus a portable `.zip` archive, a macOS `.app` bundle plus `.dmg` disk image, and a Linux `.deb` package, `.rpm` package, plus `.AppImage`. The packager config SHALL specify the product name (`Markion`), bundle identifier (`dev.markion.app`), version, category, and generated platform icon files (`assets/markion.ico`, `assets/markion.icns`, and `assets/markion.png`). The Windows portable archive SHALL contain the application binary and the same bundled resource payload as the NSIS install layout under a single top-level folder so extraction does not scatter files.
+After a successful per-platform build, the workflow SHALL use `cargo-packager` (driven by `Packager.toml`) and the existing supplementary package builders to produce the platform-appropriate distributable formats: a Windows NSIS `.exe` installer (current-user install mode) plus a portable `.zip` archive, a macOS `.app` bundle plus `.dmg` disk image, and Linux `.deb`, `.rpm`, `.AppImage`, and pacman `.pkg.tar.zst` packages. The packager config SHALL specify the product name (`Markion`), bundle identifier (`dev.markion.app`), version, category, and generated platform icon files (`assets/markion.ico`, `assets/markion.icns`, and `assets/markion.png`). The Windows portable archive SHALL contain the application binary and the same bundled resource payload as the NSIS install layout under a single top-level folder so extraction does not scatter files. The pacman package SHALL contain the same Linux application and resource payload as the DEB/RPM packages, use the `x86_64` architecture, declare Arch-native runtime dependencies, and be named `markion-<version>-<release>-x86_64.pkg.tar.zst` using the conventional pacman name, version, release and architecture fields.
 
 #### Scenario: Windows job produces an NSIS installer
 - **WHEN** the Windows build job packages its binary
@@ -33,8 +33,10 @@ After a successful per-platform build, the workflow SHALL run `cargo-packager` (
 - **THEN** it emits a `.app` bundle and a `.dmg` disk image, both arm64 (Apple Silicon); the app icon is `assets/markion.icns`
 
 #### Scenario: Linux job produces a deb and an AppImage
-- **WHEN** the Linux build job packages its binary
-- **THEN** it emits a `.deb` package (amd64), an `.rpm` package (x86_64), and a portable `.AppImage`, all using the generated `assets/markion.png` icon and the `dev.markion.app` desktop entry identifier where the format supports a desktop entry
+- **WHEN** the Linux build job packages its binary and validates the pacman output
+- **THEN** it emits a `.deb` package (amd64), an `.rpm` package (x86_64), a portable `.AppImage`, and a `.pkg.tar.zst` package (x86_64)
+- **AND** every package uses the generated `assets/markion.png` icon and the `dev.markion.app` desktop entry identifier where the format supports a desktop entry
+- **AND** the pacman package can be inspected and installed by Arch Linux tooling without converting a foreign package at install time
 
 ### Requirement: Version tags SHALL publish a GitHub Release with all installers
 The workflow SHALL include a release job that runs only when a `v*` tag is pushed, downloads all per-platform packaging artifacts, and attaches them to a GitHub Release with auto-generated release notes. Builds on non-tag refs (branch pushes, pull requests) SHALL produce downloadable CI artifacts but SHALL NOT publish a release.
@@ -101,7 +103,7 @@ Release notes SHALL default to a concise user-facing summary: one opening senten
 #### Scenario: Final release information is verified
 - **WHEN** the tag workflow succeeds
 - **THEN** the operator confirms that the Release is neither a draft nor an unintended prerelease
-- **AND** confirms that the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon DMG, Linux amd64 DEB, Linux x86_64 RPM, and Linux x86_64 AppImage are attached
+- **AND** confirms that the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon DMG, Linux amd64 DEB, Linux x86_64 RPM, Linux x86_64 AppImage, and Linux x86_64 pacman `.pkg.tar.zst` are attached
 - **AND** confirms that the curated notes and comparison link are present
 
 #### Scenario: Routine release notes stay brief
@@ -115,11 +117,11 @@ Release notes SHALL default to a concise user-facing summary: one opening senten
 - **THEN** the operator keeps that essential information even if the notes need extra detail
 
 ### Requirement: Tagged releases SHALL be mirrored to Aliyun OSS
-Upon successful completion of the per-platform `build` jobs for a `v*` tag, the release workflow SHALL run a `mirror-oss` job that downloads the per-platform packaging artifacts, computes a SHA-256 digest for each installer package, generates a `manifest.json` describing the release, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMG, Linux DEB, Linux RPM, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to a stable `${OSS_PREFIX}/latest/` path on the configured Aliyun OSS Bucket. The OSS endpoint, Bucket name, AccessKey ID, and AccessKey Secret SHALL come from repository secrets and SHALL NOT appear in the repository, the workflow file, or any OpenSpec artifact. The `mirror-oss` job SHALL depend on the `build` jobs and SHALL NOT depend on the `Publish GitHub Release` job; a failure of either job SHALL NOT prevent the other from running. A failure of the `mirror-oss` job SHALL be treated as an incomplete release requiring correction, even if the GitHub Release has already been published. The mirror SHALL overwrite any previous `${OSS_PREFIX}/latest/` objects so that the URL is a stable pointer to the newest release; per-tag history is retained only on GitHub Releases, not on OSS. The mirrored installers SHALL be byte-for-byte copies of the GitHub Release assets and SHALL NOT be code-signed or otherwise modified by the mirror step.
+Upon successful completion of the per-platform `build` jobs, including pacman packaging and installation verification, for a `v*` tag, the release workflow SHALL run a `mirror-oss` job that downloads the per-platform packaging artifacts, computes a SHA-256 digest for each installer package, generates a `manifest.json` describing the release, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMGs, Linux DEB, Linux RPM, Linux AppImage, Linux pacman `.pkg.tar.zst`, `packager.toml`, `manifest.json`, and `sha256sums.txt` to a stable `${OSS_PREFIX}/latest/` path on the configured Aliyun OSS Bucket. The OSS endpoint, Bucket name, AccessKey ID, and AccessKey Secret SHALL come from repository secrets and SHALL NOT appear in the repository, the workflow file, or any OpenSpec artifact. The `mirror-oss` job SHALL depend on the native build jobs, including their pacman packaging and installation verification, and SHALL NOT depend on the `Publish GitHub Release` job; a failure of either job SHALL NOT prevent the other from running. A failure of the `mirror-oss` job SHALL be treated as an incomplete release requiring correction, even if the GitHub Release has already been published. The mirror SHALL overwrite any previous `${OSS_PREFIX}/latest/` objects so that the URL is a stable pointer to the newest release; per-tag history is retained only on GitHub Releases, not on OSS. The mirrored installers SHALL be byte-for-byte copies of the GitHub Release assets and SHALL NOT be code-signed or otherwise modified by the mirror step.
 
 #### Scenario: Tagged release mirrors installers, config, and manifest to OSS
-- **WHEN** a `v*` tag is pushed and all three native `build` jobs succeed
-- **THEN** the `mirror-oss` job runs, downloads the per-platform packaging artifacts, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMG, Linux DEB, Linux RPM, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` on the configured OSS Bucket
+- **WHEN** a `v*` tag is pushed and all native build jobs, including pacman packaging and installation verification, succeed
+- **THEN** the `mirror-oss` job runs, downloads the packaging artifacts, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMGs, Linux DEB, Linux RPM, Linux AppImage, Linux pacman `.pkg.tar.zst`, `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` on the configured OSS Bucket
 - **AND** each file's OSS object key preserves its original filename under the `latest/` prefix
 
 #### Scenario: OSS credentials come from secrets, not the repository
@@ -130,10 +132,10 @@ Upon successful completion of the per-platform `build` jobs for a `v*` tag, the 
 
 #### Scenario: Branch pushes and pull requests do not mirror to OSS
 - **WHEN** a commit is pushed to `main` or a pull request is opened
-- **THEN** the `build` jobs run and upload workflow artifacts, but the `mirror-oss` job does not run
+- **THEN** the build and package jobs run and upload workflow artifacts, but the `mirror-oss` job does not run
 
 #### Scenario: Mirror upload is independent of GitHub Release publication
-- **WHEN** the `build` jobs succeed for a `v*` tag
+- **WHEN** the build and package jobs succeed for a `v*` tag
 - **THEN** the `mirror-oss` job and the `Publish GitHub Release` job both run, neither depending on the other
 - **AND** a failure of one job does not prevent the other from running to completion
 
@@ -144,8 +146,12 @@ Upon successful completion of the per-platform `build` jobs for a `v*` tag, the 
 
 #### Scenario: Manifest describes the mirrored release
 - **WHEN** the `mirror-oss` job generates `manifest.json`
-- **THEN** the manifest contains the release version (without the leading `v`), the tag name, an ISO-8601 publication timestamp, and a map from platform identifier (`windows-x86_64`, `windows-x86_64-portable`, `macos-aarch64`, `linux-amd64`, `linux-rpm`, `linux-appimage`) to the installer package filename
+- **THEN** the manifest contains the release version (without the leading `v`), the tag name, an ISO-8601 publication timestamp, and a map from platform identifier (`windows-x86_64`, `windows-x86_64-portable`, `macos-aarch64`, `macos-x86_64`, `linux-amd64`, `linux-rpm`, `linux-appimage`, `linux-arch-x86_64`) to the installer package filename
 - **AND** the manifest remains available as mirror metadata without being required for the initial in-app update-check verification
+
+#### Scenario: Mirror repair includes the pacman package
+- **WHEN** a maintainer repairs the OSS mirror for an existing release that contains a pacman package
+- **THEN** the repair downloads, uploads, checksums and verifies that package together with all existing packages and metadata
 
 ### Requirement: The app SHALL check GitHub's latest published Release for updates
 
@@ -156,6 +162,8 @@ On Windows x86_64 with an embedded updater public key and on keyed Linux x86_64 
 When ready, the application SHALL offer localized Restart and Update and Later actions. Later SHALL preserve the ready package; Help → Check for Updates SHALL offer it again. Installation SHALL require explicit user confirmation and SHALL recheck for unsaved documents immediately before handoff. With clean documents, Windows SHALL launch the verified passive current-user NSIS installer with relaunch requested, persist session/layout state and quit only after successful handoff. Linux AppImage SHALL replace the running AppImage safely, relaunch it and quit only after successful replacement and relaunch. Failed AppImage replacement SHALL leave the old AppImage runnable.
 
 On macOS, non-AppImage Linux installations, unsupported architectures or keyless builds, a newer-release notification SHALL retain the matching platform asset browser-download action (or Release-page fallback), without automatic browser opening or unsigned self-installation. Manual checks SHALL report current-version and error results with an actionable browser fallback. Routine background current-version and discovery failures SHALL remain silent; automatic download failures SHALL retain manual recovery without repeated modal interruption. Network, verification and package I/O SHALL run off the render path and SHALL NOT recompute version-cached Markdown state.
+
+On Linux x86_64 browser-download paths, an AppImage launch SHALL retain the AppImage asset. For other launches, the offered asset SHALL follow the distribution family read from `/etc/os-release`: if `ID` or a space-separated `ID_LIKE` token equals `arch`, offer the pacman `.pkg.tar.zst` package; otherwise offer `.deb`, including absent or unparseable os-release. The pacman download SHALL NOT be represented as an authenticated in-app self-update or installed automatically.
 
 #### Scenario: User invokes Check for Updates and a newer version is available
 - **WHEN** a newer release is discovered on a supported signed-update installation with automatic downloads enabled
@@ -231,6 +239,13 @@ On macOS, non-AppImage Linux installations, unsupported architectures or keyless
 - **THEN** Markion reports up-to-date status or a recoverable failure with manual-download fallback
 - **AND** routine background checks for these same outcomes do not display modal dialogs
 
+#### Scenario: Linux download follows the launch format and distribution family
+- **WHEN** a newer release is offered through the Linux x86_64 browser-download path
+- **THEN** an AppImage launch is offered the AppImage asset regardless of distribution
+- **AND** a non-AppImage pacman-based system whose os-release ID or ID_LIKE contains arch is offered the pacman `.pkg.tar.zst` asset
+- **AND** every other non-AppImage Linux system, including missing or unparseable os-release, is offered the DEB asset
+- **AND** the browser opens only after the user chooses Download Update
+
 ### Requirement: Tagged releases SHALL publish authenticated Windows and Linux updater metadata
 For every stable `v*` release, the publication pipeline SHALL create a cargo-packager Minisign signature for the Windows x86_64 NSIS installer and for the Linux x86_64 AppImage, and SHALL publish an updater manifest containing the release version and, per supported signed-update platform (`windows-x86_64`, `linux-x86_64`), the signed package's public download URL, its signature, and its update format (`nsis`, `appimage`). The signatures and updater manifest SHALL be attached to the GitHub Release and mirrored beside the installers under the Aliyun OSS `latest/` prefix, with each channel's manifest variant naming the installers hosted on that channel so the manifest, installer, and signature stay self-consistent per host. The signing private key and password SHALL come from repository secrets, the corresponding public key SHALL be embedded only in tagged Windows and Linux application builds, and no private signing material SHALL be written to repository files or build artifacts. Updater signing SHALL be treated as payload authentication and SHALL NOT be represented as Windows Authenticode signing or Linux package-manager signing.
 
@@ -261,7 +276,7 @@ For every stable `v*` release, the publication pipeline SHALL create a cargo-pac
 Every supported Markion native package SHALL include the complete pinned MarkNice publishing workspace, its locally hosted third-party runtime assets and fonts, a machine-readable provenance manifest, and applicable license notices. Release construction and verification SHALL require neither a sibling MarkNice checkout nor Node.js, SHALL verify that the bundled application shell has no remote runtime dependency, and SHALL fail before publication when required workspace assets are absent, unlisted, or inconsistent with their manifest.
 
 #### Scenario: Native packages contain the workspace
-- **WHEN** the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon application/DMG, Linux amd64 DEB, Linux x86_64 RPM, or Linux x86_64 AppImage is assembled
+- **WHEN** the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon application/DMG, Linux amd64 DEB, Linux x86_64 RPM, Linux x86_64 AppImage, or Linux x86_64 pacman `.pkg.tar.zst` is assembled
 - **THEN** the package contains the same required publishing workspace files at the runtime resource location expected by Markion
 
 #### Scenario: Package build is self-contained
@@ -343,3 +358,20 @@ For every stable `v*` release, the publication pipeline SHALL produce two update
 - **WHEN** either publication target verifies its updater manifest
 - **THEN** it confirms the manifest version equals the tag version and the installer URL names that target's own host
 - **AND** a mismatch fails the release verification instead of being published
+
+### Requirement: Pacman packages SHALL pass an Arch userspace installation gate
+Before a pacman package is published, the release workflow SHALL inspect its metadata and install it with `pacman` in an Arch Linux userspace. The installed executable, desktop entry, icon, examples and MarkNice workspace SHALL match the intended Linux payload. A packaging, dependency-metadata, installation or resource verification failure SHALL block GitHub and OSS publication. This installation gate SHALL NOT be described as an Omarchy desktop interaction test or as package-manager signing.
+
+#### Scenario: Valid package installs on Arch Linux
+- **WHEN** the release workflow builds the Linux x86_64 pacman package
+- **THEN** Arch Linux tooling validates its name, version, release, architecture and runtime dependencies
+- **AND** `pacman` installs the package and the expected executable and resources are present
+
+#### Scenario: Broken pacman package blocks publication
+- **WHEN** pacman metadata, installation, architecture or packaged-resource verification fails
+- **THEN** the workflow fails and neither GitHub Release publication nor OSS mirroring treats the package as ready
+
+#### Scenario: Omarchy compatibility scope is stated accurately
+- **WHEN** release notes or verification records describe Omarchy support
+- **THEN** they identify the package as compatible through its Arch package format and dependencies
+- **AND** they do not claim a native Omarchy desktop acceptance pass unless that environment was actually tested

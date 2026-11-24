@@ -87,7 +87,7 @@ On Linux x86_64 browser-download paths, an AppImage launch SHALL retain the AppI
 - **THEN** Markion reports up-to-date status or a recoverable failure with manual-download fallback
 - **AND** routine background checks for these same outcomes do not display modal dialogs
 
-#### Scenario: Linux download follows the distribution family
+#### Scenario: Linux download follows the launch format and distribution family
 - **WHEN** a newer release is offered through the Linux x86_64 browser-download path
 - **THEN** an AppImage launch is offered the AppImage asset regardless of distribution
 - **AND** a non-AppImage pacman-based system whose os-release ID or ID_LIKE contains arch is offered the pacman `.pkg.tar.zst` asset

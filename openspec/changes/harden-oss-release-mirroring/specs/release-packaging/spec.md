@@ -33,6 +33,10 @@ Upon successful completion of the per-platform `build` jobs for a `v*` tag, the 
 - **THEN** the manifest contains the release version (without the leading `v`), the tag name, an ISO-8601 publication timestamp, and a map from platform identifier (`windows-x86_64`, `macos-aarch64`, `linux-amd64`, `linux-appimage`) to the installer filename
 - **AND** the manifest remains available as mirror metadata without being required for the initial in-app update-check verification
 
+#### Scenario: Mirror repair includes the pacman package
+- **WHEN** a maintainer repairs the OSS mirror for an existing release that contains a pacman package
+- **THEN** the repair downloads, uploads, checksums and verifies that package together with all existing packages and metadata
+
 #### Scenario: OSS write path remains unavailable
 - **WHEN** the supported transfer client cannot complete an OSS upload after its configured bounded retries and timeouts
 - **THEN** the mirror job exits non-zero with the affected object identified

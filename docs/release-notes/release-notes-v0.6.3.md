@@ -13,7 +13,7 @@ This patch adds an Arch/Omarchy-compatible native package, safer code-block form
 
 **Downloads:** Windows x64 (NSIS/ZIP), macOS arm64/x64 (DMG), and Linux x86_64 (DEB/RPM/AppImage/pacman `.pkg.tar.zst`); see the attached assets. On Arch/Omarchy, run `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`.
 
-**Verification:** Workspace gates and native packaging CI passed; the pacman package passed Arch installation and resource checks. Omarchy desktop interaction, real IME/browser/Word/WeChat interoperability, and previous-version signed upgrades remain unverified; the maintainer authorized a one-time v0.6.3 exception for these unrun checks. See the [verification record](https://github.com/willmove/markion/blob/v0.6.3/docs/verification/release-v0.6.3-preflight.md).
+**Verification:** Workspace gates and native packaging CI passed; the pacman package passed Arch installation and resource checks. Omarchy desktop interaction, real IME/browser/Word/WeChat interoperability, and previous-version signed upgrades remain unverified; the maintainer authorized a one-time v0.6.3 exception for these unrun checks. See the [verification record](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.3-preflight.md).
 
 **Full comparison:** https://github.com/willmove/markion/compare/v0.6.2...v0.6.3
 
@@ -34,6 +34,6 @@ This patch adds an Arch/Omarchy-compatible native package, safer code-block form
 
 **下载：** Windows x64（NSIS/ZIP）、macOS arm64/x64（DMG）、Linux x86_64（DEB/RPM/AppImage/pacman `.pkg.tar.zst`），见附件。Arch/Omarchy 运行 `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst` 安装。
 
-**验证：** 工作区门禁和原生产打包 CI 已通过；pacman 包已通过 Arch 安装与资源检查。Omarchy 桌面交互、真实输入法、浏览器／Word／微信互操作，以及上一版本签名升级仍未验证；维护者已明确授权 v0.6.3 对这些未执行项目使用一次性例外。详见[验证记录](https://github.com/willmove/markion/blob/v0.6.3/docs/verification/release-v0.6.3-preflight.md)。
+**验证：** 工作区门禁和原生产打包 CI 已通过；pacman 包已通过 Arch 安装与资源检查。Omarchy 桌面交互、真实输入法、浏览器／Word／微信互操作，以及上一版本签名升级仍未验证；维护者已明确授权 v0.6.3 对这些未执行项目使用一次性例外。详见[验证记录](https://github.com/willmove/markion/blob/main/docs/verification/release-v0.6.3-preflight.md)。
 
 **完整变更对比：** https://github.com/willmove/markion/compare/v0.6.2...v0.6.3
