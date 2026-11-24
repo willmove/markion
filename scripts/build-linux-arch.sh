@@ -123,17 +123,23 @@ pacman -U --noconfirm "${package}"
 pacman -Q markion
 pacman -Qk markion
 installed_paths="$(pacman -Ql markion | awk '{print $2}')"
-for expected in \
-  /usr/bin/markion \
-  /usr/share/applications/dev.markion.app.desktop
-do
-  grep -Fqx "${expected}" <<<"${installed_paths}" || {
-    echo "Installed package is missing: ${expected}" >&2
-    exit 1
-  }
-done
+grep -Fqx /usr/bin/markion <<<"${installed_paths}" || {
+  echo "Installed package is missing: /usr/bin/markion" >&2
+  exit 1
+}
+mapfile -t desktop_files < <(grep -E '/usr/share/applications/[^/]+\.desktop$' <<<"${installed_paths}")
+if (( ${#desktop_files[@]} != 1 )); then
+  echo "Expected exactly one installed desktop launcher, found ${#desktop_files[@]}" >&2
+  exit 1
+fi
+desktop_file="${desktop_files[0]}"
+grep -Eq '^Exec=.*markion([[:space:]]|$)' "${desktop_file}" || {
+  echo "Desktop launcher does not execute markion: ${desktop_file}" >&2
+  exit 1
+}
+echo "Verified installed desktop launcher: ${desktop_file}"
 for pattern in \
-  '/usr/share/icons/.*/markion\.png$' \
+  '/usr/share/icons/.*\.png$' \
   '/assets/examples/README\.md$' \
   '/assets/marknice-workspace/bundle-manifest\.json$'
 do
