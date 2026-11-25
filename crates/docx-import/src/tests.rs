@@ -500,6 +500,55 @@ fn issue_49_adjacent_independent_numbered_lists_keep_their_starts() {
 }
 
 #[test]
+fn issue_50_decimal_child_lists_keep_their_actual_hierarchy() {
+    let numbering = r#"<?xml version="1.0"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl><w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%2."/></w:lvl></w:abstractNum>
+<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl><w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%2."/></w:lvl></w:abstractNum>
+<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>
+</w:numbering>"#.as_bytes();
+    let xml = document(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Morning tasks</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Review calendar</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Prepare summary</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Afternoon tasks</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>Bullet parent</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>Child one</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>Child two</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/numbering.xml", numbering),
+    ])
+    .render_markdown(|_| None)
+    .unwrap();
+
+    assert_eq!(
+        markdown,
+        concat!(
+            "1. Morning tasks\n\n",
+            "    1. Review calendar\n\n",
+            "    2. Prepare summary\n\n",
+            "2. Afternoon tasks\n\n",
+            "- Bullet parent\n\n",
+            "    1. Child one\n\n",
+            "    2. Child two\n\n",
+        )
+    );
+    let events = pulldown_cmark::Parser::new(&markdown).collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Item)
+            ))
+            .count(),
+        7
+    );
+}
+
+#[test]
 fn word_bookmarks_are_block_anchors_and_decorative_drawings_are_not_images() {
     let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:style w:type="paragraph" w:styleId="Heading2"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>

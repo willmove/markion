@@ -1319,7 +1319,8 @@ impl Numbering {
         *counter = counter.saturating_add(1);
         self.counters
             .retain(|(id, nested), _| id != num_id || *nested <= level);
-        let normalized = definition.format != "decimal" || definition.text != "%1.";
+        let normalized = definition.format != "decimal"
+            || definition.text != format!("%{}.", level.saturating_add(1));
         let marker = if normalized {
             let mut label = definition.text.clone();
             for source_level in 0..=8 {
