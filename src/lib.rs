@@ -2281,6 +2281,9 @@ impl MarkdownDocument {
         let selection_in_table =
             formatted_table_cell_range(&table_replacement, selected_row, selected_column)?;
 
+        let remove_obsolete_comment = matches!(column_edit, Some(ColumnPercentEdit::Delete(_)))
+            && old_percents.is_some()
+            && table.column_count() == 1;
         let rewritten_percents = match (column_edit, old_percents) {
             (Some(ColumnPercentEdit::Insert(insert_at)), Some(percents)) => {
                 adjust_column_percents_for_insert(&percents, insert_at)
@@ -2294,27 +2297,35 @@ impl MarkdownDocument {
             _ => None,
         };
 
-        let (replace_range, replacement, table_start) =
-            if let (Some(comment_range), Some(percents)) =
-                (leading_comment.clone(), rewritten_percents)
-            {
-                let comment = format_table_column_width_comment(&percents);
-                let header_indent =
-                    &self.text[self.line_start_at(table_range.start)..table_range.start];
-                let prefix = format!("{comment}{line_ending}{header_indent}");
-                let table_start = comment_range.start + prefix.len();
-                (
-                    comment_range.start..table_range.end,
-                    format!("{prefix}{table_replacement}"),
-                    table_start,
-                )
-            } else {
-                (
-                    table_range.clone(),
-                    table_replacement.clone(),
-                    table_range.start,
-                )
-            };
+        let (replace_range, replacement, table_start) = if remove_obsolete_comment {
+            let comment_range = leading_comment
+                .clone()
+                .expect("obsolete width comment must exist");
+            (
+                comment_range.start..table_range.end,
+                table_replacement.clone(),
+                comment_range.start,
+            )
+        } else if let (Some(comment_range), Some(percents)) =
+            (leading_comment.clone(), rewritten_percents)
+        {
+            let comment = format_table_column_width_comment(&percents);
+            let header_indent =
+                &self.text[self.line_start_at(table_range.start)..table_range.start];
+            let prefix = format!("{comment}{line_ending}{header_indent}");
+            let table_start = comment_range.start + prefix.len();
+            (
+                comment_range.start..table_range.end,
+                format!("{prefix}{table_replacement}"),
+                table_start,
+            )
+        } else {
+            (
+                table_range.clone(),
+                table_replacement.clone(),
+                table_range.start,
+            )
+        };
 
         let selected_range =
             table_start + selection_in_table.start..table_start + selection_in_table.end;
@@ -8954,6 +8965,32 @@ mod tests {
         assert_eq!(
             edit(TableStructureEdit::ClearColumn(0)),
             "<!-- markion-cols:20,30,50 -->"
+        );
+    }
+
+    #[test]
+    fn issue_48_deleting_to_one_column_removes_stale_widths() {
+        let source =
+            "<!-- markion-cols:37,63 -->\n| Cedar | Larch |\n| :--- | ---: |\n| twelve | nine |";
+        let mut doc = MarkdownDocument::from_text(source);
+        let offset = doc.text().find("| Cedar").unwrap();
+        let version = doc.version();
+        doc.edit_table_structure_at(offset, TableStructureEdit::DeleteColumn(0))
+            .unwrap();
+        assert_eq!(doc.version(), version + 1);
+        assert!(!doc.text().contains("markion-cols"), "{}", doc.text());
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["Larch"]));
+        assert_eq!(structure_alignments(&doc), [TableAlignment::Right]);
+
+        let offset = doc.text().find("| Larch").unwrap();
+        doc.edit_table_structure_at(offset, TableStructureEdit::InsertColumn { at: 1 })
+            .unwrap();
+        assert!(!doc.text().contains("markion-cols"), "{}", doc.text());
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["Larch", ""]));
+        assert_eq!(structure_rows(&doc, 0)[1], row(&["nine", ""]));
+        assert_eq!(
+            structure_alignments(&doc),
+            [TableAlignment::Right, TableAlignment::Default]
         );
     }
 
