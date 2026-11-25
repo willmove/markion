@@ -753,16 +753,26 @@ impl Converter<'_> {
                 after.insert_str(0, close);
             }
         }
-        let flush_text =
-            |text: &mut String, writer: &mut ChunkWriter, boundary: &mut InlineBoundaryState| {
-                if !text.is_empty() {
-                    boundary.prepare_text(text, bold, writer);
-                    writer.text(&before);
+        let flush_text = |text: &mut String,
+                          writer: &mut ChunkWriter,
+                          boundary: &mut InlineBoundaryState| {
+            if !text.is_empty() {
+                boundary.prepare_text(text, bold, writer);
+                if text.trim_matches(char::is_whitespace).is_empty() {
                     writer.recovered_text(escape_markdown_text(text));
+                } else {
+                    let leading_len =
+                        text.len() - text.trim_start_matches(char::is_whitespace).len();
+                    let trailing_start = text.trim_end_matches(char::is_whitespace).len();
+                    writer.recovered_text(escape_markdown_text(&text[..leading_len]));
+                    writer.text(&before);
+                    writer.recovered_text(escape_markdown_text(&text[leading_len..trailing_start]));
                     writer.text(&after);
-                    text.clear();
+                    writer.recovered_text(escape_markdown_text(&text[trailing_start..]));
                 }
-            };
+                text.clear();
+            }
+        };
         let mut text = String::new();
         for child in run.children().filter(Node::is_element) {
             if excluded_revision(child) || child.tag_name().namespace() != Some(W_NS) {

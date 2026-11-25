@@ -250,6 +250,78 @@ fn bold_boundaries_preserve_authored_separators_and_non_word_starts() {
 }
 
 #[test]
+fn issue_39_run_edge_whitespace_stays_outside_inline_formatting() {
+    let xml = document(
+        r#"<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> focus </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> leading</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">trailing </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> italics </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> leftital</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">rightital </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t xml:space="preserve"> combined </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:b/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve"> underlined </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:t>left</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>right</w:t></w:r></w:p>
+<w:p><w:r><w:t>Before</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> two  words </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[("word/document.xml", xml.as_bytes())])
+        .render_markdown(|_| None)
+        .unwrap();
+
+    assert_eq!(
+        markdown,
+        concat!(
+            "Before **focus** after\n\n",
+            "Before **leading** after\n\n",
+            "Before**trailing** after\n\n",
+            "Before *italics* after\n\n",
+            "Before *leftital*after\n\n",
+            "Before*rightital* after\n\n",
+            "Before ***combined*** after\n\n",
+            "Before **<u>underlined</u>** after\n\n",
+            "left right\n\n",
+            "Before **two  words** after\n\n",
+        )
+    );
+
+    let assert_style = |word: &str, strong: bool, emphasis: bool| {
+        let mut strong_depth = 0usize;
+        let mut emphasis_depth = 0usize;
+        let mut found = false;
+        for event in pulldown_cmark::Parser::new(&markdown) {
+            match event {
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong) => strong_depth += 1,
+                pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Strong) => strong_depth -= 1,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Emphasis) => emphasis_depth += 1,
+                pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Emphasis) => emphasis_depth -= 1,
+                pulldown_cmark::Event::Text(text) if text.contains(word) => {
+                    found = true;
+                    assert_eq!(
+                        strong_depth > 0,
+                        strong,
+                        "unexpected strong style for {word}"
+                    );
+                    assert_eq!(
+                        emphasis_depth > 0,
+                        emphasis,
+                        "unexpected emphasis style for {word}"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(found, "missing parsed text {word:?} in {markdown:?}");
+    };
+    for word in ["focus", "leading", "trailing", "two  words"] {
+        assert_style(word, true, false);
+    }
+    for word in ["italics", "leftital", "rightital"] {
+        assert_style(word, false, true);
+    }
+    assert_style("combined", true, true);
+    assert_style("underlined", true, false);
+}
+
+#[test]
 fn bold_boundary_state_stops_at_structural_and_block_boundaries() {
     let rels = br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="external" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/tracker.png" TargetMode="External"/>
