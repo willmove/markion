@@ -4524,6 +4524,9 @@ impl MarkdownDocument {
                     }
                 }
                 Event::SoftBreak | Event::HardBreak => {
+                    if let Some((_, _, title, _)) = outline_current.as_mut() {
+                        title.push(' ');
+                    }
                     push_preview_rich(
                         &mut heading,
                         &mut paragraph,
@@ -4674,6 +4677,11 @@ impl MarkdownDocument {
                 Event::Text(text) | Event::Code(text) => {
                     if let Some((_, _, title, _)) = current.as_mut() {
                         title.push_str(&text);
+                    }
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    if let Some((_, _, title, _)) = current.as_mut() {
+                        title.push(' ');
                     }
                 }
                 Event::End(TagEnd::Heading(_)) => {
@@ -5968,6 +5976,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn issue_44_multiline_setext_headings_keep_word_separators() {
+        let doc = MarkdownDocument::from_text(
+            "Winter\nPlanning\n===============\n\nBudget\n*Review*\n---------------\n",
+        );
+        let outline_only = doc.outline();
+        assert_eq!(outline_only[0].title, "Winter Planning");
+        assert_eq!(outline_only[0].anchor, "winter-planning");
+        assert_eq!(outline_only[1].title, "Budget Review");
+        assert_eq!(outline_only[1].anchor, "budget-review");
+
+        let headings = doc
+            .preview_blocks()
+            .into_iter()
+            .filter_map(|block| match block {
+                PreviewBlock::Heading { text, .. } => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(headings, ["Winter\nPlanning", "Budget\nReview"]);
+        assert_eq!(doc.outline(), outline_only);
+        assert!(doc.render_html_fragment().contains("Winter\nPlanning"));
+        assert_eq!(doc.heading_offset_for_anchor("winter-planning"), Some(0));
+        assert_eq!(
+            doc.heading_offset_for_anchor("budget-review"),
+            Some(outline_only[1].offset)
+        );
     }
 
     #[test]
