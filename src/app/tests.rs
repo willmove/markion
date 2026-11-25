@@ -25310,6 +25310,39 @@ fn source_search_state_replaces_continues_undoes_and_clears_invalid_or_empty_res
 }
 
 #[gpui::test]
+fn source_regex_replace_current_preserves_context(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("sword sword"))];
+        app.search_visible = true;
+        app.search_form = SearchPanelForm::Replace;
+        app.replace_visible = true;
+        app.search_query.set_text(r"\Bword");
+        app.replace_text.set_text("term");
+        app.search_case_sensitive = true;
+        app.search_regex = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.refresh_search_matches();
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.search_matches.len(), 2);
+            assert_eq!(app.current_search_index, Some(0));
+
+            app.replace_current_match(&ReplaceCurrentMatch, window, cx);
+
+            assert_eq!(app.active_tab().document.text(), "sterm sword");
+            assert_eq!(app.active_tab().selected_range, 7..11);
+            assert_eq!(app.search_matches.len(), 1);
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().document.text(), "sword sword");
+        });
+    });
+}
+
+#[gpui::test]
 fn read_search_options_navigation_highlights_pending_and_close_transitions(
     cx: &mut TestAppContext,
 ) {

@@ -4852,9 +4852,13 @@ impl MarkdownDocument {
                 .map_err(|err| SearchError {
                     message: err.to_string(),
                 })?;
-            regex
-                .replace(&self.text[range.clone()], replacement)
-                .to_string()
+            let captures = regex
+                .captures_iter(&self.text)
+                .find(|captures| captures.get(0).is_some_and(|found| found.range() == range))
+                .expect("current replacement range was validated against the same regex");
+            let mut replacement_text = String::new();
+            captures.expand(replacement, &mut replacement_text);
+            replacement_text
         } else {
             replacement.to_string()
         };
@@ -9502,6 +9506,42 @@ Intro.
         let result = doc.replace_all_matches(&options, "1").unwrap();
         assert_eq!(result.replacements, 2);
         assert_eq!(doc.text(), "1 two 1");
+    }
+
+    #[test]
+    fn regex_replace_current_preserves_match_context() {
+        let mut doc = MarkdownDocument::from_text("sword sword");
+        let options = SearchOptions {
+            query: r"\Bword".into(),
+            case_sensitive: true,
+            regex: true,
+        };
+        let first = doc.find_matches(&options).unwrap()[0].range.clone();
+
+        let result = doc.replace_current_match(first, &options, "term").unwrap();
+
+        assert_eq!(result.replacements, 1);
+        assert_eq!(doc.text(), "sterm sword");
+        assert_eq!(result.selected_range, Some(1..5));
+    }
+
+    #[test]
+    fn regex_replace_current_expands_captures_for_selected_match() {
+        let mut doc = MarkdownDocument::from_text("2026-06-30 2027-07-01");
+        let options = SearchOptions {
+            query: r"(\d{4})-(\d{2})-(\d{2})".into(),
+            case_sensitive: true,
+            regex: true,
+        };
+        let second = doc.find_matches(&options).unwrap()[1].range.clone();
+
+        let result = doc
+            .replace_current_match(second, &options, "$2/$3/$1")
+            .unwrap();
+
+        assert_eq!(result.replacements, 1);
+        assert_eq!(doc.text(), "2026-06-30 07/01/2027");
+        assert_eq!(result.selected_range, Some(11..21));
     }
 
     #[test]
