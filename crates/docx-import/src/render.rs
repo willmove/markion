@@ -724,8 +724,8 @@ impl Converter<'_> {
             .and_then(|node| node.children().find(|child| is_w(*child, "rStyle")))
             .and_then(|node| attr_local(node, "val"));
         let inherited = self.resolve_run_style(style_id, part)?;
-        let bold = has_on(properties, "b") || inherited.bold;
-        let italic = has_on(properties, "i") || inherited.italic;
+        let bold = on_off(properties, "b").unwrap_or(inherited.bold);
+        let italic = on_off(properties, "i").unwrap_or(inherited.italic);
         let strike =
             has_on(properties, "strike") || has_on(properties, "dstrike") || inherited.strike;
         let underline = properties
@@ -1648,10 +1648,14 @@ fn child_val<'a>(node: Node<'a, 'a>, child: &str) -> Option<&'a str> {
         .and_then(|node| attr_local(node, "val"))
 }
 
-fn has_on(properties: Option<Node<'_, '_>>, name: &str) -> bool {
+fn on_off(properties: Option<Node<'_, '_>>, name: &str) -> Option<bool> {
     properties
         .and_then(|node| node.children().find(|child| is_w(*child, name)))
-        .is_some_and(|node| !matches!(attr_local(node, "val"), Some("0" | "false" | "off")))
+        .map(|node| !matches!(attr_local(node, "val"), Some("0" | "false" | "off")))
+}
+
+fn has_on(properties: Option<Node<'_, '_>>, name: &str) -> bool {
+    on_off(properties, name).unwrap_or(false)
 }
 
 fn excluded_revision(node: Node<'_, '_>) -> bool {

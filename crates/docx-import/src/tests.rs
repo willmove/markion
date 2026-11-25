@@ -92,6 +92,58 @@ fn imports_heading_runs_breaks_and_accepted_revisions() {
 }
 
 #[test]
+fn issue_40_direct_run_formatting_overrides_character_style() {
+    let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="character" w:styleId="AuditBold"><w:rPr><w:b/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="AuditItalic"><w:rPr><w:i/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="AuditBoth"><w:rPr><w:b/><w:i/></w:rPr></w:style>
+</w:styles>"#;
+    let xml = document(
+        r#"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:rPr><w:rStyle w:val="AuditBold"/><w:b w:val="0"/></w:rPr><w:t>focus</w:t></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>
+<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:rPr><w:rStyle w:val="AuditItalic"/><w:i w:val="false"/></w:rPr><w:t>focus</w:t></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>
+<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:rPr><w:rStyle w:val="AuditBoth"/><w:b w:val="off"/><w:i w:val="off"/></w:rPr><w:t>focus</w:t></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>
+<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:rPr><w:rStyle w:val="AuditBoth"/></w:rPr><w:t>focus</w:t></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/styles.xml", styles),
+    ])
+    .render_markdown(|_| None)
+    .unwrap();
+
+    assert_eq!(
+        markdown,
+        concat!(
+            "Before focus after\n\n",
+            "Before focus after\n\n",
+            "Before focus after\n\n",
+            "Before ***focus*** after\n\n",
+        )
+    );
+    let events = pulldown_cmark::Parser::new(&markdown).collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong)
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Emphasis)
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn bold_boundaries_add_one_portable_space_for_word_like_text() {
     let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:style w:type="character" w:styleId="InheritedBold"><w:rPr><w:b/></w:rPr></w:style>
