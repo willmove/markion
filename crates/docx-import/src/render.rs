@@ -180,6 +180,7 @@ struct Converter<'a> {
     relationships: HashMap<String, Relationship>,
     styles: HashMap<String, Style>,
     numbering: Numbering,
+    last_ordered_list: Option<(String, bool)>,
     bookmarks: HashMap<String, String>,
     assets: Vec<PreparedAsset>,
     asset_digests: HashMap<[u8; 32], AssetId>,
@@ -225,6 +226,7 @@ pub(crate) fn convert(
         relationships,
         styles,
         numbering,
+        last_ordered_list: None,
         bookmarks,
         assets: Vec::new(),
         asset_digests: HashMap::new(),
@@ -536,8 +538,10 @@ impl Converter<'_> {
         }
 
         if let Some(prefix) = prefix_override {
+            self.last_ordered_list = None;
             writer.text(prefix);
         } else if let Some(level) = heading {
+            self.last_ordered_list = None;
             let emitted = level.min(6);
             if level > 6 {
                 self.diagnostic(
@@ -553,7 +557,26 @@ impl Converter<'_> {
         } else if let Some((num_id, level)) =
             direct_num.or_else(|| style_num.map(|id| (id, style_level)))
         {
-            let (indent, marker, normalized) = self.numbering.marker(&num_id, level);
+            let parenthesized = self
+                .last_ordered_list
+                .as_ref()
+                .map(|(previous_id, previous_parenthesized)| {
+                    if previous_id == &num_id {
+                        *previous_parenthesized
+                    } else {
+                        !*previous_parenthesized
+                    }
+                })
+                .unwrap_or(false);
+            let (indent, mut marker, normalized) = self.numbering.marker(&num_id, level);
+            if marker == "-" {
+                self.last_ordered_list = None;
+            } else {
+                if parenthesized && let Some(dot) = marker.find('.') {
+                    marker.replace_range(dot..=dot, ")");
+                }
+                self.last_ordered_list = Some((num_id, parenthesized));
+            }
             writer.text("    ".repeat(indent));
             writer.text(&marker);
             writer.text(" ");
@@ -566,6 +589,8 @@ impl Converter<'_> {
                     None,
                 );
             }
+        } else {
+            self.last_ordered_list = None;
         }
 
         writer.recovered_content |= inline.recovered_content;

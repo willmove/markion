@@ -436,11 +436,67 @@ fn inherited_run_styles_numbering_links_and_bookmarks_are_semantic() {
     assert!(markdown.contains("12. twelve"));
     assert!(markdown.contains("    - nested"));
     assert!(markdown.contains("1. XII. roman"));
-    assert!(markdown.contains("1. 第十一章 chapter"));
+    assert!(markdown.contains("1) 第十一章 chapter"));
     assert!(markdown.contains("[safe](https://example.com/a%20%28b%29)"));
     assert!(markdown.contains("kept"));
     assert!(!markdown.contains("javascript:"));
     assert!(markdown.contains("[jump](#章节-一)"));
+}
+
+#[test]
+fn issue_49_adjacent_independent_numbered_lists_keep_their_starts() {
+    let mut numbering = r#"<?xml version="1.0"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#.to_string();
+    for (id, start) in [(1, 1), (2, 1), (3, 4), (4, 2)] {
+        numbering.push_str(&format!(
+            r#"<w:abstractNum w:abstractNumId="{id}"><w:lvl w:ilvl="0"><w:start w:val="{start}"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="{id}"><w:abstractNumId w:val="{id}"/></w:num>"#
+        ));
+    }
+    numbering.push_str("</w:numbering>");
+    let items = [
+        (1, "Open the east gate."),
+        (1, "Check the east lock."),
+        (2, "Open the west gate."),
+        (2, "Check the west lock."),
+        (3, "Fourth procedure."),
+        (3, "Fifth procedure."),
+        (4, "Second procedure."),
+        (4, "Third procedure."),
+    ];
+    let body = items
+        .iter()
+        .map(|(id, text)| {
+            format!(
+                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="{id}"/></w:numPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#
+            )
+        })
+        .collect::<String>();
+    let xml = document(&body);
+    let markdown = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/numbering.xml", numbering.as_bytes()),
+    ])
+    .render_markdown(|_| None)
+    .unwrap();
+
+    let events = pulldown_cmark::Parser::new(&markdown).collect::<Vec<_>>();
+    let starts = events
+        .iter()
+        .filter_map(|event| match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::List(start)) => *start,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(starts, [1, 1, 4, 2], "{markdown}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Item)
+            ))
+            .count(),
+        8
+    );
 }
 
 #[test]
