@@ -2965,7 +2965,10 @@ impl MarkdownDocument {
                         3 => "subsubsection",
                         _ => "paragraph",
                     };
-                    output.push_str(&format!("\\{command}{{{}}}\n\n", escape_latex(&text.text)));
+                    output.push_str(&format!(
+                        "\\{command}{{{}}}\n\n",
+                        render_latex_rich_text(&text)
+                    ));
                 }
                 PreviewBlock::Paragraph { text, .. } => {
                     output.push_str(&render_latex_rich_text(&text));
@@ -10747,6 +10750,25 @@ Intro.
         assert!(latex.contains("\\[\nx^2\n\\]"));
         assert!(latex.contains("\\begin{longtable}{ll}"));
         assert!(latex.contains("A & B"));
+    }
+
+    #[test]
+    fn issue_46_latex_export_keeps_heading_and_table_inline_styles() {
+        let doc = MarkdownDocument::from_text(
+            "# Orchard **Copper** *Amber* `gather`\n\n| Material | Tone | Action |\n| :--- | :---: | ---: |\n| **Willow** | *Violet* | `measure` |\n",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("styled.tex");
+        assert_eq!(
+            doc.export_to(&path, ExportFormat::Latex).unwrap(),
+            ExportBackend::BuiltIn
+        );
+        let latex = fs::read_to_string(path).unwrap();
+        assert!(
+            latex.contains("\\section{Orchard \\textbf{Copper} \\textit{Amber} \\texttt{gather}}")
+        );
+        assert!(latex.contains("\\textbf{Willow} & \\textit{Violet} & \\texttt{measure}"));
+        assert!(latex.contains("\\begin{longtable}{lcr}"));
     }
 
     #[test]

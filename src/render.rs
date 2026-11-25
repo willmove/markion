@@ -506,10 +506,7 @@ pub(crate) fn render_latex_table(rows: &[Vec<RichText>], alignments: &[TableAlig
         .collect();
     let mut output = format!("\\begin{{longtable}}{{{column_spec}}}\n");
     for (index, row) in rows.iter().enumerate() {
-        let mut cells = row
-            .iter()
-            .map(|cell| escape_latex(&cell.text))
-            .collect::<Vec<_>>();
+        let mut cells = row.iter().map(render_latex_rich_text).collect::<Vec<_>>();
         cells.resize(columns, String::new());
         output.push_str(&cells.join(" & "));
         output.push_str(" \\\\\n");
