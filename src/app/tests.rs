@@ -23651,6 +23651,48 @@ fn tab_context_rename_reuses_file_pipeline_and_refuses_dirty(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn file_tree_rename_unchanged_name_preserves_file_and_open_tab(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("ledger.md");
+    fs::write(&path, "# Ledger\n\nBalance: 42").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::File(path.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            assert_eq!(
+                app.pending_name_input
+                    .as_ref()
+                    .map(|input| input.buffer.as_str()),
+                Some("ledger.md")
+            );
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+
+    app.update(cx, |app, _| {
+        assert!(path.exists());
+        assert!(!root.join("ledger 1.md").exists());
+        assert_eq!(app.active_tab().path(), Some(path.as_path()));
+        assert_eq!(app.active_tab().document.text(), "# Ledger\n\nBalance: 42");
+        assert_eq!(app.selected_tree_path.as_deref(), Some(path.as_path()));
+    });
+}
+
+#[gpui::test]
 fn tab_context_copy_path_reports_status_and_skips_untitled(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.md");

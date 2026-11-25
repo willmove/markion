@@ -222,7 +222,11 @@ impl FileTree {
         let parent = path
             .parent()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
-        let new_path = unique_child_path(parent, preferred_name);
+        let preferred_name = sanitize_file_name(preferred_name);
+        if path.file_name().and_then(|name| name.to_str()) == Some(preferred_name.as_str()) {
+            return Ok(path.to_path_buf());
+        }
+        let new_path = unique_child_path(parent, &preferred_name);
         fs::rename(path, &new_path)?;
         self.refresh()?;
         Ok(new_path)
@@ -1544,5 +1548,43 @@ mod tests {
         assert_ne!(error.kind(), io::ErrorKind::NotFound);
         assert!(!dir.path().join("docs - copy").exists());
         assert!(folder.join("guide.md").exists());
+    }
+
+    #[test]
+    fn rename_unique_preserves_unchanged_file_names_and_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let contents = "# Rename audit\ncafé 计划";
+        write(root, "notes.md", contents);
+        write(root, "Café 计划.md", contents);
+        let mut tree = FileTree::scan(root).unwrap();
+
+        for name in ["notes.md", "Café 计划.md"] {
+            let source = root.join(name);
+            let renamed = tree.rename_unique(&source, name).unwrap();
+
+            assert_eq!(renamed, source);
+            assert_eq!(fs::read_to_string(&source).unwrap(), contents);
+        }
+        assert!(!root.join("notes 1.md").exists());
+        assert!(!root.join("Café 计划 1.md").exists());
+    }
+
+    #[test]
+    fn rename_unique_preserves_an_unchanged_folder_name_and_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "Meeting notes/inside.md", "# Inside");
+        let source = root.join("Meeting notes");
+        let mut tree = FileTree::scan(root).unwrap();
+
+        let renamed = tree.rename_unique(&source, "Meeting notes").unwrap();
+
+        assert_eq!(renamed, source);
+        assert!(!root.join("Meeting notes 1").exists());
+        assert_eq!(
+            fs::read_to_string(source.join("inside.md")).unwrap(),
+            "# Inside"
+        );
     }
 }
