@@ -6,7 +6,7 @@
 //! `compute_preview_blocks` driver lives on `MarkdownDocument` and calls into
 //! this module; everything here is pure / stateless.
 
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashSet, ops::Range};
 
 use pulldown_cmark::{BlockQuoteKind, CowStr, Event, HeadingLevel, Options, Parser, Tag};
 
@@ -3130,13 +3130,16 @@ pub(crate) fn heading_anchor_base(authored_id: Option<&str>, title: &str) -> Str
 }
 
 pub(crate) fn uniquify_heading_anchors(headings: &mut [Heading]) {
-    let mut used: HashMap<String, usize> = HashMap::new();
+    let mut used = HashSet::new();
     for heading in headings {
         let base = heading.anchor.clone();
-        let count = used.entry(base.clone()).or_insert(0);
-        let n = *count;
-        *count += 1;
-        heading.anchor = if n == 0 { base } else { format!("{base}-{n}") };
+        let mut candidate = base.clone();
+        let mut suffix = 1;
+        while !used.insert(candidate.clone()) {
+            candidate = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        heading.anchor = candidate;
     }
 }
 

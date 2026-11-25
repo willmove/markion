@@ -5942,6 +5942,35 @@ mod tests {
     }
 
     #[test]
+    fn issue_43_generated_heading_anchors_resolve_to_their_own_offsets() {
+        for source in [
+            "# Milestone\n\n# Milestone\n\n# Milestone-1\n",
+            "# Milestone-1\n\n# Milestone\n\n# Milestone\n",
+            "# One {#checkpoint}\n\n# Two {#checkpoint}\n\n# Three {#checkpoint-1}\n",
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let outline = doc.outline();
+            let anchors = outline
+                .iter()
+                .map(|heading| heading.anchor.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                anchors.len(),
+                outline.len(),
+                "duplicate anchors: {outline:?}"
+            );
+            for heading in outline {
+                assert_eq!(
+                    doc.heading_offset_for_anchor(&heading.anchor),
+                    Some(heading.offset),
+                    "anchor {:?} targeted the wrong heading in {source:?}",
+                    heading.anchor
+                );
+            }
+        }
+    }
+
+    #[test]
     fn toc_token_becomes_table_of_contents_and_keeps_source() {
         let source = "# Hello\n\n[TOC]\n\n## Nested\n";
         let doc = MarkdownDocument::from_text(source);
