@@ -175,6 +175,9 @@ pub fn previous_word_boundary(text: &str, offset: usize) -> usize {
 /// line, crossing to the following line at its boundary.
 pub fn next_word_boundary(text: &str, offset: usize) -> usize {
     let offset = clamp_to_char_boundary(text, offset);
+    if text[offset..].starts_with("\r\n") {
+        return next_word_boundary(text, offset + 2);
+    }
     let line_end = logical_line_end(text, offset);
     if offset >= line_end {
         if line_end < text.len() {
@@ -305,5 +308,24 @@ mod tests {
         assert_eq!(next_word_boundary(text, text.len()), text.len());
         assert_eq!(previous_word_boundary("", 10), 0);
         assert_eq!(next_word_boundary("", 10), 0);
+    }
+
+    #[test]
+    fn forward_word_navigation_does_not_split_crlf() {
+        let text = "one\r\ntwo";
+        let start = "one".len();
+        let end = next_word_boundary(text, start);
+        assert_eq!(end, text.len());
+
+        let mut document = crate::MarkdownDocument::from_text(text);
+        document.replace_range(start..end, "");
+        assert_eq!(document.text(), "one");
+
+        let text = "第一\r\n第二";
+        let start = "第一".len();
+        assert_eq!(
+            next_word_boundary(text, start),
+            start + "\r\n".len() + "第".len()
+        );
     }
 }

@@ -27639,6 +27639,59 @@ fn issue_32_source_select_all_replaces_only_the_current_crlf_paragraph(cx: &mut 
 }
 
 #[gpui::test]
+fn issue_33_forward_word_actions_do_not_split_crlf(cx: &mut TestAppContext) {
+    let source = "Oak\r\nMaple";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences.enabled = false;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to("Oak".len(), cx));
+    cx.dispatch_action(SelectWordRight);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, "Oak".len()..source.len());
+    });
+    cx.dispatch_action(Delete);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Oak");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text().as_bytes(),
+            source.as_bytes()
+        );
+    });
+
+    app.update(cx, |app, cx| app.move_to("Oak".len(), cx));
+    cx.dispatch_action(WordRight);
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), source.len()));
+
+    app.update(cx, |app, cx| app.move_to("Oak".len(), cx));
+    cx.dispatch_action(DeleteWordRight);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Oak");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text().as_bytes(),
+            source.as_bytes()
+        );
+    });
+}
+
+#[gpui::test]
 fn baseline_word_actions_and_progressive_select_all_work_on_source(cx: &mut TestAppContext) {
     let source = "hello world\n\nsecond";
     let (app, cx) = cx.add_window_view(|_, cx| {
