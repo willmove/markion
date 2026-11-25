@@ -3843,10 +3843,26 @@ pub(crate) fn structural_prefix_at(text: &str, byte_index: usize) -> Option<Visu
         } else {
             let index = line[digits_start..end].parse::<u64>().ok()?;
             let after_marker = skip_ascii_spacing(line, end + 1);
-            (after_marker > end + 1).then_some((
-                after_marker,
-                VisualBlockPrefixKind::OrderedList { level: 1, index },
-            ))
+            if after_marker == end + 1 {
+                None
+            } else if let Some(task) = bytes.get(after_marker..after_marker + 3)
+                && task.first() == Some(&b'[')
+                && task.last() == Some(&b']')
+                && matches!(task[1], b' ' | b'x' | b'X')
+            {
+                Some((
+                    skip_ascii_spacing(line, after_marker + 3),
+                    VisualBlockPrefixKind::TaskList {
+                        level: 1,
+                        checked: !matches!(task[1], b' '),
+                    },
+                ))
+            } else {
+                Some((
+                    after_marker,
+                    VisualBlockPrefixKind::OrderedList { level: 1, index },
+                ))
+            }
         }
     };
 

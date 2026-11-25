@@ -7557,6 +7557,56 @@ mod tests {
     }
 
     #[test]
+    fn issue_45_ordered_task_newlines_continue_and_exit() {
+        let mut continued = MarkdownDocument::from_text("4. [ ] Review café");
+        let cursor = continued.insert_markdown_newline(continued.text().len());
+        assert_eq!(continued.text(), "4. [ ] Review café\n5. [ ] ");
+        assert_eq!(cursor, continued.text().len());
+
+        let mut split = MarkdownDocument::from_text("4) [x] Review café");
+        let cursor = split.text().find("café").unwrap();
+        let next = split.insert_markdown_newline(cursor);
+        assert_eq!(split.text(), "4) [x] Review \n5) [ ] café");
+        assert_eq!(&split.text()[next..], "café");
+        let checked = split
+            .preview_blocks()
+            .iter()
+            .filter_map(|block| match block {
+                PreviewBlock::ListItem { checked, .. } => Some(*checked),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(checked, [Some(true), Some(false)]);
+
+        let mut empty = MarkdownDocument::from_text("6. [ ] ");
+        let cursor = empty.insert_markdown_newline(empty.text().len());
+        assert_eq!(cursor, 0);
+        empty.replace_range(cursor..cursor, "Résumé notes.");
+        assert_eq!(empty.text(), "Résumé notes.");
+        assert!(matches!(
+            empty.preview_blocks().as_slice(),
+            [PreviewBlock::Paragraph { .. }]
+        ));
+
+        let mut visual = MarkdownDocument::from_text("3. [x] Pack samples");
+        let edit = visual.visual_enter_edit(visual.text().len()).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        assert_eq!(visual.text(), "3. [x] Pack samples\n4. [ ] ");
+        assert_eq!(
+            edit.selection_after,
+            visual.text().len()..visual.text().len()
+        );
+
+        let mut visual_empty = MarkdownDocument::from_text("3. [ ] ");
+        let edit = visual_empty
+            .visual_enter_edit(visual_empty.text().len())
+            .unwrap();
+        visual_empty.replace_range(edit.range, &edit.replacement);
+        assert_eq!(visual_empty.text(), "");
+        assert_eq!(edit.selection_after, 0..0);
+    }
+
+    #[test]
     fn markdown_newline_continues_blockquotes() {
         let mut doc = MarkdownDocument::from_text("> quoted");
         doc.insert_markdown_newline(doc.text().len());

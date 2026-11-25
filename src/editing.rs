@@ -216,7 +216,13 @@ pub(crate) fn ordered_list_marker(rest: &str) -> Option<String> {
     if !after_delimiter.starts_with(' ') {
         return None;
     }
-    Some(format!("{}{delimiter} ", number + 1))
+    let body = &after_delimiter[1..];
+    let body_lower = body.to_ascii_lowercase();
+    if body_lower.starts_with("[ ] ") || body_lower.starts_with("[x] ") {
+        Some(format!("{}{delimiter} [ ] ", number + 1))
+    } else {
+        Some(format!("{}{delimiter} ", number + 1))
+    }
 }
 
 /// The family of a list marker found at the start of a line.
@@ -227,8 +233,8 @@ pub(crate) enum ListMarkerKind {
 }
 
 /// A list marker at the start of a line (after any leading indentation):
-/// `- `/`* `/`+ ` with an optional `[ ]`/`[x]` task box, or digits followed
-/// by `.`/`)` and a space.
+/// `- `/`* `/`+ ` or digits followed by `.`/`)` and a space, with an optional
+/// `[ ]`/`[x]` task box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ListMarker {
     pub kind: ListMarkerKind,
@@ -275,12 +281,19 @@ pub(crate) fn list_marker_at(line: &str) -> Option<ListMarker> {
         && matches!(rest.as_bytes().get(digits), Some(b'.' | b')'))
         && rest.as_bytes().get(digits + 1) == Some(&b' ')
     {
-        return Some(ListMarker {
+        let mut item = ListMarker {
             kind: ListMarkerKind::Ordered,
             indent,
             len: digits + 2,
             task_box_len: 0,
-        });
+        };
+        let after = &rest[item.len..];
+        let lowered = after.to_ascii_lowercase();
+        if lowered.starts_with("[ ] ") || lowered.starts_with("[x] ") {
+            item.task_box_len = 4;
+            item.len += item.task_box_len;
+        }
+        return Some(item);
     }
     None
 }
@@ -304,5 +317,9 @@ fn empty_ordered_marker(rest: &str) -> bool {
     let Some(delimiter) = rest[digit_end..].chars().next() else {
         return false;
     };
-    matches!(delimiter, '.' | ')') && rest[digit_end + delimiter.len_utf8()..].trim().is_empty()
+    if !matches!(delimiter, '.' | ')') {
+        return false;
+    }
+    let body = rest[digit_end + delimiter.len_utf8()..].trim();
+    body.is_empty() || matches!(body.to_ascii_lowercase().as_str(), "[ ]" | "[x]")
 }
