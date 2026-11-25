@@ -20,7 +20,6 @@ use markion_pdf::{
     Block as PdfBlock, Cell as PdfCell, ImageData as PdfImageData, InlineImage as PdfInlineImage,
     ListMarker, PdfDocument, PdfMetadata, PdfOptions, Rgb, Run as PdfRun, Style as PdfStyle,
 };
-use percent_encoding::percent_decode_str;
 use typune_export::{DocxExporter, ExportError, ExportOptions, Exporter, PdfExporter};
 use typune_markdown::{MathRenderer, Parser};
 
@@ -632,9 +631,8 @@ fn resolve_image_bytes(
     if url.starts_with("data:") {
         return decode_data_url_bytes(url);
     }
-    let decoded = percent_decode_str(url).decode_utf8().ok()?;
-    let path = base_dir.as_ref()?.join(decoded.as_ref());
-    fs::read(&path).ok()
+    let path = crate::storage::resources::resolve_local_reference(base_dir.as_deref()?, url)?;
+    fs::read(path).ok()
 }
 
 /// An image payload reduced to one of the embeddable forms shared by the
@@ -3093,6 +3091,48 @@ mod tests {
         assert!(rels.contains("relationships/image\" Target=\"media/image1.png\""));
         let types = entry(&bytes, "[Content_Types].xml");
         assert!(types.contains("<Default Extension=\"png\" ContentType=\"image/png\"/>"));
+    }
+
+    #[test]
+    fn issue_42_local_image_suffixes_resolve_in_docx_and_pdf() {
+        let dir = tempfile::tempdir().unwrap();
+        image::RgbaImage::from_pixel(24, 16, image::Rgba([220, 20, 30, 255]))
+            .save(dir.path().join("diagram.png"))
+            .unwrap();
+
+        for suffix in ["?rev=2", "#preview"] {
+            let md = dir.path().join("doc.md");
+            let url = format!("diagram.png{suffix}");
+            fs::write(&md, format!("![diagram]({url})")).unwrap();
+            let document = MarkdownDocument::open(&md).unwrap();
+
+            let bytes = docx_parts(&document);
+            assert!(
+                read_zip_entry(&bytes, "word/media/image1.png").is_some(),
+                "DOCX omitted {url}"
+            );
+            assert!(entry(&bytes, "word/document.xml").contains("<w:drawing>"));
+
+            let ir = build_pdf_ir(
+                &document,
+                &PdfExportOptions::default(),
+                Some(dir.path()),
+                &HashMap::new(),
+            );
+            assert!(
+                matches!(ir.blocks.as_slice(), [PdfBlock::Image { .. }]),
+                "PDF omitted {url}: {:?}",
+                ir.blocks
+            );
+            markion_pdf::render(&ir).expect("PDF with suffixed local image should render");
+            let snapshot = markion_pdf::render_snapshot(&ir, 1.0).unwrap();
+            assert!(
+                snapshot.pixels().any(|pixel| {
+                    pixel.0[0] > 200 && pixel.0[1] < 50 && pixel.0[2] < 60 && pixel.0[3] == 255
+                }),
+                "PDF did not paint {url}"
+            );
+        }
     }
 
     #[test]
