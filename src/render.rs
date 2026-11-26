@@ -5,7 +5,7 @@
 //! and the shared stylesheet string they emit into.
 
 use crate::escape::decode_basic_html_entities;
-use crate::model::{RichText, TableAlignment};
+use crate::model::{PreviewBlock, RichText, TableAlignment};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Tag, TagEnd};
 use std::ops::Range;
 use typune_markdown::{MathStyle, serialize_math_html};
@@ -475,18 +475,80 @@ pub(crate) fn latex_listing_language(language: Option<&str>) -> Option<&'static 
     }
 }
 
-/// Appends one `\item` line, rendering task-list state as checkbox symbols.
-pub(crate) fn push_latex_list_item(output: &mut String, checked: Option<bool>, text: &RichText) {
+/// Appends one `\item` line with its resolved ordered label, if any.
+pub(crate) fn push_latex_list_item(
+    output: &mut String,
+    index: Option<u64>,
+    checked: Option<bool>,
+    text: &RichText,
+) {
+    let label = index.map(|value| format!("[{value}.]")).unwrap_or_default();
     let marker = match checked {
         Some(true) => "$\\boxtimes$ ",
         Some(false) => "$\\square$ ",
         None => "",
     };
     output.push_str(&format!(
-        "\\item {}{}\n",
-        marker,
+        "\\item{label} {marker}{}\n",
         render_latex_rich_text(text)
     ));
+}
+
+/// Renders a contiguous list-item stream with its resolved nesting and kinds.
+pub(crate) fn render_latex_list(output: &mut String, items: &[PreviewBlock]) {
+    let mut cursor = 0;
+    while cursor < items.len() {
+        let PreviewBlock::ListItem { level, .. } = &items[cursor] else {
+            unreachable!("LaTeX list slices contain only list items");
+        };
+        render_latex_list_environment(output, items, &mut cursor, *level);
+    }
+}
+
+fn render_latex_list_environment(
+    output: &mut String,
+    items: &[PreviewBlock],
+    cursor: &mut usize,
+    level: usize,
+) {
+    let PreviewBlock::ListItem { ordered, .. } = &items[*cursor] else {
+        unreachable!("LaTeX list environments start at a list item");
+    };
+    let environment = if *ordered { "enumerate" } else { "itemize" };
+    output.push_str(&format!("\\begin{{{environment}}}\n"));
+
+    while *cursor < items.len() {
+        let PreviewBlock::ListItem {
+            level: item_level,
+            ordered,
+            index,
+            checked,
+            text,
+            ..
+        } = &items[*cursor]
+        else {
+            unreachable!("LaTeX list slices contain only list items");
+        };
+        if *item_level != level || *ordered != (environment == "enumerate") {
+            break;
+        }
+        push_latex_list_item(output, if *ordered { *index } else { None }, *checked, text);
+        *cursor += 1;
+
+        while *cursor < items.len() {
+            let PreviewBlock::ListItem {
+                level: child_level, ..
+            } = &items[*cursor]
+            else {
+                unreachable!("LaTeX list slices contain only list items");
+            };
+            if *child_level <= level {
+                break;
+            }
+            render_latex_list_environment(output, items, cursor, *child_level);
+        }
+    }
+    output.push_str(&format!("\\end{{{environment}}}\n"));
 }
 
 /// Renders a Markdown table as a LaTeX `longtable`, deriving the column spec

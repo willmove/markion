@@ -341,7 +341,7 @@ use parse::{
 use diagram::collect_html_diagrams;
 use render::{
     DEFAULT_CSS, annotate_math_html, collect_html_math, escape_latex, escape_latex_path,
-    latex_listing_language, push_latex_list_item, render_latex_rich_text, render_latex_table,
+    latex_listing_language, render_latex_list, render_latex_rich_text, render_latex_table,
 };
 
 pub use export::{backend_status_msg, pandoc_available};
@@ -2995,31 +2995,13 @@ impl MarkdownDocument {
                     output.push_str(&render_latex_rich_text(&text));
                     output.push_str("\n\\end{quote}\n\n");
                 }
-                PreviewBlock::ListItem {
-                    ordered,
-                    checked,
-                    text,
-                    ..
-                } => {
-                    let environment = if ordered { "enumerate" } else { "itemize" };
-                    output.push_str(&format!("\\begin{{{environment}}}\n"));
-                    push_latex_list_item(&mut output, checked, &text);
-                    // Consecutive same-kind items share one environment.
-                    while let Some(PreviewBlock::ListItem {
-                        ordered: next_ordered,
-                        ..
-                    }) = blocks.peek()
-                    {
-                        if *next_ordered != ordered {
-                            break;
-                        }
-                        let Some(PreviewBlock::ListItem { checked, text, .. }) = blocks.next()
-                        else {
-                            unreachable!("peeked a list item");
-                        };
-                        push_latex_list_item(&mut output, checked, &text);
+                block @ PreviewBlock::ListItem { .. } => {
+                    let mut items = vec![block];
+                    while matches!(blocks.peek(), Some(PreviewBlock::ListItem { .. })) {
+                        items.push(blocks.next().expect("peeked list item"));
                     }
-                    output.push_str(&format!("\\end{{{environment}}}\n\n"));
+                    render_latex_list(&mut output, &items);
+                    output.push('\n');
                 }
                 PreviewBlock::BlockQuote {
                     children,
@@ -3035,32 +3017,13 @@ impl MarkdownDocument {
                     let mut children = children.into_iter().peekable();
                     while let Some(child) = children.next() {
                         match child {
-                            PreviewBlock::ListItem {
-                                ordered,
-                                checked,
-                                text,
-                                ..
-                            } => {
-                                let environment = if ordered { "enumerate" } else { "itemize" };
-                                output.push_str(&format!("\\begin{{{environment}}}\n"));
-                                push_latex_list_item(&mut output, checked, &text);
-                                // Consecutive same-kind items share one environment.
-                                while let Some(PreviewBlock::ListItem {
-                                    ordered: next_ordered,
-                                    ..
-                                }) = children.peek()
+                            child @ PreviewBlock::ListItem { .. } => {
+                                let mut items = vec![child];
+                                while matches!(children.peek(), Some(PreviewBlock::ListItem { .. }))
                                 {
-                                    if *next_ordered != ordered {
-                                        break;
-                                    }
-                                    let Some(PreviewBlock::ListItem { checked, text, .. }) =
-                                        children.next()
-                                    else {
-                                        unreachable!("peeked a list item");
-                                    };
-                                    push_latex_list_item(&mut output, checked, &text);
+                                    items.push(children.next().expect("peeked list item"));
                                 }
-                                output.push_str(&format!("\\end{{{environment}}}\n"));
+                                render_latex_list(&mut output, &items);
                             }
                             PreviewBlock::Paragraph { text, .. } => {
                                 output.push_str(&render_latex_rich_text(&text));
@@ -6959,11 +6922,11 @@ mod tests {
         let quote_end = latex.find("\\end{quote}").expect("quote environment end");
         let itemize = latex.find("\\begin{enumerate}").expect("quoted enumerate");
         assert!(itemize > quote_start && itemize < quote_end);
-        assert!(latex[quote_start..quote_end].contains("\\item first"));
-        assert!(latex[quote_start..quote_end].contains("\\item second"));
+        assert!(latex[quote_start..quote_end].contains("\\item[1.] first"));
+        assert!(latex[quote_start..quote_end].contains("\\item[2.] second"));
         let quote = &latex[quote_start..quote_end];
-        assert!(quote.find("intro") < quote.find("\\item first"));
-        assert!(quote.find("\\item second") < quote.find("outro"));
+        assert!(quote.find("intro") < quote.find("\\item[1.] first"));
+        assert!(quote.find("\\item[2.] second") < quote.find("outro"));
     }
 
     #[test]
@@ -10806,6 +10769,60 @@ Intro.
         );
         assert!(latex.contains("\\textbf{Willow} & \\textit{Violet} & \\texttt{measure}"));
         assert!(latex.contains("\\begin{longtable}{lcr}"));
+    }
+
+    #[test]
+    fn issue_51_latex_export_preserves_list_nesting_and_starts() {
+        let nested = MarkdownDocument::from_text(
+            "- Orchard **route**\n  - East gate\n  - South bench\n- River route\n  1. Stone **bridge**\n  2. [ ] Inspect *path*\n\n> - Quoted parent\n>   - Quoted child\n",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let nested_path = dir.path().join("nested.tex");
+        nested.export_to(&nested_path, ExportFormat::Latex).unwrap();
+        let latex = fs::read_to_string(nested_path).unwrap();
+        assert!(
+            latex.contains(concat!(
+                "\\begin{itemize}\n",
+                "\\item Orchard \\textbf{route}\n",
+                "\\begin{itemize}\n",
+                "\\item East gate\n",
+                "\\item South bench\n",
+                "\\end{itemize}\n",
+                "\\item River route\n",
+                "\\begin{enumerate}\n",
+                "\\item[1.] Stone \\textbf{bridge}\n",
+                "\\item[2.] $\\square$ Inspect \\textit{path}\n",
+                "\\end{enumerate}\n",
+                "\\end{itemize}\n",
+            )),
+            "{latex}"
+        );
+        assert!(
+            latex.contains(concat!(
+                "\\item Quoted parent\n",
+                "\\begin{itemize}\n",
+                "\\item Quoted child\n",
+                "\\end{itemize}\n",
+                "\\end{itemize}\n",
+            )),
+            "{latex}"
+        );
+
+        let starts = MarkdownDocument::from_text(
+            "6. Inspect roof\n7. Check gutters\n\nSome text.\n\n12. Sweep courtyard\n13. Store broom\n",
+        );
+        let starts_path = dir.path().join("starts.tex");
+        starts.export_to(&starts_path, ExportFormat::Latex).unwrap();
+        let latex = fs::read_to_string(starts_path).unwrap();
+        assert_eq!(latex.matches("\\begin{enumerate}").count(), 2, "{latex}");
+        for expected in [
+            "\\item[6.] Inspect roof",
+            "\\item[7.] Check gutters",
+            "\\item[12.] Sweep courtyard",
+            "\\item[13.] Store broom",
+        ] {
+            assert!(latex.contains(expected), "missing {expected:?} in {latex}");
+        }
     }
 
     #[test]
