@@ -23955,6 +23955,33 @@ fn tab_context_close_tab_switches_then_closes_clicked_tab(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn issue_96_escape_dismisses_background_tab_context_menu(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("alpha")),
+            EditorTab::new(MarkdownDocument::from_text("bravo")),
+        ];
+        app.active_tab = 0;
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+            assert!(app.tab_context_menu.is_some());
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+            assert!(app.tab_context_menu.is_none());
+            assert_eq!(app.active_tab, 0);
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+            assert_eq!(app.tabs.len(), 2);
+            assert_eq!(app.tabs[0].document.text(), "alpha");
+            assert_eq!(app.tabs[1].document.text(), "bravo");
+        });
+    });
+}
+
+#[gpui::test]
 fn close_other_tabs_cleans_silently_keeps_dirty_behind_dialog(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

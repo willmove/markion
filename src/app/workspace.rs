@@ -470,6 +470,12 @@ impl MarkionApp {
             self.close_visual_block_menu(cx);
             return;
         }
+        if self.tab_context_menu.is_some() {
+            self.tab_context_menu = None;
+            self.active_menu = None;
+            cx.notify();
+            return;
+        }
         if self.preferences_panel_open {
             self.close_preferences_panel(window, cx);
             return;
