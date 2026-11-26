@@ -2980,23 +2980,27 @@ impl MarkdownDocument {
     /// exactly one undo snapshot and perform exactly one document replacement.
     pub fn visual_enter_edit(&self, byte_index: usize) -> Option<VisualStructuralEdit> {
         let cursor = clamp_to_char_boundary(&self.text, byte_index);
-        let prefix = visual::structural_prefix_at(&self.text, cursor)?;
+        let prefix = visual::structural_prefix_at(&self.text, cursor);
         let line_start = self.line_start_at(cursor);
         let line_end = self.line_end_at(cursor);
-        if cursor < prefix.source_range.end {
+        if prefix
+            .as_ref()
+            .is_some_and(|prefix| cursor < prefix.source_range.end)
+        {
             return None;
         }
-        let content_is_empty = self.text[prefix.source_range.end..line_end]
-            .trim()
-            .is_empty();
-        let exits_when_empty = matches!(
-            prefix.kind,
-            VisualBlockPrefixKind::BlockQuote { .. }
-                | VisualBlockPrefixKind::UnorderedList { .. }
-                | VisualBlockPrefixKind::OrderedList { .. }
-                | VisualBlockPrefixKind::TaskList { .. }
-        );
-        let empty_structure_exit = content_is_empty && exits_when_empty;
+        let empty_structure_exit = prefix.as_ref().is_some_and(|prefix| {
+            self.text[prefix.source_range.end..line_end]
+                .trim()
+                .is_empty()
+                && matches!(
+                    prefix.kind,
+                    VisualBlockPrefixKind::BlockQuote { .. }
+                        | VisualBlockPrefixKind::UnorderedList { .. }
+                        | VisualBlockPrefixKind::OrderedList { .. }
+                        | VisualBlockPrefixKind::TaskList { .. }
+                )
+        });
 
         let blocks = self.visual_blocks_shared();
         let active_block = blocks.iter().find(|block| {
@@ -3022,16 +3026,31 @@ impl MarkdownDocument {
         if !supported_block && !orphaned_empty_structure {
             return None;
         }
-        if empty_structure_exit {
-            return Some(self.plain_block_prefix_removal_edit(prefix.source_range));
-        }
-
-        let continuation = markdown_continuation(&self.text[line_start..cursor]);
         let newline = if self.text.contains("\r\n") {
             "\r\n"
         } else {
             "\n"
         };
+        let Some(prefix) = prefix else {
+            let quote = active_block.quote_context.as_ref()?;
+            let continuation = format!(
+                "{}{}",
+                "> ".repeat(quote.depth),
+                markdown_continuation(&self.text[line_start..cursor])
+            );
+            let replacement = format!("{newline}{continuation}");
+            let next = cursor + replacement.len();
+            return Some(VisualStructuralEdit {
+                range: cursor..cursor,
+                replacement,
+                selection_after: next..next,
+            });
+        };
+        if empty_structure_exit {
+            return Some(self.plain_block_prefix_removal_edit(prefix.source_range));
+        }
+
+        let continuation = markdown_continuation(&self.text[line_start..cursor]);
         let replacement = format!("{newline}{continuation}");
         let next = cursor + replacement.len();
         Some(VisualStructuralEdit {
@@ -7852,6 +7871,34 @@ mod tests {
                 "source-island prefix must remain literal: {source:?}"
             );
         }
+    }
+
+    #[test]
+    fn issue_100_visual_enter_continues_lazy_quote_lines() {
+        for (source, expected) in [
+            (
+                "> Keep\nthese words # Topic",
+                "> Keep\nthese words \n> # Topic",
+            ),
+            (
+                "> Outer\n> > Inner\ncontinued # Topic",
+                "> Outer\n> > Inner\ncontinued \n> > # Topic",
+            ),
+        ] {
+            let mut document = MarkdownDocument::from_text(source);
+            let cursor = source.find('#').unwrap();
+            let edit = document.visual_enter_edit(cursor).unwrap();
+            document.replace_range(edit.range, &edit.replacement);
+            assert_eq!(document.text(), expected);
+            assert_eq!(
+                edit.selection_after.start,
+                document.text().rfind('#').unwrap()
+            );
+            assert!(edit.selection_after.is_empty());
+        }
+
+        let plain = MarkdownDocument::from_text("Alpha\nBeta");
+        assert!(plain.visual_enter_edit(9).is_none());
     }
 
     #[test]
