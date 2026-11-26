@@ -6476,6 +6476,38 @@ fn set_view_mode_no_ops_non_source_targets_for_data_documents(cx: &mut TestAppCo
     });
 }
 
+#[gpui::test]
+fn issue_65_data_view_shortcuts_preserve_markdown_mode(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("config.json");
+    fs::write(&json, "{\"a\": 1}\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    for stored in [ViewMode::Split, ViewMode::VisualEdit, ViewMode::Read] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+                app.active_tab = 0;
+                app.set_view_mode(stored, cx);
+                app.open_in_new_tab(MarkdownDocument::open(&json).unwrap(), cx);
+                assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+
+                app.toggle_source_split_mode(&ToggleSourceSplitMode, window, cx);
+                assert_eq!(app.view_mode, stored);
+                assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+                app.toggle_view_mode(&ToggleViewMode, window, cx);
+                assert_eq!(app.view_mode, stored);
+                assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+                app.set_view_mode(ViewMode::Edit, cx);
+                assert_eq!(app.view_mode, stored);
+
+                app.active_tab = 0;
+                assert_eq!(app.rendered_view_mode(), stored);
+            });
+        });
+    }
+}
+
 #[test]
 fn visual_and_preview_tables_share_content_column_weights() {
     let source = concat!(

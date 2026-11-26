@@ -34,11 +34,10 @@ impl MarkionApp {
     pub(super) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
         // Data-text documents have no Markdown derivation: Read, Visual Edit,
         // and Split Preview are not offered for them. While such a tab is
-        // active, non-source targets are no-ops — the document stays on its
+        // active, every view-mode write is a no-op — the document stays on its
         // source surface and the stored app-level mode is kept so a Markdown
         // tab resumes it when reactivated.
-        if self.active_document_kind() == DocumentKind::Data && !matches!(view_mode, ViewMode::Edit)
-        {
+        if self.active_document_kind() == DocumentKind::Data {
             return;
         }
         assign_view_mode(&mut self.view_mode, view_mode);
