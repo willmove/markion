@@ -2010,7 +2010,7 @@ impl MarkdownDocument {
         match format {
             MarkdownFormat::Bold => self.wrap_inline(range, "**", "**", "bold"),
             MarkdownFormat::Italic => self.wrap_inline(range, "*", "*", "italic"),
-            MarkdownFormat::InlineCode => self.wrap_inline(range, "`", "`", "code"),
+            MarkdownFormat::InlineCode => self.wrap_inline_code(range),
             MarkdownFormat::Strikethrough => self.wrap_inline(range, "~~", "~~", "text"),
             MarkdownFormat::Link => self.wrap_link(range, false),
             MarkdownFormat::Image => self.wrap_link(range, true),
@@ -2377,6 +2377,100 @@ impl MarkdownDocument {
         }
         self.apply_current_range(MutationOrigin::TableEdit, replace_range.clone(), &line);
         Some(replace_range.start..replace_range.start + line.len())
+    }
+
+    fn wrap_inline_code(&mut self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        for padding in [0, 1] {
+            if range.start < padding || range.end + padding > self.text.len() {
+                continue;
+            }
+            if padding == 1
+                && (self.text.as_bytes().get(range.start - 1) != Some(&b' ')
+                    || self.text.as_bytes().get(range.end) != Some(&b' '))
+            {
+                continue;
+            }
+            let opening_end = range.start - padding;
+            let closing_start = range.end + padding;
+            let opening = self.text.as_bytes()[..opening_end]
+                .iter()
+                .rev()
+                .take_while(|byte| **byte == b'`')
+                .count();
+            let closing = self.text.as_bytes()[closing_start..]
+                .iter()
+                .take_while(|byte| **byte == b'`')
+                .count();
+            if opening > 0 && opening == closing {
+                let outer = opening_end - opening..closing_start + closing;
+                let replacement = self.text[range.clone()].to_string();
+                let content_len = replacement.len();
+                self.apply_current_range(
+                    MutationOrigin::MarkdownFormat,
+                    outer.clone(),
+                    &replacement,
+                );
+                return outer.start..outer.start + content_len;
+            }
+        }
+
+        let selected = &self.text[range.clone()];
+        let opening = selected
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        let closing = selected
+            .as_bytes()
+            .iter()
+            .rev()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        if opening > 0 && opening == closing && selected.len() > opening + closing {
+            let mut content = &selected[opening..selected.len() - closing];
+            if content.starts_with(' ')
+                && content.ends_with(' ')
+                && content.chars().any(|ch| ch != ' ')
+            {
+                content = &content[1..content.len() - 1];
+            }
+            let replacement = content.to_string();
+            let content_len = replacement.len();
+            self.apply_current_range(MutationOrigin::MarkdownFormat, range.clone(), &replacement);
+            return range.start..range.start + content_len;
+        }
+
+        let inner = if selected.is_empty() {
+            "code"
+        } else {
+            selected
+        };
+        let mut longest = 0usize;
+        let mut current = 0usize;
+        for byte in inner.bytes() {
+            if byte == b'`' {
+                current += 1;
+                longest = longest.max(current);
+            } else {
+                current = 0;
+            }
+        }
+        let delimiter = "`".repeat(longest + 1);
+        let padding = inner.starts_with('`')
+            || inner.ends_with('`')
+            || (inner.starts_with(' ')
+                && inner.ends_with(' ')
+                && inner.chars().any(|ch| ch != ' '));
+        let content = if padding {
+            format!(" {inner} ")
+        } else {
+            inner.to_string()
+        };
+        let replacement = format!("{delimiter}{content}{delimiter}");
+        let inner_start = range.start + delimiter.len() + usize::from(padding);
+        let inner_end = inner_start + inner.len();
+        self.apply_current_range(MutationOrigin::MarkdownFormat, range, &replacement);
+        inner_start..inner_end
     }
 
     fn wrap_inline(
@@ -8154,6 +8248,33 @@ mod tests {
             let range = doc.apply_markdown_format(range, MarkdownFormat::Italic);
             assert_eq!(doc.text(), format!("Review **{word}** today."));
             assert_eq!(&doc.text()[range], word);
+        }
+    }
+
+    #[test]
+    fn issue_68_inline_code_preserves_backticks_and_edge_spaces() {
+        for selected in ["a`b", "naïve`note", "`note", "note`", " plan "] {
+            let mut doc = MarkdownDocument::from_text(format!("Say {selected} today."));
+            let start = "Say ".len();
+            let range = doc
+                .apply_markdown_format(start..start + selected.len(), MarkdownFormat::InlineCode);
+            assert_eq!(&doc.text()[range.clone()], selected);
+            let blocks = doc.preview_blocks();
+            assert!(
+                blocks.iter().any(|block| match block {
+                    PreviewBlock::Paragraph { text, .. } => text
+                        .spans
+                        .iter()
+                        .any(|span| span.style.code && span.text == selected),
+                    _ => false,
+                }),
+                "selected text was not one exact code span: {:?}",
+                doc.text()
+            );
+
+            let restored = doc.apply_markdown_format(range, MarkdownFormat::InlineCode);
+            assert_eq!(doc.text(), format!("Say {selected} today."));
+            assert_eq!(&doc.text()[restored], selected);
         }
     }
 
