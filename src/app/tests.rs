@@ -14949,6 +14949,36 @@ fn outline_fold_reconciliation_survives_offsets_and_drops_obsolete_keys() {
 }
 
 #[test]
+fn issue_64_unrelated_heading_edit_preserves_parent_fold() {
+    let original = vec![
+        outline_heading(1, "Archive", 0),
+        outline_heading(2, "Notes", 10),
+        outline_heading(1, "Draft", 20),
+    ];
+    let original_keys = outline_node_keys(&original);
+    let mut collapsed = HashSet::from([original_keys[0].clone()]);
+    let renamed = vec![
+        outline_heading(1, "Archive", 0),
+        outline_heading(2, "Notes", 10),
+        outline_heading(1, "Published", 20),
+    ];
+    let renamed_keys = outline_node_keys(&renamed);
+
+    reconcile_outline_collapsed_keys(&mut collapsed, &original_keys, &renamed_keys);
+    assert_eq!(collapsed, HashSet::from([renamed_keys[0].clone()]));
+    let projection = project_outline_rows(&renamed, &collapsed, None);
+    assert_eq!(
+        projection
+            .rows
+            .iter()
+            .map(|row| row.outline_index)
+            .collect::<Vec<_>>(),
+        [0, 2]
+    );
+    assert!(projection.rows[0].collapsed);
+}
+
+#[test]
 fn outline_fold_reconciliation_is_conservative_for_changed_duplicates() {
     let duplicates = vec![
         outline_heading(1, "Same", 0),

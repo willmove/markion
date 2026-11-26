@@ -164,7 +164,7 @@ fn outline_key_is_unambiguous(key: &OutlineNodeKey, keys: &[OutlineNodeKey]) -> 
     key.0.iter().enumerate().all(|(depth, segment)| {
         keys.iter()
             .filter(|candidate| {
-                candidate.0.len() > depth
+                candidate.0.len() == depth + 1
                     && candidate.0[..depth] == key.0[..depth]
                     && candidate.0[depth].level == segment.level
                     && candidate.0[depth].title == segment.title
