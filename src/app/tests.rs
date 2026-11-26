@@ -14223,11 +14223,39 @@ fn discard_confirmation_is_scoped_to_dirty_document_tabs() {
     assert!(!image.requires_discard_confirmation());
 }
 
-#[test]
-fn image_scale_down_fit_preserves_aspect_ratio_without_upscaling() {
-    assert_eq!(scale_down_image_size(200, 100, 100.0, 80.0), (100.0, 50.0));
-    assert_eq!(scale_down_image_size(40, 20, 100.0, 80.0), (40.0, 20.0));
-    assert_eq!(scale_down_image_size(40, 200, 100.0, 80.0), (16.0, 80.0));
+#[gpui::test]
+fn issue_104_image_reflow_fits_open_tab_rename_prompt(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("portrait.png");
+    write_solid_png(&image_path, 144, 640, [20, 40, 60, 255]);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.sidebar_visible = false;
+        app.open_supported_path(image_path.clone(), OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        app
+    });
+    cx.update(|window, _| window.resize(size(px(520.), px(360.))));
+    cx.run_until_parked();
+    let initial_surface = cx.debug_bounds("image-tab-surface").unwrap();
+    let initial_image = cx.debug_bounds("image-tab-bitmap").unwrap();
+    assert!(initial_image.size.height <= initial_surface.size.height);
+
+    app.update(cx, |app, cx| {
+        app.pending_name_input = Some(PendingNameInput::new(
+            PendingNameKind::Rename,
+            dir.path().to_path_buf(),
+            Some(image_path.clone()),
+            "portrait.png",
+        ));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let resized_surface = cx.debug_bounds("image-tab-surface").unwrap();
+    let resized_image = cx.debug_bounds("image-tab-bitmap").unwrap();
+    assert!(resized_surface.size.height < initial_surface.size.height);
+    assert!(resized_image.size.height <= resized_surface.size.height);
+    assert!(resized_image.size.width <= resized_surface.size.width);
 }
 
 #[gpui::test]

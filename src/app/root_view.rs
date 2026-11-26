@@ -580,7 +580,7 @@ impl Render for MarkionApp {
                                 |column| column.child(pending_name_prompt_view(self, cx)),
                             )
                             .when(active_is_image, |column| {
-                                column.child(image_tab_view(self, palette, window_controls::content_viewport_size(window)))
+                                column.child(image_tab_view(self, palette))
                             })
                             .when(!active_is_image, |column| {
                                 column.child(
@@ -1380,35 +1380,12 @@ fn about_link_row(
         )
 }
 
-pub(super) fn scale_down_image_size(
-    image_width: u32,
-    image_height: u32,
-    available_width: f32,
-    available_height: f32,
-) -> (f32, f32) {
-    let image_width = image_width.max(1) as f32;
-    let image_height = image_height.max(1) as f32;
-    let scale = 1.0_f32
-        .min(available_width.max(1.0) / image_width)
-        .min(available_height.max(1.0) / image_height);
-    (image_width * scale, image_height * scale)
-}
-
-fn image_tab_view(
-    app: &MarkionApp,
-    palette: ThemePalette,
-    viewport: Size<Pixels>,
-) -> impl IntoElement {
+fn image_tab_view(app: &MarkionApp, palette: ThemePalette) -> impl IntoElement {
     let image_tab = app
         .active_tab()
         .image()
         .expect("image tab view is rendered only for image content");
     let path = image_tab.path.display().to_string();
-    let available_width = f32::from(viewport.width) - 2.0 * PANE_OUTER_PADDING;
-    let available_height = f32::from(viewport.height)
-        - 56.0
-        - document_tab_band_height(app.tabs.len())
-        - 2.0 * PANE_OUTER_PADDING;
     let content = match app.image_tab_entry(&image_tab.key) {
         PreviewImageEntry::Pending => div()
             .debug_selector(|| "image-tab-loading".to_string())
@@ -1418,25 +1395,20 @@ fn image_tab_view(
             .justify_center()
             .text_color(palette.muted)
             .child(app.tr(Msg::StatusImageLoading).to_string()),
-        PreviewImageEntry::Ready(ready) => {
-            let (width, height) = scale_down_image_size(
-                ready.display_width,
-                ready.display_height,
-                available_width,
-                available_height,
-            );
-            div()
-                .debug_selector(|| "image-tab-ready".to_string())
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    img(ImageSource::Render(ready.image))
-                        .w(px(width))
-                        .h(px(height)),
-                )
-        }
+        PreviewImageEntry::Ready(ready) => div()
+            .debug_selector(|| "image-tab-ready".to_string())
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                img(ImageSource::Render(ready.image))
+                    .debug_selector(|| "image-tab-bitmap".to_string())
+                    .size_full()
+                    .max_w(px(ready.display_width as f32))
+                    .max_h(px(ready.display_height as f32))
+                    .object_fit(gpui::ObjectFit::ScaleDown),
+            ),
         PreviewImageEntry::Error(error) => div()
             .debug_selector(|| "image-tab-error".to_string())
             .size_full()
