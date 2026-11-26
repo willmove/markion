@@ -299,11 +299,12 @@ impl EntityInputHandler for MarkionApp {
         let mut paired_text: Option<String> = None;
         let mut pair_selection: Option<Range<usize>> = None;
         let skip_ime_pair = active_marked_range.is_some() || committing_ime;
-        let restricted_pair_field = visual_edit
-            && tab
-                .document
-                .visual_editor_field_at(&range)
-                .is_some_and(|field| is_auto_pair_restricted_field(field.kind));
+        let restricted_pair_field = !matches!(tab.kind(), DocumentKind::Markdown)
+            || (visual_edit
+                && tab
+                    .document
+                    .visual_editor_field_at(&range)
+                    .is_some_and(|field| is_auto_pair_restricted_field(field.kind)));
         if !skip_ime_pair && !restricted_pair_field {
             if let Some(AutoPairAction::Replace {
                 range: link_range,

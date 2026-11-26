@@ -28283,6 +28283,71 @@ fn contextual_bullet_and_url_input_use_one_exact_mutation(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn issue_60_data_file_typing_stays_literal_with_markdown_control(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("settings.yaml");
+    let toml = dir.path().join("settings.toml");
+    let yaml_source = "endpoint: https://example.test/api\nretries: 3\n";
+    fs::write(&yaml, yaml_source).unwrap();
+    fs::write(&toml, "retrycount = 3").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&yaml).unwrap())];
+        app.markdown_auto_pair = true;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().kind(), DocumentKind::Data);
+        let cursor = yaml_source.find("/api").unwrap() + 4;
+        app.active_tab_mut().selected_range = cursor..cursor;
+    });
+    cx.simulate_input(" ");
+    cx.simulate_input("# staging");
+    app.update(cx, |app, _| {
+        let expected = "endpoint: https://example.test/api # staging\nretries: 3\n";
+        assert_eq!(app.active_tab().document.text(), expected);
+        app.active_tab_mut().document.force_save().unwrap();
+        assert_eq!(fs::read_to_string(&yaml).unwrap(), expected);
+        assert_eq!(MarkdownDocument::open(&yaml).unwrap().text(), expected);
+    });
+
+    for (typed, expected) in [("_", "retry_count = 3"), ("-", "retry-count = 3")] {
+        app.update(cx, |app, _| {
+            fs::write(&toml, "retrycount = 3").unwrap();
+            app.tabs = vec![EditorTab::new(MarkdownDocument::open(&toml).unwrap())];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 5..5;
+        });
+        cx.simulate_input(typed);
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), expected);
+        });
+    }
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "https://example.test/api",
+        ))];
+        app.active_tab = 0;
+        let end = app.active_tab().document.text().len();
+        app.active_tab_mut().selected_range = end..end;
+    });
+    cx.simulate_input(" ");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().kind(), DocumentKind::Markdown);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "[https://example.test/api](https://example.test/api) "
+        );
+    });
+}
+
+#[gpui::test]
 fn url_conversion_stays_literal_in_code_payload(cx: &mut TestAppContext) {
     let source = "```text\n\n```";
     let (app, cx) = cx.add_window_view(|_, cx| {
