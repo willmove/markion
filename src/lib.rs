@@ -2965,7 +2965,12 @@ impl MarkdownDocument {
         }
 
         let continuation = markdown_continuation(before_cursor);
-        let insertion = format!("\n{continuation}");
+        let newline = if self.text.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let insertion = format!("{newline}{continuation}");
         self.apply_current_range(MutationOrigin::StructuralEdit, cursor..cursor, &insertion);
         cursor + insertion.len()
     }
@@ -3022,7 +3027,12 @@ impl MarkdownDocument {
         }
 
         let continuation = markdown_continuation(&self.text[line_start..cursor]);
-        let replacement = format!("\n{continuation}");
+        let newline = if self.text.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let replacement = format!("{newline}{continuation}");
         let next = cursor + replacement.len();
         Some(VisualStructuralEdit {
             range: cursor..cursor,
@@ -7685,6 +7695,29 @@ mod tests {
         assert_eq!(doc.text(), "Alpha\nBeta");
         assert_eq!(cursor, 6);
         assert!(doc.is_dirty());
+    }
+
+    #[test]
+    fn issue_98_crlf_newlines_match_document_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crlf-newline.md");
+        fs::write(&path, b"AlphaBeta\r\nTail\r\n").unwrap();
+        let mut document = MarkdownDocument::open(&path).unwrap();
+        let cursor = document.insert_markdown_newline(5);
+        assert_eq!(document.text(), "Alpha\r\nBeta\r\nTail\r\n");
+        assert_eq!(cursor, 7);
+        document.force_save().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"Alpha\r\nBeta\r\nTail\r\n");
+
+        let mut visual = MarkdownDocument::from_text("- AlphaBeta\r\nTail\r\n");
+        let edit = visual.visual_enter_edit(7).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        assert_eq!(visual.text(), "- Alpha\r\n- Beta\r\nTail\r\n");
+        assert_eq!(edit.selection_after, 11..11);
+
+        let mut lf = MarkdownDocument::from_text("AlphaBeta\nTail\n");
+        assert_eq!(lf.insert_markdown_newline(5), 6);
+        assert_eq!(lf.text(), "Alpha\nBeta\nTail\n");
     }
 
     #[test]
