@@ -33,12 +33,23 @@ impl FontKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LoadedFontVariantKey {
+    cosmic_id: cosmic_text::fontdb::ID,
+    features: FontFeatures,
+    requested_weight: cosmic_text::Weight,
+    requested_style: cosmic_text::Style,
+    fake_italic: bool,
+}
+
 struct CosmicTextSystemState {
     swash_cache: SwashCache,
     font_system: FontSystem,
     scratch: ShapeBuffer,
-    /// Contains all already loaded fonts, including all faces. Indexed by `FontId`.
+    /// Contains all already loaded fonts, including all faces and synthetic-style variants. Indexed by `FontId`.
     loaded_fonts: Vec<LoadedFont>,
+    /// Deduplicates `LoadedFont` entries by underlying face, features, requested style/weight, and synthetic italic flag.
+    variant_font_ids: HashMap<LoadedFontVariantKey, FontId>,
     /// Caches the `FontId`s associated with a specific family to avoid iterating the font database
     /// for every font face in a family.
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
@@ -48,6 +59,9 @@ struct LoadedFont {
     font: Arc<CosmicTextFont>,
     features: CosmicFontFeatures,
     is_known_emoji_font: bool,
+    requested_weight: cosmic_text::Weight,
+    requested_style: cosmic_text::Style,
+    fake_italic: bool,
 }
 
 impl CosmicTextSystem {
@@ -60,6 +74,7 @@ impl CosmicTextSystem {
             swash_cache: SwashCache::new(),
             scratch: ShapeBuffer::default(),
             loaded_fonts: Vec::new(),
+            variant_font_ids: HashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
         }))
     }
@@ -116,7 +131,37 @@ impl PlatformTextSystem for CosmicTextSystem {
             font_kit::matching::find_best_match(&candidate_properties, &font_into_properties(font))
                 .context("requested font family contains no font matching the other parameters")?;
 
-        Ok(candidates[ix])
+        let base_font_id = candidates[ix];
+        let database_id = state.loaded_font(base_font_id).font.id();
+        let (face_weight, face_style) = {
+            let face_info = state.font_system.db().face(database_id).expect("");
+            (face_info.weight, face_info.style)
+        };
+        let req_weight = cosmic_text::Weight::from(font.weight);
+        let req_style = cosmic_text::Style::from(font.style);
+        let wants_italic = matches!(
+            req_style,
+            cosmic_text::Style::Italic | cosmic_text::Style::Oblique
+        );
+        let face_is_italic = matches!(
+            face_style,
+            cosmic_text::Style::Italic | cosmic_text::Style::Oblique
+        );
+        let fake_italic = wants_italic && !face_is_italic;
+        let effective_weight = if req_weight.0 >= 600 && face_weight.0 < 600 {
+            req_weight
+        } else {
+            face_weight
+        };
+        let effective_style = if wants_italic { req_style } else { face_style };
+
+        state.font_id_for_variant(
+            database_id,
+            &font.features,
+            effective_weight,
+            effective_style,
+            fake_italic,
+        )
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
@@ -220,14 +265,21 @@ impl CosmicTextSystemState {
             .db()
             .faces()
             .filter(|face| face.families.iter().any(|family| *name == family.0))
-            .map(|face| (face.id, face.post_script_name.clone()))
+            .map(|face| {
+                (
+                    face.id,
+                    face.post_script_name.clone(),
+                    face.weight,
+                    face.style,
+                )
+            })
             .collect::<SmallVec<[_; 4]>>();
 
         let mut loaded_font_ids = SmallVec::new();
-        for (font_id, postscript_name) in families {
+        for (cosmic_id, postscript_name, face_weight, face_style) in families {
             let font = self
                 .font_system
-                .get_font(font_id)
+                .get_font(cosmic_id)
                 .context("Could not load font")?;
 
             // HACK: To let the storybook run and render Windows caption icons. We should actually do better font fallback.
@@ -243,16 +295,74 @@ impl CosmicTextSystemState {
                 continue;
             };
 
-            let font_id = FontId(self.loaded_fonts.len());
+            let variant_key = LoadedFontVariantKey {
+                cosmic_id,
+                features: features.clone(),
+                requested_weight: face_weight,
+                requested_style: face_style,
+                fake_italic: false,
+            };
+            let font_id = if let Some(&existing) = self.variant_font_ids.get(&variant_key) {
+                existing
+            } else {
+                let font_id = FontId(self.loaded_fonts.len());
+                self.loaded_fonts.push(LoadedFont {
+                    font,
+                    features: features.try_into()?,
+                    is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
+                    requested_weight: face_weight,
+                    requested_style: face_style,
+                    fake_italic: false,
+                });
+                self.variant_font_ids.insert(variant_key, font_id);
+                font_id
+            };
             loaded_font_ids.push(font_id);
-            self.loaded_fonts.push(LoadedFont {
-                font,
-                features: features.try_into()?,
-                is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
-            });
         }
 
         Ok(loaded_font_ids)
+    }
+
+    fn font_id_for_variant(
+        &mut self,
+        cosmic_id: cosmic_text::fontdb::ID,
+        features: &FontFeatures,
+        requested_weight: cosmic_text::Weight,
+        requested_style: cosmic_text::Style,
+        fake_italic: bool,
+    ) -> Result<FontId> {
+        let key = LoadedFontVariantKey {
+            cosmic_id,
+            features: features.clone(),
+            requested_weight,
+            requested_style,
+            fake_italic,
+        };
+        if let Some(&existing) = self.variant_font_ids.get(&key) {
+            return Ok(existing);
+        }
+        let font = self
+            .font_system
+            .get_font(cosmic_id)
+            .context("Could not load font")?;
+        let postscript_name = self
+            .font_system
+            .db()
+            .face(cosmic_id)
+            .context("Font face missing from database")?
+            .post_script_name
+            .clone();
+        let font_id = FontId(self.loaded_fonts.len());
+        self.loaded_fonts.push(LoadedFont {
+            font,
+            features: features.try_into()?,
+            is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
+            requested_weight,
+            requested_style,
+            fake_italic,
+        });
+        self.variant_font_ids.insert(key, font_id);
+        Ok(font_id)
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
@@ -273,7 +383,13 @@ impl CosmicTextSystemState {
     }
 
     fn raster_bounds(&mut self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-        let font = &self.loaded_fonts[params.font_id.0].font;
+        let loaded = &self.loaded_fonts[params.font_id.0];
+        let font = &loaded.font;
+        let flags = if loaded.fake_italic {
+            cosmic_text::CacheKeyFlags::FAKE_ITALIC
+        } else {
+            cosmic_text::CacheKeyFlags::empty()
+        };
         let subpixel_shift = point(
             params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
             params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
@@ -287,7 +403,7 @@ impl CosmicTextSystemState {
                     params.glyph_id.0 as u16,
                     (params.font_size * params.scale_factor).into(),
                     (subpixel_shift.x, subpixel_shift.y.trunc()),
-                    cosmic_text::CacheKeyFlags::empty(),
+                    flags,
                 )
                 .0,
             )
@@ -309,7 +425,13 @@ impl CosmicTextSystemState {
             anyhow::bail!("glyph bounds are empty");
         } else {
             let bitmap_size = glyph_bounds.size;
-            let font = &self.loaded_fonts[params.font_id.0].font;
+            let loaded = &self.loaded_fonts[params.font_id.0];
+            let font = &loaded.font;
+            let flags = if loaded.fake_italic {
+                cosmic_text::CacheKeyFlags::FAKE_ITALIC
+            } else {
+                cosmic_text::CacheKeyFlags::empty()
+            };
             let subpixel_shift = point(
                 params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
                 params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
@@ -323,7 +445,7 @@ impl CosmicTextSystemState {
                         params.glyph_id.0 as u16,
                         (params.font_size * params.scale_factor).into(),
                         (subpixel_shift.x, subpixel_shift.y.trunc()),
-                        cosmic_text::CacheKeyFlags::empty(),
+                        flags,
                     )
                     .0,
                 )
@@ -349,24 +471,42 @@ impl CosmicTextSystemState {
     /// `LoadedFont.features`, as it will have an arbitrarily chosen or empty value. The only
     /// current use of this field is for the *input* of `layout_line`, and so it's fine to use
     /// `font_id_for_cosmic_id` when computing the *output* of `layout_line`.
-    fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> FontId {
-        if let Some(ix) = self
-            .loaded_fonts
-            .iter()
-            .position(|loaded_font| loaded_font.font.id() == id)
-        {
-            FontId(ix)
+    fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID, wants_italic: bool) -> FontId {
+        let (face_weight, face_style, postscript_name) = {
+            let face = self.font_system.db().face(id).unwrap();
+            (face.weight, face.style, face.post_script_name.clone())
+        };
+        let face_is_italic = matches!(
+            face_style,
+            cosmic_text::Style::Italic | cosmic_text::Style::Oblique
+        );
+        let fake_italic = wants_italic && !face_is_italic;
+        let requested_style = if fake_italic {
+            cosmic_text::Style::Italic
+        } else {
+            face_style
+        };
+        let key = LoadedFontVariantKey {
+            cosmic_id: id,
+            features: FontFeatures::default(),
+            requested_weight: face_weight,
+            requested_style,
+            fake_italic,
+        };
+        if let Some(&existing) = self.variant_font_ids.get(&key) {
+            existing
         } else {
             let font = self.font_system.get_font(id).unwrap();
-            let face = self.font_system.db().face(id).unwrap();
-
             let font_id = FontId(self.loaded_fonts.len());
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: CosmicFontFeatures::new(),
-                is_known_emoji_font: check_is_known_emoji_font(&face.post_script_name),
+                is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
+                requested_weight: face_weight,
+                requested_style,
+                fake_italic,
             });
-
+            self.variant_font_ids.insert(key, font_id);
             font_id
         }
     }
@@ -386,7 +526,7 @@ impl CosmicTextSystemState {
                     .family(Family::Name(&font.families.first().unwrap().0))
                     .stretch(font.stretch)
                     .style(font.style)
-                    .weight(font.weight)
+                    .weight(loaded_font.requested_weight)
                     .font_features(loaded_font.features.clone()),
             );
             offs += run.len;
@@ -413,12 +553,23 @@ impl CosmicTextSystemState {
 
         let mut runs: Vec<ShapedRun> = Vec::new();
         for glyph in &layout.glyphs {
-            let mut font_id = FontId(glyph.metadata);
-            let mut loaded_font = self.loaded_font(font_id);
-            if loaded_font.font.id() != glyph.font_id {
-                font_id = self.font_id_for_cosmic_id(glyph.font_id);
-                loaded_font = self.loaded_font(font_id);
-            }
+            let run_font_id = FontId(glyph.metadata);
+            let (run_cosmic_id, wants_italic) = {
+                let run_loaded = self.loaded_font(run_font_id);
+                (
+                    run_loaded.font.id(),
+                    matches!(
+                        run_loaded.requested_style,
+                        cosmic_text::Style::Italic | cosmic_text::Style::Oblique
+                    ),
+                )
+            };
+            let font_id = if run_cosmic_id != glyph.font_id {
+                self.font_id_for_cosmic_id(glyph.font_id, wants_italic)
+            } else {
+                run_font_id
+            };
+            let loaded_font = self.loaded_font(font_id);
             let is_emoji = loaded_font.is_known_emoji_font;
 
             // HACK: Prevent crash caused by variation selectors.
@@ -578,4 +729,142 @@ fn face_info_into_properties(
 fn check_is_known_emoji_font(postscript_name: &str) -> bool {
     // TODO: Include other common emoji fonts
     postscript_name == "NotoColorEmoji"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FontFallbacks, TextSystem, px};
+
+    fn font_with(family: &str, weight: FontWeight, style: FontStyle) -> Font {
+        Font {
+            family: SharedString::from(family.to_string()),
+            features: FontFeatures::default(),
+            fallbacks: None,
+            weight,
+            style,
+        }
+    }
+
+    #[test]
+    fn resolve_font_preserves_weight_and_style_across_fallback_stack() {
+        let platform = Arc::new(CosmicTextSystem::new());
+        let text_system = TextSystem::new(platform);
+
+        let regular = text_system.resolve_font(&font_with(
+            "__NonExistentPrimaryFont__",
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+        ));
+        let bold = text_system.resolve_font(&font_with(
+            "__NonExistentPrimaryFont__",
+            FontWeight::BOLD,
+            FontStyle::Normal,
+        ));
+        let italic = text_system.resolve_font(&font_with(
+            "__NonExistentPrimaryFont__",
+            FontWeight::NORMAL,
+            FontStyle::Italic,
+        ));
+        let bold_italic = text_system.resolve_font(&font_with(
+            "__NonExistentPrimaryFont__",
+            FontWeight::BOLD,
+            FontStyle::Italic,
+        ));
+
+        assert_ne!(regular, bold, "fallback must preserve bold weight");
+        assert_ne!(regular, italic, "fallback must preserve italic style");
+        assert_ne!(bold, bold_italic, "fallback must preserve bold-italic");
+    }
+
+    #[test]
+    fn resolve_font_honors_explicit_fallbacks_before_default_stack() {
+        let platform = Arc::new(CosmicTextSystem::new());
+        let text_system = TextSystem::new(platform);
+        let available = text_system.all_font_names();
+        let Some(mono) = ["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono"]
+            .into_iter()
+            .find(|name| available.iter().any(|installed| installed == name))
+        else {
+            return;
+        };
+
+        let code_font = Font {
+            family: SharedString::from("__NonExistentCodeFont__"),
+            features: FontFeatures::default(),
+            fallbacks: Some(FontFallbacks::from_fonts(vec![mono.to_string()])),
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+        };
+        let font_id = text_system.resolve_font(&code_font);
+        let adv_i = text_system.advance(font_id, px(14.), 'i').unwrap();
+        let adv_w = text_system.advance(font_id, px(14.), 'W').unwrap();
+        assert_eq!(
+            adv_i.width, adv_w.width,
+            "code font fallback {mono} must stay monospace"
+        );
+    }
+
+    #[test]
+    fn fake_italic_uses_distinct_font_id_and_slanted_raster() {
+        let platform = Arc::new(CosmicTextSystem::new());
+        let text_system = TextSystem::new(platform.clone());
+        let available = text_system.all_font_names();
+        // Pick an installed family that has a Normal face and lacks an Italic face.
+        let normal_only_family = available.into_iter().find(|family| {
+            let state = platform.0.read();
+            let mut has_normal = false;
+            let mut has_italic = false;
+            for face in state.font_system.db().faces() {
+                if face.families.iter().any(|f| f.0 == *family) {
+                    match face.style {
+                        cosmic_text::Style::Normal => has_normal = true,
+                        cosmic_text::Style::Italic | cosmic_text::Style::Oblique => {
+                            has_italic = true;
+                        }
+                    }
+                }
+            }
+            has_normal && !has_italic
+        });
+        let Some(family) = normal_only_family else {
+            return;
+        };
+
+        let regular_id =
+            text_system.resolve_font(&font_with(&family, FontWeight::NORMAL, FontStyle::Normal));
+        let italic_id =
+            text_system.resolve_font(&font_with(&family, FontWeight::NORMAL, FontStyle::Italic));
+        assert_ne!(
+            regular_id, italic_id,
+            "synthetic italic for {family} must not alias regular FontId"
+        );
+
+        let Some(glyph_id) = platform.glyph_for_char(regular_id, 'H') else {
+            return;
+        };
+        let make_params = |font_id| RenderGlyphParams {
+            font_id,
+            glyph_id,
+            font_size: px(24.),
+            subpixel_variant: point(0, 0),
+            scale_factor: 1.0,
+            is_emoji: false,
+        };
+        let regular_params = make_params(regular_id);
+        let italic_params = make_params(italic_id);
+        let regular_bounds = platform.glyph_raster_bounds(&regular_params).unwrap();
+        let italic_bounds = platform.glyph_raster_bounds(&italic_params).unwrap();
+        let (_, regular_pixels) = platform
+            .rasterize_glyph(&regular_params, regular_bounds)
+            .unwrap();
+        let (_, italic_pixels) = platform
+            .rasterize_glyph(&italic_params, italic_bounds)
+            .unwrap();
+
+        assert!(
+            regular_bounds != italic_bounds || regular_pixels != italic_pixels,
+            "synthetic italic for {family} must rasterize differently from upright"
+        );
+    }
 }

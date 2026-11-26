@@ -151,7 +151,21 @@ impl TextSystem {
         if let Ok(font_id) = self.font_id(font) {
             return font_id;
         }
+        if let Some(fallbacks) = &font.fallbacks {
+            for fallback_family in fallbacks.fallback_list() {
+                let mut candidate = font.clone();
+                candidate.family = SharedString::from(fallback_family.clone());
+                if let Ok(font_id) = self.font_id(&candidate) {
+                    return font_id;
+                }
+            }
+        }
         for fallback in &self.fallback_font_stack {
+            let mut candidate = font.clone();
+            candidate.family = fallback.family.clone();
+            if let Ok(font_id) = self.font_id(&candidate) {
+                return font_id;
+            }
             if let Ok(font_id) = self.font_id(fallback) {
                 return font_id;
             }

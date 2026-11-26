@@ -2670,6 +2670,8 @@ pub(super) fn code_slot_font(family: &SharedString) -> Font {
             "SFMono-Regular".to_string(),
             "Menlo".to_string(),
             "DejaVu Sans Mono".to_string(),
+            "Liberation Mono".to_string(),
+            "Noto Sans Mono".to_string(),
         ])),
         weight: FontWeight::default(),
         style: FontStyle::default(),

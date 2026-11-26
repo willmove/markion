@@ -2172,9 +2172,14 @@ fn inline_runs(
     };
     let mut runs = Vec::new();
     let mut candidates = Vec::new();
-    let mut markdown_style = InlineStyle::default();
+    // Depth counters for Markdown emphasis/strikethrough delimiters so nested
+    // same-kind constructs (e.g. `**outer **inner** tail**`) keep outer styles
+    // active after the inner construct closes, matching `InlineStateDraft`.
+    let mut bold_depth = 0usize;
+    let mut italic_depth = 0usize;
+    let mut strike_depth = 0usize;
     // Depth counters for supported inline-HTML style tags, kept separate from
-    // `markdown_style` so an HTML pair and a Markdown pair nesting each other
+    // Markdown depths so an HTML pair and a Markdown pair nesting each other
     // (e.g. `<em>a *b* c</em>`) cannot clear each other's flags on close.
     let mut html_style_stack: Vec<HtmlStyleFrame> = Vec::new();
     let mut html_element_ranges: Vec<Range<usize>> = Vec::new();
@@ -2218,6 +2223,12 @@ fn inline_runs(
                 | Event::InlineHtml(_)
                 | Event::FootnoteReference(_)
         );
+        let markdown_style = InlineStyle {
+            bold: bold_depth > 0,
+            italic: italic_depth > 0,
+            strikethrough: strike_depth > 0,
+            ..InlineStyle::default()
+        };
         let style = html_style_stack
             .iter()
             .fold(markdown_style, |style, frame| {
@@ -2230,10 +2241,10 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: None,
                 });
-                markdown_style.bold = true;
+                bold_depth += 1;
             }
             Event::End(TagEnd::Strong) => {
-                markdown_style.bold = false;
+                bold_depth = bold_depth.saturating_sub(1);
             }
             Event::Start(Tag::Emphasis) => {
                 candidates.push(RevealCandidate {
@@ -2241,10 +2252,10 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: None,
                 });
-                markdown_style.italic = true;
+                italic_depth += 1;
             }
             Event::End(TagEnd::Emphasis) => {
-                markdown_style.italic = false;
+                italic_depth = italic_depth.saturating_sub(1);
             }
             Event::Start(Tag::Strikethrough) => {
                 candidates.push(RevealCandidate {
@@ -2252,10 +2263,10 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: None,
                 });
-                markdown_style.strikethrough = true;
+                strike_depth += 1;
             }
             Event::End(TagEnd::Strikethrough) => {
-                markdown_style.strikethrough = false;
+                strike_depth = strike_depth.saturating_sub(1);
             }
             Event::Start(Tag::Link {
                 dest_url,
@@ -9445,5 +9456,34 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                 .filter(|(_, quote)| quote.group_source_range == group)
                 .all(|(_, quote)| quote.alert == Some(AlertKind::Warning))
         );
+    }
+
+    #[test]
+    fn visual_edit_nested_same_kind_emphasis_and_strike_keep_outer_style() {
+        let cases: &[(&str, fn(crate::InlineStyle) -> bool)] = &[
+            ("**outer **inner** tail**", |s| s.bold),
+            ("*outer *inner* tail*", |s| s.italic),
+            ("~~outer ~~inner~~ tail~~", |s| s.strikethrough),
+        ];
+        for &(source, check) in cases {
+            let document = MarkdownDocument::from_text(source);
+            let blocks = document.visual_blocks();
+            let block = blocks
+                .iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+                .expect("paragraph block");
+            let projection = build_visual_projection(source, block, usize::MAX..usize::MAX, usize::MAX);
+            assert_eq!(projection.text, "outer inner tail", "for {source}");
+            let tail = projection
+                .spans
+                .iter()
+                .find(|span| &projection.text[span.display_range.clone()] == " tail")
+                .expect("trailing span");
+            assert!(
+                check(tail.style),
+                "trailing span lost outer style for {source}: {:?}",
+                tail.style
+            );
+        }
     }
 }
