@@ -10653,6 +10653,58 @@ fn visual_edit_reuses_focused_large_document_row_after_early_edit(cx: &mut TestA
 }
 
 #[gpui::test]
+fn issue_89_undo_restores_collapsed_caret_before_single_delete(cx: &mut TestAppContext) {
+    for mode in [ViewMode::Edit, ViewMode::VisualEdit] {
+        for backward in [false, true] {
+            let (app, cx) = cx.add_window_view(|_, cx| {
+                let mut app = MarkionApp::new(cx);
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("AqB"))];
+                app.view_mode = mode;
+                app.active_tab_mut().selected_range = if backward { 2..2 } else { 1..1 };
+                app
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    if backward {
+                        app.backspace(&Backspace, window, cx);
+                    } else {
+                        app.delete(&Delete, window, cx);
+                    }
+                    assert_eq!(app.active_tab().document.text(), "AB");
+                    app.undo(&Undo, window, cx);
+                    assert_eq!(app.active_tab().document.text(), "AqB");
+                    assert_eq!(
+                        app.active_tab().selected_range,
+                        if backward { 2..2 } else { 1..1 }
+                    );
+                    EntityInputHandler::replace_text_in_range(app, None, "X", window, cx);
+                    assert_eq!(
+                        app.active_tab().document.text(),
+                        if backward { "AqXB" } else { "AXqB" }
+                    );
+                });
+            });
+        }
+    }
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("AqB"))];
+        app.active_tab_mut().selected_range = 1..2;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.delete(&Delete, window, cx);
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().selected_range, 1..2);
+            EntityInputHandler::replace_text_in_range(app, None, "X", window, cx);
+            assert_eq!(app.active_tab().document.text(), "AXB");
+        });
+    });
+}
+
+#[gpui::test]
 fn visual_edit_structural_backspace_is_one_undoable_tab_local_edit(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

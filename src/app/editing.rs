@@ -6151,9 +6151,12 @@ impl MarkionApp {
             return;
         }
         if self.active_tab().selected_range.is_empty() {
-            let boundary = self.previous_boundary(self.cursor_offset());
-            self.select_to(boundary, cx);
+            let cursor = self.cursor_offset();
+            let boundary = self.previous_boundary(cursor);
+            let range = self.active_tab().range_to_utf16(&(boundary..cursor));
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
+            self.replace_text_in_range(Some(range), "", window, cx);
+            return;
         }
         self.replace_text_in_range(None, "", window, cx);
     }
@@ -6220,9 +6223,12 @@ impl MarkionApp {
             return;
         }
         if self.active_tab().selected_range.is_empty() {
-            let boundary = self.next_boundary(self.cursor_offset());
-            self.select_to(boundary, cx);
+            let cursor = self.cursor_offset();
+            let boundary = self.next_boundary(cursor);
+            let range = self.active_tab().range_to_utf16(&(cursor..boundary));
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
+            self.replace_text_in_range(Some(range), "", window, cx);
+            return;
         }
         self.replace_text_in_range(None, "", window, cx);
     }
