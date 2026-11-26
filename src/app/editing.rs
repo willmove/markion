@@ -5498,10 +5498,23 @@ impl MarkionApp {
             .iter()
             .map(|run| run.content_range.end)
             .max();
-        Some(match (start, end) {
-            (Some(start), Some(end)) => start..end,
-            _ => block.source_range.clone(),
-        })
+        if start.is_some() || end.is_some() {
+            let source = &self.active_tab().document.text()[block.source_range.clone()];
+            let content_end =
+                block.source_range.start + source.trim_end_matches(['\r', '\n']).len();
+            let content_start = block.block_prefix.as_ref().map_or_else(
+                || {
+                    block
+                        .quote_context
+                        .as_ref()
+                        .and_then(|quote| quote.marker_ranges.first())
+                        .map_or(block.source_range.start, |range| range.end)
+                },
+                |prefix| prefix.source_range.end,
+            );
+            return Some(content_start.min(content_end)..content_end);
+        }
+        Some(block.source_range.clone())
     }
 
     fn current_text_block_range(&self) -> Range<usize> {

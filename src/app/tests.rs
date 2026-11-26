@@ -28828,6 +28828,56 @@ fn issue_33_forward_word_actions_do_not_split_crlf(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_106_visual_select_all_replaces_complete_inline_constructs(cx: &mut TestAppContext) {
+    let cases = [
+        (
+            "See [map](trail.md)\n\nKeep this line.",
+            "X\n\nKeep this line.",
+        ),
+        ("[map](trail.md) is ready", "X"),
+        ("Walk **home**", "X"),
+    ];
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(cases[0].0))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    for (index, (source, expected)) in cases.into_iter().enumerate() {
+        if index > 0 {
+            app.update(cx, |app, cx| {
+                app.active_tab_mut().document.set_text(source);
+                app.active_tab_mut().selected_range = 0..0;
+                cx.notify();
+            });
+        }
+        cx.run_until_parked();
+        let undo_before = app.update(cx, |app, _| app.active_tab().undo_stack.len());
+        cx.dispatch_action(SelectAll);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.active_tab().selected_range,
+                0..app.active_tab().document.paragraph_range_at(0).end,
+                "source: {source}"
+            );
+        });
+        cx.simulate_input("X");
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), expected);
+            assert_eq!(app.active_tab().undo_stack.len(), undo_before + 1);
+        });
+    }
+}
+
+#[gpui::test]
 fn baseline_word_actions_and_progressive_select_all_work_on_source(cx: &mut TestAppContext) {
     let source = "hello world\n\nsecond";
     let (app, cx) = cx.add_window_view(|_, cx| {
