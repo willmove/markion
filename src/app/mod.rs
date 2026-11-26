@@ -76,11 +76,12 @@ use markion::{
     read_document_source, redistribute_adjacent_column_percents, reorder_block,
     resolve_font_family, resolve_html_img_display_size, save_app_preferences, save_session_state,
     save_text_snapshot, save_theme_definition, serialize_html_anchor, serialize_inline_image,
-    serialize_inline_link, shortcut_catalog, sidebar_tab_label, simple_html_anchor_at,
-    slash_command_edit, slash_query_at, snap_image_width_percent, t, table_column_flex_weights,
-    table_column_flex_weights_with_authored, table_column_width_prefix_len, task_checkbox_toggle,
-    tf, title_from_path, transform_block, url_auto_link_action, validate_block_target,
-    workspace_relative_path,
+    serialize_inline_image_with_authored_label, serialize_inline_link,
+    serialize_inline_link_with_authored_label, shortcut_catalog, sidebar_tab_label,
+    simple_html_anchor_at, slash_command_edit, slash_query_at, snap_image_width_percent, t,
+    table_column_flex_weights, table_column_flex_weights_with_authored,
+    table_column_width_prefix_len, task_checkbox_toggle, tf, title_from_path, transform_block,
+    url_auto_link_action, validate_block_target, workspace_relative_path,
 };
 use markion::{DEFAULT_LINE_SPACING, MAX_LINE_SPACING, MIN_LINE_SPACING, normalize_line_spacing};
 use markion_git_sync::{

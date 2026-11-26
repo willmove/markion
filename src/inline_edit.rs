@@ -50,6 +50,8 @@ pub fn snap_image_width_percent(percent: u8) -> u8 {
 pub struct InlineMarkdownTarget {
     pub source_range: Range<usize>,
     pub label: String,
+    /// Original label bytes inside the brackets, including backslash escapes.
+    pub authored_label: String,
     pub url: String,
     pub title: Option<String>,
     pub presentation: Option<ImagePresentation>,
@@ -158,6 +160,7 @@ fn inline_target_at(source: &str, offset: usize, image: bool) -> Option<InlineMa
             Some(InlineMarkdownTarget {
                 source_range: range,
                 label,
+                authored_label: authored[prefix.len()..label_end].to_string(),
                 url: destination.to_string(),
                 title,
                 presentation,
@@ -178,6 +181,23 @@ pub fn serialize_inline_image(
     serialize_target(true, alt, url, title, presentation)
 }
 
+pub fn serialize_inline_link_with_authored_label(
+    authored_label: &str,
+    url: &str,
+    title: Option<&str>,
+) -> String {
+    serialize_target_impl(false, authored_label, url, title, None, true)
+}
+
+pub fn serialize_inline_image_with_authored_label(
+    authored_label: &str,
+    url: &str,
+    title: Option<&str>,
+    presentation: Option<ImagePresentation>,
+) -> String {
+    serialize_target_impl(true, authored_label, url, title, presentation, true)
+}
+
 fn serialize_target(
     image: bool,
     label: &str,
@@ -185,12 +205,27 @@ fn serialize_target(
     title: Option<&str>,
     presentation: Option<ImagePresentation>,
 ) -> String {
+    serialize_target_impl(image, label, url, title, presentation, false)
+}
+
+fn serialize_target_impl(
+    image: bool,
+    label: &str,
+    url: &str,
+    title: Option<&str>,
+    presentation: Option<ImagePresentation>,
+    authored_label: bool,
+) -> String {
     let mut rendered = String::new();
     if image {
         rendered.push('!');
     }
     rendered.push('[');
-    rendered.push_str(&escape_label(label));
+    if authored_label {
+        rendered.push_str(label);
+    } else {
+        rendered.push_str(&escape_label(label));
+    }
     rendered.push_str("](");
     rendered.push_str(&escape_destination(url));
     let title = compose_title(title, presentation);
@@ -227,17 +262,7 @@ pub(crate) fn serialize_inline_image_with_authored_alt(
     url: &str,
     title: Option<&str>,
 ) -> String {
-    let mut rendered = String::from("![");
-    rendered.push_str(authored_alt);
-    rendered.push_str("](");
-    rendered.push_str(&escape_destination(url));
-    if let Some(title) = title.filter(|title| !title.is_empty()) {
-        rendered.push_str(" \"");
-        rendered.push_str(&title.replace('\\', "\\\\").replace('"', "\\\""));
-        rendered.push('"');
-    }
-    rendered.push(')');
-    rendered
+    serialize_target_impl(true, authored_alt, url, title, None, true)
 }
 
 pub(crate) fn authored_image_alt_source(authored: &str) -> Option<&str> {

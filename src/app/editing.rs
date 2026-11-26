@@ -2499,8 +2499,8 @@ impl MarkionApp {
         let Some(target) = inline_image_at(self.active_tab().document.text(), offset) else {
             return;
         };
-        let replacement = serialize_inline_image(
-            &target.label,
+        let replacement = serialize_inline_image_with_authored_label(
+            &target.authored_label,
             &target.url,
             target.title.as_deref(),
             Some(ImagePresentation {
@@ -3585,15 +3585,25 @@ impl MarkionApp {
                 self.move_to(image.full_range.start, cx);
                 return;
             }
-            let presentation =
-                inline_image_at(self.active_tab().document.text(), editor.source_range.start)
-                    .and_then(|image| image.presentation);
-            let replacement = serialize_inline_image(
-                &editor.label,
-                editor.url.trim(),
-                (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
-                presentation,
-            );
+            let target =
+                inline_image_at(self.active_tab().document.text(), editor.source_range.start);
+            let presentation = target.as_ref().and_then(|image| image.presentation);
+            let replacement =
+                if let Some(target) = target.filter(|target| target.label == editor.label) {
+                    serialize_inline_image_with_authored_label(
+                        &target.authored_label,
+                        editor.url.trim(),
+                        (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+                        presentation,
+                    )
+                } else {
+                    serialize_inline_image(
+                        &editor.label,
+                        editor.url.trim(),
+                        (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+                        presentation,
+                    )
+                };
             let start = editor.source_range.start;
             self.replace_exact_inline_target(editor.source_range, replacement, cx);
             self.move_to(start, cx);
@@ -3640,6 +3650,14 @@ impl MarkionApp {
                     (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
                 )
             }
+        } else if let Some(target) =
+            inline_link_at(&current, 0).filter(|target| target.label == editor.label)
+        {
+            serialize_inline_link_with_authored_label(
+                &target.authored_label,
+                editor.url.trim(),
+                (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+            )
         } else {
             serialize_inline_link(
                 &editor.label,

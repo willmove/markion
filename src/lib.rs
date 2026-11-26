@@ -56,7 +56,8 @@ use inline_edit::image_presentation_from_title;
 pub use inline_edit::{
     ImageAlignment, ImagePresentation, InlineMarkdownTarget, SimpleHtmlAnchor,
     clamp_image_width_percent, inline_image_at, inline_link_at, serialize_html_anchor,
-    serialize_inline_image, serialize_inline_link, simple_html_anchor_at, snap_image_width_percent,
+    serialize_inline_image, serialize_inline_image_with_authored_label, serialize_inline_link,
+    serialize_inline_link_with_authored_label, simple_html_anchor_at, snap_image_width_percent,
 };
 
 /// Markdown shown in the first in-memory document when Markion starts.

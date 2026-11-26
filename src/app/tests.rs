@@ -4801,6 +4801,63 @@ fn stable_visual_inline_preference_toggle_reflects_state_without_editing_documen
 }
 
 #[gpui::test]
+fn issue_83_url_only_edits_preserve_authored_label_escapes(cx: &mut TestAppContext) {
+    let source = r#"Read [Rate \*per day\*](old.md "Notes") today."#;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let cursor = source.find("te").unwrap();
+        app.open_link_editor_at(cursor, cx);
+        app.link_editor.as_mut().unwrap().url = "new.md".into();
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.confirm_link_editor(window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"Read [Rate \*per day\*](new.md "Notes") today."#
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.open_link_editor_at(source.find("te").unwrap(), cx);
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.confirm_link_editor(window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"Read [Rate \*per day\*](new.md "Notes") today."#
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            r#"![Look for \*here\*](old%20map.png)"#,
+        ))];
+        app.active_tab = 0;
+        app.open_image_properties_at(0, cx);
+        app.link_editor.as_mut().unwrap().title = "Later".into();
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.confirm_link_editor(window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"![Look for \*here\*](old%20map.png "Later")"#
+        );
+    });
+}
+
+#[gpui::test]
 fn stable_visual_inline_edits_links_math_and_tokens_off_the_line(cx: &mut TestAppContext) {
     let source = "<a href=\"#zh\">简体中文</a> <a href=\"#tw\">繁體中文</a>";
     let cursor = source.find("简体中文").unwrap();
