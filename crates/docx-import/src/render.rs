@@ -805,7 +805,11 @@ impl Converter<'_> {
             }
             match child.tag_name().name() {
                 "t" => text.push_str(child.text().unwrap_or_default()),
-                "tab" => text.push_str("    "),
+                "tab" => {
+                    flush_text(&mut text, writer, boundary);
+                    writer.text("&#9;");
+                    boundary.separate();
+                }
                 "br" | "cr" => {
                     flush_text(&mut text, writer, boundary);
                     writer.text("\\\n");

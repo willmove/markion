@@ -126,6 +126,41 @@ fn issue_102_consecutive_manual_breaks_stay_in_one_paragraph() {
 }
 
 #[test]
+fn issue_103_paragraph_initial_word_tab_stays_prose() {
+    let xml = document(
+        r#"<w:p><w:r><w:t>Before.</w:t></w:r></w:p>
+<w:p><w:r><w:tab/><w:t>Please send the revised note.</w:t></w:r></w:p>
+<w:p><w:r><w:t>After.</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[("word/document.xml", xml.as_bytes())])
+        .render_markdown(|_| None)
+        .unwrap();
+    assert_eq!(
+        markdown,
+        "Before.\n\n&#9;Please send the revised note.\n\nAfter.\n\n"
+    );
+    let events = pulldown_cmark::Parser::new(&markdown).collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Paragraph)
+            ))
+            .count(),
+        3
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_))
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        pulldown_cmark::Event::Text(text) if text.starts_with('\t')
+    )));
+}
+
+#[test]
 fn issue_40_direct_run_formatting_overrides_character_style() {
     let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:style w:type="character" w:styleId="AuditBold"><w:rPr><w:b/></w:rPr></w:style>
@@ -269,7 +304,7 @@ fn bold_boundaries_preserve_authored_separators_and_non_word_starts() {
         markdown,
         concat!(
             "**b** word\n\n",
-            "**b**    word\n\n",
+            "**b**&#9;word\n\n",
             "**b**\\\nword\n\n",
             "**b**\n\nword\n\n",
             "**b**,word\n\n",
