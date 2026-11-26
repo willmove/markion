@@ -70,7 +70,7 @@ pub fn proven_single_line_image_span(authored: &str) -> bool {
     if !authored.starts_with("![") || authored.contains(['\n', '\r']) {
         return false;
     }
-    let Some(label_end) = find_unescaped(authored, 2, b']') else {
+    let Some(label_end) = find_label_end(authored, 2) else {
         return false;
     };
     let after = label_end + 1;
@@ -94,7 +94,7 @@ pub fn authored_image_destination_range(authored: &str) -> Option<Range<usize>> 
     if !authored.starts_with("![") || !authored.ends_with(')') {
         return None;
     }
-    let label_end = find_unescaped(authored, 2, b']')?;
+    let label_end = find_label_end(authored, 2)?;
     if authored.as_bytes().get(label_end + 1) != Some(&b'(') {
         return None;
     }
@@ -145,7 +145,7 @@ fn inline_target_at(source: &str, offset: usize, image: bool) -> Option<InlineMa
             if !authored.starts_with(prefix) || !authored.ends_with(')') {
                 return None;
             }
-            let label_end = find_unescaped(authored, prefix.len(), b']')?;
+            let label_end = find_label_end(authored, prefix.len())?;
             if authored.as_bytes().get(label_end + 1) != Some(&b'(') {
                 return None;
             }
@@ -288,6 +288,28 @@ pub(crate) fn unescape_markdown(value: &str) -> String {
         }
     }
     out
+}
+
+fn find_label_end(source: &str, start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (index, byte) in source.as_bytes().iter().copied().enumerate().skip(start) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        match byte {
+            b'[' => depth += 1,
+            b']' if depth == 0 => return Some(index),
+            b']' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) fn find_unescaped(source: &str, start: usize, needle: u8) -> Option<usize> {
@@ -557,6 +579,31 @@ mod tests {
             serialize_inline_link(&target.label, &target.url, target.title.as_deref()),
             "[标\\]签](<docs/a b.md> \"标题\")"
         );
+    }
+
+    #[test]
+    fn issue_82_inline_link_supports_balanced_brackets_in_label() {
+        let source = "Read [Minutes [draft]](old.md \"Notes\") today.";
+        let target = inline_link_at(source, source.find("nutes").unwrap()).unwrap();
+        assert_eq!(target.label, "Minutes [draft]");
+        assert_eq!(target.url, "old.md");
+        assert_eq!(target.title.as_deref(), Some("Notes"));
+        assert_eq!(
+            &source[target.source_range.clone()],
+            "[Minutes [draft]](old.md \"Notes\")"
+        );
+
+        let replacement = serialize_inline_link(&target.label, "new.md", target.title.as_deref());
+        let mut revised = source.to_string();
+        revised.replace_range(target.source_range, &replacement);
+        assert_eq!(
+            revised,
+            "Read [Minutes \\[draft\\]](new.md \"Notes\") today."
+        );
+        let reparsed = inline_link_at(&revised, revised.find("nutes").unwrap()).unwrap();
+        assert_eq!(reparsed.label, "Minutes [draft]");
+        assert_eq!(reparsed.url, "new.md");
+        assert!(!revised.contains("old.md"));
     }
 
     #[test]
