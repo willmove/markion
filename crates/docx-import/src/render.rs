@@ -806,7 +806,11 @@ impl Converter<'_> {
             match child.tag_name().name() {
                 "t" => text.push_str(child.text().unwrap_or_default()),
                 "tab" => text.push_str("    "),
-                "br" | "cr" => text.push_str("  \n"),
+                "br" | "cr" => {
+                    flush_text(&mut text, writer, boundary);
+                    writer.text("\\\n");
+                    boundary.separate();
+                }
                 "noBreakHyphen" => text.push('\u{2011}'),
                 "softHyphen" => text.push('\u{00ad}'),
                 "drawing" if drawing_has_image_reference(child) => {
@@ -1638,6 +1642,10 @@ fn trim_leading_inline_whitespace(chunks: &mut Vec<MarkdownChunk>) {
         match first {
             MarkdownChunk::Text(text) => {
                 let trimmed = text.trim_start_matches(char::is_whitespace);
+                if let Some(rest) = trimmed.strip_prefix("\\\n") {
+                    *text = rest.to_owned();
+                    continue;
+                }
                 if trimmed.is_empty() {
                     chunks.remove(0);
                 } else {
@@ -1981,7 +1989,7 @@ fn write_gfm_row(writer: &mut ChunkWriter, cells: &[ChunkWriter], width: usize) 
                         };
                         writer.text(
                             text.replace('|', "\\|")
-                                .replace("  \n", "<br>")
+                                .replace("\\\n", "<br>")
                                 .replace('\n', "<br>"),
                         );
                     }

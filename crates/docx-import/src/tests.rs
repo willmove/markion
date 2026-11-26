@@ -80,7 +80,7 @@ fn imports_heading_runs_breaks_and_accepted_revisions() {
         ("word/styles.xml", styles),
     ]);
     let markdown = result.render_markdown(|_| None).unwrap();
-    assert!(markdown.contains("## **你好 \\*world\\*  \nnext** new"));
+    assert!(markdown.contains("## **你好 \\*world\\***\\\n**next** new"));
     assert!(!markdown.contains("old"));
     assert!(result.summary.revisions_accepted);
     assert!(
@@ -88,6 +88,40 @@ fn imports_heading_runs_breaks_and_accepted_revisions() {
             .diagnostics
             .iter()
             .any(|item| item.code == DiagnosticCode::RevisionsAccepted)
+    );
+}
+
+#[test]
+fn issue_102_consecutive_manual_breaks_stay_in_one_paragraph() {
+    let xml = document(
+        r#"<w:p><w:r><w:t>Before.</w:t></w:r></w:p>
+<w:p><w:r><w:t>North desk</w:t><w:br/><w:br/><w:t>Reception</w:t></w:r></w:p>
+<w:p><w:r><w:t>After.</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[("word/document.xml", xml.as_bytes())])
+        .render_markdown(|_| None)
+        .unwrap();
+    assert_eq!(
+        markdown,
+        "Before.\n\nNorth desk\\\n\\\nReception\n\nAfter.\n\n"
+    );
+    let events = pulldown_cmark::Parser::new(&markdown).collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Paragraph)
+            ))
+            .count(),
+        3
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, pulldown_cmark::Event::HardBreak))
+            .count(),
+        2
     );
 }
 
@@ -236,7 +270,7 @@ fn bold_boundaries_preserve_authored_separators_and_non_word_starts() {
         concat!(
             "**b** word\n\n",
             "**b**    word\n\n",
-            "**b**  \nword\n\n",
+            "**b**\\\nword\n\n",
             "**b**\n\nword\n\n",
             "**b**,word\n\n",
             "**b**，文字\n\n",
