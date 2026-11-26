@@ -15583,6 +15583,43 @@ fn hash_link_activation_jumps_without_mutating_or_opening_url(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn issue_95_footnote_navigation_and_lookup_ignore_label_case(cx: &mut TestAppContext) {
+    for (reference, definition) in [("BLUE", "blue"), ("Blue", "BLUE")] {
+        let source = format!("Notes.\n\n[^{reference}] cited.\n\n[^{definition}]: Cobalt chorus.");
+        let definition_offset = source.find(&format!("[^{definition}]:")).unwrap();
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            app
+        });
+        app.update(cx, |app, cx| {
+            let version = app.active_tab().document.version();
+            app.activate_visual_navigation(
+                &VisualNavigationTarget::Footnote {
+                    label: reference.into(),
+                },
+                cx,
+            );
+            assert_eq!(
+                app.active_tab().selected_range,
+                definition_offset..definition_offset
+            );
+            assert_eq!(
+                app.active_tab()
+                    .document
+                    .footnote_definition_text(reference),
+                Some("Cobalt chorus.".into())
+            );
+            assert_eq!(app.active_tab().document.text(), source);
+            assert_eq!(app.active_tab().document.version(), version);
+            assert!(app.active_tab().undo_stack.is_empty());
+        });
+    }
+}
+
+#[gpui::test]
 fn toc_entry_click_jumps_without_mutating_source(cx: &mut TestAppContext) {
     let source = "# Alpha\n\n[TOC]\n\n## Beta\n\nBody\n";
     let heading_offset = source.find("## Beta").unwrap();

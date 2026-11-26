@@ -4870,13 +4870,13 @@ impl MarkdownDocument {
 
     /// Definition body for a footnote label, if the document defines one.
     pub fn footnote_definition_text(&self, label: &str) -> Option<String> {
-        let needle = label.trim();
+        let needle = label.trim().to_lowercase();
         if needle.is_empty() {
             return None;
         }
         self.footnotes()
             .into_iter()
-            .find(|note| note.label == needle)
+            .find(|note| note.label.to_lowercase() == needle)
             .map(|note| note.text)
     }
 

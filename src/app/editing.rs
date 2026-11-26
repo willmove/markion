@@ -7355,11 +7355,12 @@ impl MarkionApp {
             }
             VisualNavigationTarget::Footnote { label } => {
                 let blocks = self.active_tab().document.visual_blocks_shared();
+                let needle = label.to_lowercase();
                 let Some(block_index) = blocks.iter().position(|block| {
                     matches!(
                         &block.kind,
                         VisualBlockKind::FootnoteDefinition { label: def }
-                            if def == label
+                            if def.to_lowercase() == needle
                     )
                 }) else {
                     return;
