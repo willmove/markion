@@ -40,10 +40,13 @@ pub enum ContextMenuMsg {
     FormatBlock,
     AddDividerBelow,
     AddTableBelow,
+    InsertBelow,
+    WrapTableInQuote,
+    DuplicateTable,
 }
 
 pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static str {
-    let labels: &[&str; 24] = match language {
+    let labels: &[&str; 27] = match language {
         Language::Ko => &[
             "문단",
             "제목",
@@ -69,6 +72,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "블록 서식 지정",
             "{0} 아래에 구분선 삽입",
             "{0} 아래에 표 삽입",
+            "아래에 삽입",
+            "표를 인용문으로 감싸기",
+            "표 사본 만들기",
         ],
         Language::En => &[
             "Paragraph",
@@ -95,6 +101,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Format Block",
             "Insert Divider Below {0}",
             "Insert Table Below {0}",
+            "Insert Below",
+            "Wrap in Quote",
+            "Make a Table Copy",
         ],
         Language::ZhHans => &[
             "段落",
@@ -121,6 +130,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "设置格式",
             "在{0}下方插入分隔线",
             "在{0}下方插入表格",
+            "在下方插入",
+            "包进引用",
+            "制作表格副本",
         ],
         Language::ZhHant => &[
             "段落",
@@ -147,6 +159,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "設定格式",
             "在{0}下方插入分隔線",
             "在{0}下方插入表格",
+            "在下方插入",
+            "包進引用",
+            "建立表格副本",
         ],
         Language::Ja => &[
             "段落",
@@ -173,6 +188,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "書式設定",
             "{0}の下に区切り線を挿入",
             "{0}の下に表を挿入",
+            "下に挿入",
+            "表を引用で囲む",
+            "表の複製を作成",
         ],
         Language::Fr => &[
             "Paragraphe",
@@ -199,6 +217,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Mise en forme",
             "Insérer un séparateur sous : {0}",
             "Insérer un tableau sous : {0}",
+            "Insérer en dessous",
+            "Encadrer dans une citation",
+            "Créer une copie du tableau",
         ],
         Language::De => &[
             "Absatz",
@@ -225,6 +246,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Block formatieren",
             "Trennlinie unter {0} einfügen",
             "Tabelle unter {0} einfügen",
+            "Darunter einfügen",
+            "Tabelle als Zitat einrücken",
+            "Tabellenkopie erstellen",
         ],
         Language::Es => &[
             "Párrafo",
@@ -251,6 +275,9 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Dar formato",
             "Insertar separador debajo de {0}",
             "Insertar tabla debajo de {0}",
+            "Insertar debajo",
+            "Incluir tabla en una cita",
+            "Crear una copia de la tabla",
         ],
     };
     labels[message as usize]
@@ -9553,6 +9580,9 @@ mod tests {
             ContextMenuMsg::FormatBlock,
             ContextMenuMsg::AddDividerBelow,
             ContextMenuMsg::AddTableBelow,
+            ContextMenuMsg::InsertBelow,
+            ContextMenuMsg::WrapTableInQuote,
+            ContextMenuMsg::DuplicateTable,
         ] {
             let korean = context_menu_t(Language::Ko, message);
             assert!(!korean.is_empty());

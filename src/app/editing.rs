@@ -899,7 +899,7 @@ impl MarkionApp {
             &target,
         );
         self.visual_table_menu = None;
-        let (context, is_fenced_code) = self
+        let (context, is_fenced_code, can_wrap_table) = self
             .active_tab()
             .document
             .visual_blocks_shared()
@@ -920,9 +920,12 @@ impl MarkionApp {
                         Some(VisualBlockEditor::Code { payload, .. })
                             if payload.kind == VisualEditorFieldKind::CodePayload
                     );
-                (context, fenced_code)
+                let can_wrap_table = presentation.current == Some(BlockTransform::Table)
+                    && block.quote_context.is_none()
+                    && block.list_depth == 0;
+                (context, fenced_code, can_wrap_table)
             })
-            .unwrap_or((BlockMenuContext::Block, false));
+            .unwrap_or((BlockMenuContext::Block, false, false));
         let is_table = context == BlockMenuContext::Table;
         let empty_paragraph_offset = self
             .active_tab()
@@ -955,6 +958,7 @@ impl MarkionApp {
             selection_format,
             is_image: presentation.is_image,
             is_table,
+            can_wrap_table,
             is_fenced_code,
             image_object_selected: false,
             anchor,

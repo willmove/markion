@@ -7114,6 +7114,133 @@ fn visual_table_vertical_arrows_preserve_columns_and_empty_rows(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppContext) {
+    const TABLE: &str = "| A | B |\n| --- | --- |\n| x | y |";
+    const SOURCE: &str = "| A | B |\n| --- | --- |\n| x | y |\n\nAfter";
+    assert_eq!(
+        context_menu_t(Language::ZhHans, ContextMenuMsg::WrapTableInQuote),
+        "包进引用"
+    );
+
+    for keyboard in [false, true] {
+        let (app, cx) = visual_table_handle_app(SOURCE, cx);
+        app.update(cx, |app, cx| {
+            app.language = Language::ZhHans;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+        cx.simulate_click(grip.center(), Modifiers::none());
+        cx.run_until_parked();
+        let (version, cache, selection) = app.update(cx, |app, _| {
+            let menu = app.block_menu.as_ref().unwrap();
+            assert!(menu.from_grip);
+            assert!(menu.submenu.is_none());
+            assert!(!menu.offers(BlockMenuItem::AddDividerBelow));
+            assert!(!menu.offers(BlockMenuItem::AddTableBelow));
+            assert_eq!(
+                menu.root_items(),
+                [
+                    BlockMenuItem::CopyBlock,
+                    BlockMenuItem::CutBlock,
+                    BlockMenuItem::Duplicate,
+                    BlockMenuItem::MoveUp,
+                    BlockMenuItem::MoveDown,
+                    BlockMenuItem::AddBelow,
+                    BlockMenuItem::Transform(BlockTransform::Quote),
+                    BlockMenuItem::Submenu(BlockContextSubmenu::Insertion),
+                    BlockMenuItem::Delete,
+                ]
+            );
+            let tab = app.active_tab();
+            (
+                tab.document.version(),
+                tab.document.visual_blocks_shared(),
+                tab.selected_range.clone(),
+            )
+        });
+        assert!(cx.debug_bounds("visual-block-move-up-disabled").is_some());
+        assert!(cx.debug_bounds("visual-block-move-down").is_some());
+        assert!(
+            cx.debug_bounds("visual-block-transform-10")
+                .unwrap()
+                .size
+                .width
+                > px(200.)
+        );
+        assert!(
+            cx.debug_bounds("visual-block-add-below")
+                .unwrap()
+                .size
+                .width
+                > px(200.)
+        );
+        assert!(cx.debug_bounds("visual-block-add-divider-below").is_none());
+        assert!(cx.debug_bounds("visual-block-add-table-below").is_none());
+
+        let insert = cx.debug_bounds("visual-context-insert").unwrap();
+        assert!(cx.debug_bounds("visual-block-delete").unwrap().top() > insert.bottom());
+        if keyboard {
+            for _ in 0..6 {
+                cx.dispatch_action(Down);
+            }
+            cx.dispatch_action(Right);
+        } else {
+            cx.simulate_click(insert.center(), Modifiers::none());
+        }
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("visual-context-flyout").is_some());
+        let divider = cx.debug_bounds("visual-block-add-divider-below").unwrap();
+        let table = cx.debug_bounds("visual-block-add-table-below").unwrap();
+        assert!(divider.size.width > px(200.));
+        assert!(table.top() >= divider.bottom());
+        app.update(cx, |app, _| {
+            let menu = app.block_menu.as_ref().unwrap();
+            assert_eq!(menu.submenu, Some(BlockContextSubmenu::Insertion));
+            assert!(menu.submenu_focused);
+            assert_eq!(
+                menu.submenu_items(BlockContextSubmenu::Insertion),
+                [BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]
+            );
+            let tab = app.active_tab();
+            assert_eq!(tab.selected_range, selection);
+            assert_eq!(tab.document.version(), version);
+            assert!(Arc::ptr_eq(&tab.document.visual_blocks_shared(), &cache));
+            assert!(tab.undo_stack.is_empty());
+        });
+
+        if keyboard {
+            cx.dispatch_action(Down);
+            cx.dispatch_action(InsertNewline);
+        } else {
+            cx.simulate_click(divider.center(), Modifiers::none());
+        }
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let text = tab.document.text();
+            let blocks = tab.document.preview_blocks_shared();
+            assert_eq!(blocks.len(), 3);
+            assert_eq!(&text[blocks[0].source_range().clone()], TABLE);
+            assert_eq!(&text[blocks[2].source_range().clone()], "After");
+            if keyboard {
+                assert!(matches!(blocks[1], PreviewBlock::Table { .. }));
+            } else {
+                assert!(matches!(blocks[1], PreviewBlock::Rule { .. }));
+            }
+            assert_eq!(tab.document.version(), version + 1);
+            assert_eq!(tab.undo_stack.len(), 1);
+        });
+        cx.dispatch_action(Undo);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), SOURCE);
+            assert_eq!(app.active_tab().selected_range, selection);
+        });
+    }
+}
+
+#[gpui::test]
 fn visual_quoted_table_grip_keeps_cells_editable_and_undo_atomic(cx: &mut TestAppContext) {
     let source = "| 温度 | Hot |\r\n| :--- | ---: |\r\n| 色 | Red |\r\n\r\nAfter";
     let quoted = "> | 温度 | Hot |\r\n> | :--- | ---: |\r\n> | 色 | Red |\r\n\r\nAfter";

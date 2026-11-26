@@ -5896,11 +5896,14 @@ fn block_menu_context_label(language: Language, context: BlockMenuContext) -> St
 fn block_menu_submenu_label(
     language: Language,
     page: BlockContextSubmenu,
-    _context: BlockMenuContext,
+    context: BlockMenuContext,
 ) -> String {
     match page {
         BlockContextSubmenu::TableRows => t(language, Msg::ContextTableRow).into(),
         BlockContextSubmenu::TableColumns => t(language, Msg::ContextTableColumn).into(),
+        BlockContextSubmenu::Insertion if context == BlockMenuContext::Table => {
+            context_menu_t(language, ContextMenuMsg::InsertBelow).into()
+        }
         BlockContextSubmenu::Insertion => context_menu_t(language, ContextMenuMsg::Insert).into(),
         BlockContextSubmenu::ImageScale => {
             context_menu_t(language, ContextMenuMsg::ScaleImage).into()
@@ -5995,8 +5998,9 @@ pub(super) fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
 fn block_menu_item_label(
     language: Language,
     item: BlockMenuItem,
-    context: BlockMenuContext,
+    state: &BlockMenuState,
 ) -> String {
+    let context = state.context;
     let scope = block_menu_context_label(language, context);
     let scoped = |message| context_menu_t(language, message).replace("{0}", &scope);
     match item {
@@ -6029,6 +6033,9 @@ fn block_menu_item_label(
         BlockMenuItem::CodeBlockFormat => {
             markion::code_format_t(language, markion::CodeFormatMsg::FormatCodeBlock).to_string()
         }
+        BlockMenuItem::Transform(BlockTransform::Quote) if state.is_table_block_menu() => {
+            context_menu_t(language, ContextMenuMsg::WrapTableInQuote).into()
+        }
         BlockMenuItem::Transform(transform) => block_transform_label(language, transform),
         BlockMenuItem::Submenu(page) => block_menu_submenu_label(language, page, context),
         BlockMenuItem::TableRow(item) => format!(
@@ -6055,6 +6062,9 @@ fn block_menu_item_label(
         BlockMenuItem::ImageReplace => p0_t(language, P0Msg::Replace).to_string(),
         BlockMenuItem::ImageSaveLocal => image_t(language, ImageMsg::SaveSelected).to_string(),
         BlockMenuItem::ImageUpload => image_t(language, ImageMsg::UploadSelected).to_string(),
+        BlockMenuItem::Duplicate if state.is_table_block_menu() => {
+            context_menu_t(language, ContextMenuMsg::DuplicateTable).into()
+        }
         BlockMenuItem::Duplicate => scoped(ContextMenuMsg::Duplicate),
         BlockMenuItem::MoveUp => scoped(ContextMenuMsg::MoveUp),
         BlockMenuItem::MoveDown => scoped(ContextMenuMsg::MoveDown),
@@ -6145,10 +6155,11 @@ fn block_menu_item_button(
     } else {
         !state.submenu_focused && state.root_selected == index
     };
-    let compact = item.is_compact() && page != Some(BlockContextSubmenu::ImageScale);
+    let compact =
+        state.item_group(item).is_compact() && page != Some(BlockContextSubmenu::ImageScale);
     let current = block_menu_item_is_current(item, presentation);
     let enabled = presentation.item_enabled(item);
-    let label = block_menu_item_label(language, item, state.context);
+    let label = block_menu_item_label(language, item, state);
     let destructive =
         enabled && matches!(item, BlockMenuItem::Delete | BlockMenuItem::DeleteSelection);
     let color = if destructive {

@@ -312,8 +312,9 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
                     let structured = app.active_tab().structured_selection.clone();
                     let menu = app.block_menu.as_ref().unwrap();
                     let root = menu.root_items();
-                    let below = root.iter().position(|i| *i == BlockMenuItem::AddBelow).unwrap();
-                    assert_eq!(&root[below + 1..below + 3], &[BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]);
+                    assert!(root.contains(&BlockMenuItem::Submenu(BlockContextSubmenu::Insertion)));
+                    assert!(!menu.offers(action));
+                    app.activate_visual_block_menu_item(action, Some(window), cx);
                     for removed in [BlockTransform::Divider, BlockTransform::Table] {
                         assert!(!root.contains(&BlockMenuItem::Transform(removed)));
                         app.activate_visual_block_menu_item(BlockMenuItem::Transform(removed), Some(window), cx);
@@ -324,6 +325,7 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
                     assert_eq!(app.active_tab().selected_range, selected);
                     assert_eq!(app.active_tab().structured_selection, structured);
                     assert!(Arc::ptr_eq(&blocks, &app.active_tab().document.visual_blocks_shared()));
+                    app.open_visual_context_submenu(BlockContextSubmenu::Insertion, true, cx);
                     app.activate_visual_block_menu_item(action, Some(window), cx);
                     assert!(app.block_menu.is_none());
                     let tab = app.active_tab();
@@ -361,6 +363,7 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
                     let doc = &app.active_tab().document;
                     let target = BlockTarget::from_block(doc.version(), doc.visual_blocks_shared().iter().find(|b| matches!(b.kind, VisualBlockKind::Table { .. })).unwrap());
                     app.open_visual_block_grip_menu(target, point(px(30.), px(40.)), cx);
+                    app.open_visual_context_submenu(BlockContextSubmenu::Insertion, true, cx);
                     app.block_menu.as_mut().unwrap().target.document_version += 1;
                     let cache = app.active_tab().document.visual_blocks_shared();
                     app.activate_visual_block_menu_item(action, Some(window), cx);
@@ -376,7 +379,7 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
 }
 
 #[gpui::test]
-fn block_grip_insert_below_buttons_support_pointer_and_small_viewport_keyboard(
+fn block_grip_insert_below_flyout_supports_pointer_and_small_viewport_keyboard(
     cx: &mut TestAppContext,
 ) {
     const SOURCE: &str = "before\n\n| A | B |\n| --- | --- |\n| 中文🙂 | keep |\n\nafter";
@@ -442,11 +445,12 @@ fn block_grip_insert_below_buttons_support_pointer_and_small_viewport_keyboard(
                     "menu for {action:?}, keyboard={keyboard}"
                 );
             });
+            let insertion = BlockMenuItem::Submenu(BlockContextSubmenu::Insertion);
             if keyboard {
                 for _ in 0..40 {
                     let reached = app.read_with(cx, |app, _| {
                         let menu = app.block_menu.as_ref().unwrap();
-                        menu.root_items()[menu.root_selected] == action
+                        menu.root_items()[menu.root_selected] == insertion
                     });
                     if reached {
                         break;
@@ -456,15 +460,30 @@ fn block_grip_insert_below_buttons_support_pointer_and_small_viewport_keyboard(
                 }
                 app.read_with(cx, |app, _| {
                     let menu = app.block_menu.as_ref().unwrap();
-                    assert_eq!(menu.root_items()[menu.root_selected], action);
+                    assert_eq!(menu.root_items()[menu.root_selected], insertion);
                 });
+                cx.dispatch_action(Right);
+                if action == BlockMenuItem::AddTableBelow {
+                    cx.dispatch_action(Down);
+                }
+                app.read_with(cx, |app, _| {
+                    let menu = app.block_menu.as_ref().unwrap();
+                    assert!(menu.submenu_focused);
+                    assert_eq!(menu.visible_items()[menu.selected_index()], action);
+                });
+            } else {
+                let trigger = cx
+                    .debug_bounds(super::preview::block_menu_item_element_id(insertion))
+                    .unwrap();
+                cx.simulate_click(trigger.center(), Modifiers::none());
             }
+            cx.run_until_parked();
             let button = cx
                 .debug_bounds(super::preview::block_menu_item_element_id(action))
                 .unwrap();
-            let panel = cx.debug_bounds("visual-block-menu-panel").unwrap();
+            let panel = cx.debug_bounds("visual-context-flyout").unwrap();
             assert!(panel.contains(&button.center()));
-            assert_eq!(button.size, size(px(36.), px(30.)));
+            assert!(button.size.width > px(36.));
             assert!(cx.debug_bounds("visual-block-transform-12").is_none());
             assert!(cx.debug_bounds("visual-block-transform-13").is_none());
             if keyboard {

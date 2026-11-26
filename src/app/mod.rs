@@ -1599,6 +1599,7 @@ struct BlockMenuState {
     selection_format: Option<VisualSelectionFormatTarget>,
     is_image: bool,
     is_table: bool,
+    can_wrap_table: bool,
     is_fenced_code: bool,
     image_object_selected: bool,
     anchor: Point<Pixels>,
@@ -1777,6 +1778,10 @@ const BLOCK_MENU_OPERATIONS: [BlockMenuItem; 7] = [
 ];
 
 impl BlockMenuState {
+    fn is_table_block_menu(&self) -> bool {
+        self.is_table && self.editing_context.is_none()
+    }
+
     fn root_items(&self) -> Vec<BlockMenuItem> {
         let mut items = Vec::new();
         if self.editing_context.is_some() {
@@ -1845,6 +1850,25 @@ impl BlockMenuState {
             }
             return items;
         }
+        if self.is_table_block_menu() {
+            items.extend([
+                BlockMenuItem::CopyBlock,
+                BlockMenuItem::CutBlock,
+                BlockMenuItem::Duplicate,
+                BlockMenuItem::MoveUp,
+                BlockMenuItem::MoveDown,
+                BlockMenuItem::AddBelow,
+            ]);
+            items.extend(
+                self.can_wrap_table
+                    .then_some(BlockMenuItem::Transform(BlockTransform::Quote)),
+            );
+            items.extend([
+                BlockMenuItem::Submenu(BlockContextSubmenu::Insertion),
+                BlockMenuItem::Delete,
+            ]);
+            return items;
+        }
         if self.selection_copy.is_some() {
             items.push(BlockMenuItem::CopySelection);
         }
@@ -1904,6 +1928,9 @@ impl BlockMenuState {
                     }));
                 }
             }
+            BlockContextSubmenu::Insertion if self.is_table_block_menu() => {
+                items.extend([BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]);
+            }
             BlockContextSubmenu::Insertion => {
                 items.extend(
                     SlashCommand::ALL
@@ -1959,20 +1986,32 @@ impl BlockMenuState {
         }
     }
 
+    fn item_group(&self, item: BlockMenuItem) -> BlockMenuGroup {
+        match item {
+            BlockMenuItem::CopyBlock | BlockMenuItem::CutBlock
+                if self.is_image || (self.is_table && self.editing_context.is_some()) =>
+            {
+                BlockMenuGroup::Operations
+            }
+            BlockMenuItem::AddBelow
+            | BlockMenuItem::AddDividerBelow
+            | BlockMenuItem::AddTableBelow
+            | BlockMenuItem::Transform(BlockTransform::Quote)
+                if self.is_table_block_menu() =>
+            {
+                BlockMenuGroup::Insertion
+            }
+            _ => item.group(),
+        }
+    }
+
     fn sections_for(
         &self,
         items: Vec<BlockMenuItem>,
     ) -> Vec<(BlockMenuGroup, Vec<(usize, BlockMenuItem)>)> {
         let mut sections: Vec<(BlockMenuGroup, Vec<(usize, BlockMenuItem)>)> = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
-            let group = match item {
-                BlockMenuItem::CopyBlock | BlockMenuItem::CutBlock
-                    if self.is_image || (self.is_table && self.editing_context.is_some()) =>
-                {
-                    BlockMenuGroup::Operations
-                }
-                _ => item.group(),
-            };
+            let group = self.item_group(item);
             if sections.last().is_none_or(|(last, _)| *last != group) {
                 sections.push((group, Vec::new()));
             }
@@ -1989,13 +2028,13 @@ impl BlockMenuState {
         self.sections_for(items)
             .into_iter()
             .enumerate()
-            .flat_map(|(section, (_, items))| {
-                let columns =
-                    if items[0].1.is_compact() && page != Some(BlockContextSubmenu::ImageScale) {
-                        6
-                    } else {
-                        1
-                    };
+            .flat_map(|(section, (group, items))| {
+                let columns = if group.is_compact() && page != Some(BlockContextSubmenu::ImageScale)
+                {
+                    6
+                } else {
+                    1
+                };
                 items
                     .chunks(columns)
                     .enumerate()
@@ -2053,10 +2092,12 @@ impl BlockMenuItem {
             _ => BlockMenuGroup::Operations,
         }
     }
+}
 
+impl BlockMenuGroup {
     fn is_compact(self) -> bool {
         matches!(
-            self.group(),
+            self,
             BlockMenuGroup::Clipboard
                 | BlockMenuGroup::BlockClipboard
                 | BlockMenuGroup::Selection
