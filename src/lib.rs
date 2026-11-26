@@ -2386,7 +2386,29 @@ impl MarkdownDocument {
         suffix: &str,
         placeholder: &str,
     ) -> std::ops::Range<usize> {
-        if range.start >= prefix.len()
+        let combine_italic_with_bold = if prefix == "*" && suffix == "*" {
+            let before = self.text.as_bytes()[..range.start]
+                .iter()
+                .rev()
+                .take_while(|byte| **byte == b'*')
+                .count();
+            let after = self.text.as_bytes()[range.end..]
+                .iter()
+                .take_while(|byte| **byte == b'*')
+                .count();
+            let selected = self.text[range.clone()].as_bytes();
+            let selected_before = selected.iter().take_while(|byte| **byte == b'*').count();
+            let selected_after = selected
+                .iter()
+                .rev()
+                .take_while(|byte| **byte == b'*')
+                .count();
+            (before == 2 && after == 2) || (selected_before == 2 && selected_after == 2)
+        } else {
+            false
+        };
+        if !combine_italic_with_bold
+            && range.start >= prefix.len()
             && range.end + suffix.len() <= self.text.len()
             && self.text.is_char_boundary(range.start - prefix.len())
             && self.text.is_char_boundary(range.end + suffix.len())
@@ -2402,7 +2424,8 @@ impl MarkdownDocument {
             return range.start - prefix.len()..range.end - prefix.len();
         }
 
-        if range.end - range.start >= prefix.len() + suffix.len()
+        if !combine_italic_with_bold
+            && range.end - range.start >= prefix.len() + suffix.len()
             && self.text[range.clone()].starts_with(prefix)
             && self.text[range.clone()].ends_with(suffix)
         {
@@ -8105,6 +8128,33 @@ mod tests {
         let range = doc.apply_markdown_format(range, MarkdownFormat::Bold);
         assert_eq!(doc.text(), "write text");
         assert_eq!(range, 6..10);
+    }
+
+    #[test]
+    fn issue_63_italic_combines_with_and_unwraps_only_bold_italic_layer() {
+        for word in ["draft", "café"] {
+            let mut doc = MarkdownDocument::from_text(format!("Review {word} today."));
+            let start = "Review ".len();
+            let range = doc.apply_markdown_format(start..start + word.len(), MarkdownFormat::Bold);
+            assert_eq!(doc.text(), format!("Review **{word}** today."));
+
+            let range = doc.apply_markdown_format(range, MarkdownFormat::Italic);
+            assert_eq!(doc.text(), format!("Review ***{word}*** today."));
+            let blocks = doc.preview_blocks();
+            assert!(blocks.iter().any(|block| {
+                match block {
+                    PreviewBlock::Paragraph { text, .. } => text
+                        .spans
+                        .iter()
+                        .any(|span| span.text == word && span.style.bold && span.style.italic),
+                    _ => false,
+                }
+            }));
+
+            let range = doc.apply_markdown_format(range, MarkdownFormat::Italic);
+            assert_eq!(doc.text(), format!("Review **{word}** today."));
+            assert_eq!(&doc.text()[range], word);
+        }
     }
 
     #[test]
