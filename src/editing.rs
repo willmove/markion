@@ -218,6 +218,9 @@ pub(crate) fn ordered_list_marker(rest: &str) -> Option<String> {
         .take_while(|(_, ch)| ch.is_ascii_digit())
         .map(|(index, ch)| index + ch.len_utf8())
         .last()?;
+    if digit_end > 9 {
+        return None;
+    }
     let number = rest[..digit_end].parse::<u64>().ok()?;
     let delimiter = rest[digit_end..].chars().next()?;
     if !matches!(delimiter, '.' | ')') {
@@ -288,7 +291,7 @@ pub(crate) fn list_marker_at(line: &str) -> Option<ListMarker> {
         .bytes()
         .take_while(|byte| byte.is_ascii_digit())
         .count();
-    if digits > 0
+    if (1..=9).contains(&digits)
         && matches!(rest.as_bytes().get(digits), Some(b'.' | b')'))
         && rest.as_bytes().get(digits + 1) == Some(&b' ')
     {
@@ -325,6 +328,9 @@ fn empty_ordered_marker(rest: &str) -> bool {
     else {
         return false;
     };
+    if digit_end > 9 {
+        return false;
+    }
     let Some(delimiter) = rest[digit_end..].chars().next() else {
         return false;
     };

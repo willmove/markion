@@ -8682,6 +8682,26 @@ mod tests {
     }
 
     #[test]
+    fn issue_81_task_list_format_preserves_overlong_ordered_numbers() {
+        let mut long =
+            MarkdownDocument::from_text("1234567890. Check shipment status.\n\nFile the receipt.");
+        long.apply_markdown_format(0..long.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(
+            long.text(),
+            "- [ ] 1234567890. Check shipment status.\n\n- [ ] File the receipt."
+        );
+
+        let mut parenthesized = MarkdownDocument::from_text("1234567890123) Catalog entry.");
+        parenthesized
+            .apply_markdown_format(0..parenthesized.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(parenthesized.text(), "- [ ] 1234567890123) Catalog entry.");
+
+        let mut valid = MarkdownDocument::from_text("123456789. Check shipment status.");
+        valid.apply_markdown_format(0..valid.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(valid.text(), "- [ ] Check shipment status.");
+    }
+
+    #[test]
     fn markdown_format_wraps_selection_in_code_fence() {
         let mut doc = MarkdownDocument::from_text("fn main() {}");
         let range = doc.apply_markdown_format(0..doc.text().len(), MarkdownFormat::CodeFence);
