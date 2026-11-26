@@ -312,7 +312,12 @@ impl MarkionApp {
                 let VisualBlockKind::CodeBlock { language, .. } = &block.kind else {
                     continue;
                 };
-                let Some(VisualBlockEditor::Code { payload, .. }) = &block.editor else {
+                let Some(VisualBlockEditor::Code {
+                    payload,
+                    closing_fence,
+                    ..
+                }) = &block.editor
+                else {
                     continue;
                 };
                 let Some(source) = text.get(payload.source_range.clone()) else {
@@ -321,9 +326,13 @@ impl MarkionApp {
                 let Some(backend_id) = diagram_backend_id(language.as_deref()) else {
                     continue;
                 };
+                let mut source = source.to_string();
+                if !closing_fence.is_empty() && !source.ends_with(['\r', '\n']) {
+                    source.push('\n');
+                }
                 requested.push(DiagramCacheKey {
                     backend_id: backend_id.to_string(),
-                    source: source.to_string(),
+                    source,
                     theme,
                 });
             }

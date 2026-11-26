@@ -8947,12 +8947,12 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
             .visual_last_projection
             .as_ref()
             .expect("code payload projection");
-        assert_eq!(projection, "let 名称 = 1;\n");
+        assert_eq!(projection, "let 名称 = 1;");
         assert!(revealed.is_empty());
         assert!(
             app.highlight_cache
                 .borrow()
-                .contains_key(&(Some("rust".into()), "let 名称 = 1;\n".into()))
+                .contains_key(&(Some("rust".into()), "let 名称 = 1;".into()))
         );
     });
 
@@ -11033,6 +11033,8 @@ fn markdown_auto_pair_inserts_wraps_skips_and_unwraps(cx: &mut TestAppContext) {
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("**"))];
         app.active_tab = 0;
         app.active_tab_mut().selected_range = 1..1;
+        app.document_input_target = None;
+        app.ime_input_target = None;
     });
     cx.dispatch_action(Backspace);
     app.update(cx, |app, _| {
@@ -27438,16 +27440,17 @@ fn visual_nested_list_whitespace_enter_pointer_and_undo(cx: &mut TestAppContext)
                     let mut previous = before;
                     for step in 0..5 {
                         if step == 0 {
-                            let continuation = format!("\n{indent}- ");
+                            let continuation = format!("{eol}{indent}- ");
                             expected.insert_str(cursor, &continuation);
                             cursor += continuation.len();
                         } else if step == 1 {
-                            let start = head.len() + 1;
+                            let start = head.len() + eol.len();
                             expected.replace_range(start..cursor, "");
-                            cursor = start;
+                            expected.insert_str(start, eol);
+                            cursor = start + eol.len();
                         } else {
-                            expected.insert(cursor, '\n');
-                            cursor += 1;
+                            expected.insert_str(cursor, eol);
+                            cursor += eol.len();
                         }
                         cx.dispatch_action(InsertNewline);
                         cx.run_until_parked();
@@ -27558,7 +27561,7 @@ fn visual_list_enter_creates_visible_row_and_moves_caret(cx: &mut TestAppContext
         cx.run_until_parked();
         app.update(cx, |app, _| {
             let tab = app.active_tab();
-            assert_eq!(tab.document.text(), format!("{}\n{}", &source[..cursor], suffix));
+            assert_eq!(tab.document.text(), format!("{}\n\n{}", &source[..cursor], suffix));
             let after = tab.visual_caret_bounds.expect("caret after exiting list");
             assert!(after.top() > before.top() + px(5.), "exiting list lost row for {suffix:?}: {before:?} -> {after:?}; cursor {}; blocks {:?}", tab.cursor_offset(), tab.document.visual_blocks());
         });
@@ -27611,8 +27614,12 @@ fn visual_list_pointer_enter_exit_and_typing_keep_visible_caret(cx: &mut TestApp
                 });
                 cx.simulate_keystrokes("enter");
                 cx.run_until_parked();
-                let continued =
-                    format!("{}\n{}{}", &source[..cursor], next[item], &source[cursor..]);
+                let continued = format!(
+                    "{}{eol}{}{}",
+                    &source[..cursor],
+                    next[item],
+                    &source[cursor..]
+                );
                 app.update(cx, |app, _| {
                     let tab = app.active_tab();
                     assert_eq!(tab.document.text(), continued);
@@ -27708,7 +27715,7 @@ fn visual_list_link_tail_blank_row_has_caret(cx: &mut TestAppContext) {
         let tab = app.active_tab();
         assert_eq!(
             tab.document.text(),
-            "- [链接](https://example.com) 第三\n\n\n"
+            "- [链接](https://example.com) 第三\n\n\n\n"
         );
         assert!(tab.visual_caret_bounds.unwrap().top() > before.top() + px(5.));
     });
