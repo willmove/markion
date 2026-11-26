@@ -24664,6 +24664,72 @@ fn search_navigation_wraps_and_read_mode_gates_replacement_without_losing_state(
 }
 
 #[gpui::test]
+fn issue_59_read_mode_document_edit_actions_are_inert(cx: &mut TestAppContext) {
+    #[derive(Clone, Copy)]
+    enum Action {
+        Cut,
+        Paste,
+        PastePlain,
+        Delete,
+        Backspace,
+        Bold,
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("read-only.md");
+    let source = "local note\n\nKeep this line.";
+    fs::write(&path, source).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+
+    cx.update(|window, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("SWAPPED".to_string()));
+        app.update(cx, |app, cx| {
+            for selected in [0..10, 0..0] {
+                for action in [
+                    Action::Cut,
+                    Action::Paste,
+                    Action::PastePlain,
+                    Action::Delete,
+                    Action::Backspace,
+                    Action::Bold,
+                ] {
+                    app.tabs[0] = EditorTab::new(MarkdownDocument::open(&path).unwrap());
+                    app.view_mode = ViewMode::Read;
+                    app.active_tab_mut().selected_range = selected.clone();
+                    let version = app.active_tab().document.version();
+                    match action {
+                        Action::Cut => app.cut(&Cut, window, cx),
+                        Action::Paste => app.paste(&Paste, window, cx),
+                        Action::PastePlain => app.paste_plain_text(&PastePlainText, window, cx),
+                        Action::Delete => app.delete(&Delete, window, cx),
+                        Action::Backspace => app.backspace(&Backspace, window, cx),
+                        Action::Bold => app.bold(&Bold, window, cx),
+                    }
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert_eq!(app.active_tab().document.version(), version);
+                    assert!(!app.active_tab().is_dirty());
+                    assert!(app.active_tab().undo_stack.is_empty());
+                }
+            }
+            app.search_visible = true;
+            app.search_focus = Some(SearchField::Find);
+            app.search_control_focus = Some(SearchOverlayControl::FindField);
+            app.search_query.set_text("find");
+            app.paste(&Paste, window, cx);
+            assert!(app.search_query.buffer.contains("SWAPPED"));
+            assert_eq!(app.active_tab().document.text(), source);
+            assert!(!app.active_tab().is_dirty());
+        });
+    });
+    assert_eq!(fs::read_to_string(path).unwrap(), source);
+}
+
+#[gpui::test]
 fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_states(
     cx: &mut TestAppContext,
 ) {

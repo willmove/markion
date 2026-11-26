@@ -2876,6 +2876,10 @@ impl MarkionApp {
         cx.notify();
     }
 
+    fn read_only_document_action(&self) -> bool {
+        matches!(self.rendered_view_mode(), ViewMode::Read) && !self.has_text_input_focus()
+    }
+
     pub(super) fn apply_markdown_format(
         &mut self,
         format: MarkdownFormat,
@@ -2893,6 +2897,11 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        if matches!(self.rendered_view_mode(), ViewMode::Read) {
+            self.status = t(self.language, Msg::StatusNoFormattingChange).into();
+            cx.notify();
+            return;
+        }
         tracing::debug!(
             target: "markion::editing",
             op = "apply_markdown_format",
@@ -6061,6 +6070,9 @@ impl MarkionApp {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            return;
+        }
         if !self.has_text_input_focus() && self.delete_source_selection(cx) {
             return;
         }
@@ -6129,6 +6141,9 @@ impl MarkionApp {
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            return;
+        }
         if !self.has_text_input_focus() && self.delete_source_selection(cx) {
             return;
         }
@@ -6244,6 +6259,9 @@ impl MarkionApp {
     }
 
     fn paste_from_clipboard(&mut self, plain: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            return;
+        }
         let Some(item) = cx.read_from_clipboard() else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();
             cx.notify();
@@ -6394,6 +6412,11 @@ impl MarkionApp {
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            self.status = t(self.language, Msg::StatusNothingToCut).into();
+            cx.notify();
+            return;
+        }
         if !self.has_text_input_focus() && self.active_tab().structured_selection.is_some() {
             self.copy_source_selection(cx);
             self.delete_source_selection(cx);
