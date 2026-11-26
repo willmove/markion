@@ -2575,12 +2575,18 @@ impl MarkdownDocument {
 
     fn wrap_code_fence(&mut self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
         let selected = &self.text[range.clone()];
+        let separate_suffix = self
+            .text
+            .as_bytes()
+            .get(range.end)
+            .is_some_and(|byte| !matches!(byte, b'\r' | b'\n'));
         let inner = if selected.is_empty() {
             "code"
         } else {
             selected.trim_matches('\n')
         };
-        let replacement = format!("```\n{inner}\n```");
+        let suffix = if separate_suffix { "\n" } else { "" };
+        let replacement = format!("```\n{inner}\n```{suffix}");
         let inner_start = range.start + "```\n".len();
         let inner_end = inner_start + inner.len();
         self.apply_current_range(MutationOrigin::MarkdownFormat, range, &replacement);
@@ -8575,6 +8581,28 @@ mod tests {
 
         assert_eq!(doc.text(), "```\nfn main() {}\n```");
         assert_eq!(range, 4.."```\nfn main() {}".len());
+    }
+
+    #[test]
+    fn issue_74_code_fence_closes_on_its_own_line_before_suffix() {
+        for (source, selected, expected) in [
+            ("one\ntwo\n# After\n", 0..8, "```\none\ntwo\n```\n# After\n"),
+            (
+                "one\ntwo tail.\n\n# After\n",
+                0..7,
+                "```\none\ntwo\n```\n tail.\n\n# After\n",
+            ),
+        ] {
+            let mut doc = MarkdownDocument::from_text(source);
+            doc.apply_markdown_format(selected, MarkdownFormat::CodeFence);
+            assert_eq!(doc.text(), expected);
+            let blocks = doc.preview_blocks();
+            assert!(matches!(blocks[0], PreviewBlock::CodeBlock { .. }));
+            assert!(blocks.iter().any(|block| matches!(
+                block,
+                PreviewBlock::Heading { level: 1, text, .. } if text.text == "After"
+            )));
+        }
     }
 
     #[test]
