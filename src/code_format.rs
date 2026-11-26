@@ -981,22 +981,25 @@ pub fn fenced_code_block_by_id(
 }
 
 pub fn prepare_code_input(target: &FencedCodeBlockTarget) -> String {
-    let normalized = target
+    let mut normalized = target
         .expected_payload
         .replace("\r\n", "\n")
         .replace('\r', "\n");
-    if target.line_indent.is_empty() {
-        return normalized;
-    }
-    let mut out = String::with_capacity(normalized.len());
-    for chunk in normalized.split_inclusive('\n') {
-        if let Some(stripped) = chunk.strip_prefix(&target.line_indent) {
-            out.push_str(stripped);
-        } else {
-            out.push_str(chunk);
+    if !target.line_indent.is_empty() {
+        let mut out = String::with_capacity(normalized.len());
+        for chunk in normalized.split_inclusive('\n') {
+            if let Some(stripped) = chunk.strip_prefix(&target.line_indent) {
+                out.push_str(stripped);
+            } else {
+                out.push_str(chunk);
+            }
         }
+        normalized = out;
     }
-    out
+    if target.is_closed && !normalized.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
 }
 
 pub fn build_formatted_payload_replacement(
@@ -1021,7 +1024,7 @@ pub fn build_formatted_payload_replacement(
         }
     }
 
-    if target.is_closed || target.expected_payload.ends_with('\n') {
+    if !target.is_closed && target.expected_payload.ends_with('\n') {
         out.push_str(target.line_ending);
     }
     out
@@ -1227,7 +1230,7 @@ mod tests {
         assert_eq!(target.raw_info.as_deref(), Some("json title=\"cfg\""));
         assert_eq!(target.line_ending, "\n");
         assert!(target.is_closed);
-        assert_eq!(target.expected_payload, "{\"a\":1}\n");
+        assert_eq!(target.expected_payload, "{\"a\":1}");
 
         // Opening fence line is excluded for payload_only=true, included for payload_only=false
         let fence_start = md.find("```json").unwrap();
@@ -1249,10 +1252,7 @@ mod tests {
         assert_eq!(input, "{\"b\":2,\"a\":1}\n");
         let replacement =
             build_formatted_payload_replacement(&target, "{\n  \"a\": 1,\n  \"b\": 2\n}");
-        assert_eq!(
-            replacement,
-            "  {\r\n    \"a\": 1,\r\n    \"b\": 2\r\n  }\r\n"
-        );
+        assert_eq!(replacement, "  {\r\n    \"a\": 1,\r\n    \"b\": 2\r\n  }");
         let mut updated = md.to_string();
         updated.replace_range(target.payload_range.clone(), &replacement);
         assert_eq!(

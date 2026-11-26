@@ -10294,6 +10294,44 @@ fn issue_99_visual_end_stops_before_soft_line_break(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_101_visual_delete_and_empty_code_typing_keep_fences_closed(cx: &mut TestAppContext) {
+    let source = "Before.\n\n```python\nprint(1)\n```\n\nAfter.\n";
+    let cursor = source.find("print(1)").unwrap() + "print(1)".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(Delete);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        app.active_tab_mut()
+            .document
+            .set_text("```python\n```\n\nAfter.\n");
+        app.active_tab_mut().selected_range = 10..10;
+    });
+    cx.run_until_parked();
+    cx.simulate_input("pass");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```python\npass\n```\n\nAfter.\n"
+        );
+        assert_eq!(app.cursor_offset(), 14);
+    });
+}
+
+#[gpui::test]
 fn visual_navigation_line_windows_walk_wrapped_lines_both_ways(cx: &mut TestAppContext) {
     let source = (0..160)
         .map(|index| format!("word{index} "))

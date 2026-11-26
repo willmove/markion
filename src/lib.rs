@@ -3624,12 +3624,43 @@ impl MarkdownDocument {
                 .field_containing(&range)
                 .map(|field| (block, field))
         })?;
-        let replacement = sanitize_visual_field_replacement(
+        let mut replacement = sanitize_visual_field_replacement(
             &self.text,
             field.kind,
             &field.source_range,
             replacement,
         );
+        let mut trailing_separator_len = 0;
+        if matches!(
+            field.kind,
+            VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload
+        ) && range.end == field.source_range.end
+            && !replacement.is_empty()
+            && !replacement.ends_with(['\r', '\n'])
+        {
+            let closing = match block.editor.as_ref()? {
+                VisualBlockEditor::Code { closing_fence, .. } => Some(closing_fence),
+                VisualBlockEditor::Math {
+                    closing_delimiter, ..
+                } if field.kind == VisualEditorFieldKind::MathPayload
+                    && self.text[closing_delimiter.clone()].starts_with('`') =>
+                {
+                    Some(closing_delimiter)
+                }
+                _ => None,
+            };
+            if closing.is_some_and(|closing| {
+                !closing.is_empty() && field.source_range.end == closing.start
+            }) {
+                let newline = if self.text.contains("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                trailing_separator_len = newline.len();
+                replacement.push_str(newline);
+            }
+        }
         if let VisualEditorFieldKind::TableCell { row, column } = field.kind {
             let block_source = self.text.get(block.source_range.clone())?;
             let prefix_len = table_column_width_prefix_len(block_source);
@@ -3703,7 +3734,8 @@ impl MarkdownDocument {
             range,
             replacement,
             inserted_range_after: inserted_start..inserted_end,
-            selection_after: inserted_end..inserted_end,
+            selection_after: inserted_end - trailing_separator_len
+                ..inserted_end - trailing_separator_len,
         })
     }
 
@@ -11878,6 +11910,70 @@ Intro.
     }
 
     #[test]
+    fn issue_101_code_payload_preserves_closing_fence_separator() {
+        let source = "Before.\n\n```python\nprint(1)\n```\n\nAfter.\n";
+        let document = MarkdownDocument::from_text(source);
+        let blocks = document.visual_blocks_shared();
+        let payload = blocks
+            .iter()
+            .find_map(|block| match block.editor.as_ref()? {
+                VisualBlockEditor::Code { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(&source[payload.source_range.clone()], "print(1)");
+        let cursor = payload.source_range.end;
+        assert!(
+            document
+                .direct_visual_block_edit(cursor..cursor + 1, "")
+                .is_none()
+        );
+        assert!(
+            document
+                .visual_editor_edge_target(cursor, true)
+                .is_some_and(|target| target != cursor)
+        );
+
+        for (empty_source, expected) in [
+            (
+                "```python\n```\n\nAfter.\n",
+                "```python\npass\n```\n\nAfter.\n",
+            ),
+            (
+                "```python\r\n```\r\n\r\nAfter.\r\n",
+                "```python\r\npass\r\n```\r\n\r\nAfter.\r\n",
+            ),
+        ] {
+            let mut empty = MarkdownDocument::from_text(empty_source);
+            let field = empty
+                .visual_blocks_shared()
+                .iter()
+                .find_map(|block| match block.editor.as_ref()? {
+                    VisualBlockEditor::Code { payload, .. } => Some(payload.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let cursor = field.source_range.start;
+            let edit = empty
+                .direct_visual_block_edit(cursor..cursor, "pass")
+                .unwrap();
+            assert!(empty.validate_visual_block_edit(&edit));
+            empty.replace_range(edit.range, &edit.replacement);
+            assert_eq!(empty.text(), expected);
+            assert_eq!(edit.selection_after, cursor + 4..cursor + 4);
+        }
+
+        let blank_source = "```\nprint(1)\n\n```\n\nAfter.\n";
+        let mut blank = MarkdownDocument::from_text(blank_source);
+        let cursor = blank_source.find("print(1)").unwrap() + "print(1)".len();
+        let edit = blank
+            .direct_visual_block_edit(cursor..cursor + 1, "")
+            .expect("an authored blank code line remains editable");
+        blank.replace_range(edit.range, &edit.replacement);
+        assert_eq!(blank.text(), "```\nprint(1)\n```\n\nAfter.\n");
+    }
+
+    #[test]
     fn direct_table_edit_patches_only_cell_preserves_alignment_and_restores_logical_cell() {
         let source = "before\n\n| A | B |\n| :--- | ---: |\n| x | y |\n\nafter";
         let mut doc = MarkdownDocument::from_text(source);
@@ -12162,7 +12258,7 @@ Intro.
             unreachable!()
         };
         let payload_range = payload.source_range.clone();
-        assert_eq!(&markdown[payload_range.clone()], "A --> B\n");
+        assert_eq!(&markdown[payload_range.clone()], "A --> B");
         assert!(visual.source_range.start <= payload_range.start);
         assert!(payload_range.end <= visual.source_range.end);
         assert_eq!(

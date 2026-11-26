@@ -2013,8 +2013,17 @@ pub(crate) fn fenced_payload_ranges(
     };
     let closing_fence = source_range.start + closing_start + closing_indent
         ..source_range.start + closing_start + closing_indent + closing_len;
+    let mut payload_end = closing_start;
+    if closing_len > 0 && payload_end > opening_end {
+        if source.as_bytes()[payload_end - 1] == b'\n' {
+            payload_end -= 1;
+            if payload_end > opening_end && source.as_bytes()[payload_end - 1] == b'\r' {
+                payload_end -= 1;
+            }
+        }
+    }
     Some((
-        source_range.start + opening_end..source_range.start + closing_start,
+        source_range.start + opening_end..source_range.start + payload_end,
         info_range,
         opening_fence,
         closing_fence,
@@ -6355,7 +6364,7 @@ mod tests {
                 .expect("nested fence resolves its editor ranges");
         assert_eq!(&source[opening], "```");
         assert_eq!(info.map(|range| &source[range]), Some("sh"));
-        assert_eq!(&source[payload], "    export A=1\n");
+        assert_eq!(&source[payload], "    export A=1");
         assert_eq!(&source[closing], "```");
     }
 
@@ -6371,7 +6380,7 @@ mod tests {
                 .expect("nested fence with tricky payload");
         assert_eq!(&source[opening], "```");
         assert!(info.is_none());
-        assert_eq!(&source[payload], "    \n    ``\n    ```text\n    real\n");
+        assert_eq!(&source[payload], "    \n    ``\n    ```text\n    real");
         assert_eq!(&source[closing], "```");
 
         // Tilde fence nested in an ordered list (content indent three, but an
@@ -6384,7 +6393,7 @@ mod tests {
                 .expect("nested tilde fence");
         assert_eq!(&source[opening], "~~~");
         assert_eq!(info.map(|range| &source[range]), Some("rust"));
-        assert_eq!(&source[payload], "    let x = 1;\n");
+        assert_eq!(&source[payload], "    let x = 1;");
         assert_eq!(&source[closing], "~~~");
     }
 
@@ -6872,7 +6881,7 @@ mod tests {
             panic!("ordinary closed fence should have direct metadata");
         };
         assert_eq!(&source[opening_fence], "~~~");
-        assert_eq!(&source[payload.source_range], "  let 名称 = 1;\r\n\r\n");
+        assert_eq!(&source[payload.source_range], "  let 名称 = 1;\r\n");
         assert_eq!(&source[info_range.expect("info range")], "rust extra");
         assert_eq!(&source[info.source_range], "rust");
         assert_eq!(&source[closing_fence], "~~~~");
@@ -7010,7 +7019,7 @@ mod tests {
         assert_eq!(&source[opening_fence], "```");
         assert_eq!(
             &source[payload.source_range.clone()],
-            "flowchart LR\nA --> B\n"
+            "flowchart LR\nA --> B"
         );
         assert_eq!(&source[info_range.expect("info range")], "mermaid");
         assert_eq!(&source[info.source_range], "mermaid");
@@ -7029,7 +7038,7 @@ mod tests {
     fn direct_math_metadata_preserves_display_and_fenced_delimiters() {
         for (source, expected_payload) in [
             ("$$\n\\alpha + β\n$$", "\\alpha + β\n"),
-            ("```math extra\n\\frac{甲}{2}\n```", "\\frac{甲}{2}\n"),
+            ("```math extra\n\\frac{甲}{2}\n```", "\\frac{甲}{2}"),
         ] {
             let block = MarkdownDocument::from_text(source)
                 .visual_blocks()
