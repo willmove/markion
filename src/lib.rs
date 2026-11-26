@@ -2911,6 +2911,38 @@ impl MarkdownDocument {
         offset.min(line_end)
     }
 
+    fn plain_block_prefix_removal_edit(&self, prefix: Range<usize>) -> VisualStructuralEdit {
+        let line_start = self.line_start_at(prefix.start);
+        let needs_separator = if prefix.start == line_start && line_start > 0 {
+            let mut previous_end = line_start - 1;
+            if previous_end > 0 && self.text.as_bytes()[previous_end - 1] == b'\r' {
+                previous_end -= 1;
+            }
+            let previous_start = self.text[..previous_end]
+                .rfind('\n')
+                .map_or(0, |index| index + 1);
+            let previous = &self.text[previous_start..previous_end];
+            previous.trim_start().starts_with('>') || list_marker_at(previous).is_some()
+        } else {
+            false
+        };
+        let replacement = if needs_separator {
+            if self.text.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            }
+        } else {
+            ""
+        };
+        let next = prefix.start + replacement.len();
+        VisualStructuralEdit {
+            range: prefix,
+            replacement: replacement.to_string(),
+            selection_after: next..next,
+        }
+    }
+
     pub fn insert_markdown_newline(&mut self, byte_index: usize) -> usize {
         let cursor = clamp_to_char_boundary(&self.text, byte_index);
         let line_start = self.text[..cursor].rfind('\n').map_or(0, |index| index + 1);
@@ -2921,8 +2953,14 @@ impl MarkdownDocument {
         let after_cursor = &self.text[cursor..line_end];
 
         if after_cursor.trim().is_empty() && is_empty_list_marker(before_cursor) {
-            self.apply_current_range(MutationOrigin::StructuralEdit, line_start..cursor, "");
-            return line_start;
+            let edit = self.plain_block_prefix_removal_edit(line_start..cursor);
+            let next = edit.selection_after.start;
+            self.apply_current_range(
+                MutationOrigin::StructuralEdit,
+                edit.range,
+                &edit.replacement,
+            );
+            return next;
         }
 
         let continuation = markdown_continuation(before_cursor);
@@ -2979,12 +3017,7 @@ impl MarkdownDocument {
             return None;
         }
         if empty_structure_exit {
-            let next = prefix.source_range.start;
-            return Some(VisualStructuralEdit {
-                range: prefix.source_range,
-                replacement: String::new(),
-                selection_after: next..next,
-            });
+            return Some(self.plain_block_prefix_removal_edit(prefix.source_range));
         }
 
         let continuation = markdown_continuation(&self.text[line_start..cursor]);
@@ -3038,12 +3071,7 @@ impl MarkdownDocument {
                 selection_after: next..next,
             });
         }
-        let next = prefix.source_range.start;
-        Some(VisualStructuralEdit {
-            range: prefix.source_range,
-            replacement: String::new(),
-            selection_after: next..next,
-        })
+        Some(self.plain_block_prefix_removal_edit(prefix.source_range))
     }
 
     pub fn render_html_fragment(&self) -> String {
@@ -7817,6 +7845,47 @@ mod tests {
         assert_eq!(nested.text(), "- 项目");
         assert_eq!(edit.selection_after, 2..2);
         assert!(nested.visual_backspace_edit(nested.text().len()).is_none());
+    }
+
+    #[test]
+    fn issue_77_plain_paragraph_after_container_gets_blank_boundary() {
+        let mut source = MarkdownDocument::from_text("- Tea");
+        source.insert_markdown_newline(source.text().len());
+        let cursor = source.insert_markdown_newline(source.text().len());
+        assert_eq!(source.text(), "- Tea\n\n");
+        source.insert(cursor, "Done.");
+        assert_eq!(source.text(), "- Tea\n\nDone.");
+        assert!(matches!(
+            source.preview_blocks().as_slice(),
+            [
+                PreviewBlock::ListItem { .. },
+                PreviewBlock::Paragraph { .. }
+            ]
+        ));
+
+        let mut visual = MarkdownDocument::from_text("- Tea");
+        let edit = visual.visual_enter_edit(visual.text().len()).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        let edit = visual.visual_enter_edit(visual.text().len()).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        visual.insert(edit.selection_after.start, "Done.");
+        assert_eq!(visual.text(), "- Tea\n\nDone.");
+
+        let mut demoted = MarkdownDocument::from_text("* Tea\n* Note.\n* Cocoa");
+        let cursor = demoted.text().find("Note.").unwrap();
+        let edit = demoted.visual_backspace_edit(cursor).unwrap();
+        demoted.replace_range(edit.range, &edit.replacement);
+        assert_eq!(demoted.text(), "* Tea\n\nNote.\n* Cocoa");
+        assert!(demoted.preview_blocks().iter().any(|block| matches!(
+            block,
+            PreviewBlock::Paragraph { text, .. } if text.text == "Note."
+        )));
+
+        let mut quote = MarkdownDocument::from_text("> Memo\r\n> ");
+        let edit = quote.visual_enter_edit(quote.text().len()).unwrap();
+        quote.replace_range(edit.range, &edit.replacement);
+        quote.insert(edit.selection_after.start, "Outside.");
+        assert_eq!(quote.text(), "> Memo\r\n\r\nOutside.");
     }
 
     #[test]
