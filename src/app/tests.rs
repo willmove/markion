@@ -19960,6 +19960,60 @@ fn pasted_plain_text_clipboard_still_pastes_verbatim(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_67_paste_never_applies_typing_transforms(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.markdown_auto_pair = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("A word B"))];
+        app
+    });
+
+    for (source, selection, pasted, expected, plain) in [
+        ("A word B", 2..6, "[", "A [ B", true),
+        ("A word B", 2..6, "[", "A [ B", false),
+        ("A  B", 2..2, "[", "A [ B", true),
+        ("A ] B", 2..2, "]", "A ]] B", true),
+        (
+            "See www.example.com more",
+            19..19,
+            " ",
+            "See www.example.com  more",
+            true,
+        ),
+    ] {
+        app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = selection;
+        });
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(pasted.to_string()));
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                if plain {
+                    app.paste_plain_text(&PastePlainText, window, cx);
+                } else {
+                    app.paste(&Paste, window, cx);
+                }
+                assert_eq!(app.active_tab().document.text(), expected);
+                assert_eq!(app.active_tab().undo_stack.len(), 1);
+            });
+        });
+    }
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("A word B"))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 2..6;
+            EntityInputHandler::replace_text_in_range(app, None, "[", window, cx);
+            assert_eq!(app.active_tab().document.text(), "A [word] B");
+        });
+    });
+}
+
+#[gpui::test]
 fn pasted_clipboard_html_with_empty_conversion_falls_back_to_plain_text(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

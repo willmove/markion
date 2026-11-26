@@ -6311,7 +6311,7 @@ impl MarkionApp {
                 .is_some();
             if inside_fenced_code {
                 self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-                self.replace_text_in_range(None, &text, window, cx);
+                self.replace_pasted_text_in_range(None, &text, window, cx);
                 self.active_tab_mut().finish_undo_capture();
                 if self.code_block_preferences.format_on_paste {
                     let updated_range = self.active_tab().safe_selected_range();
@@ -6353,6 +6353,19 @@ impl MarkionApp {
         }
     }
 
+    fn replace_pasted_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        insertion: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = self.suppress_typing_transforms;
+        self.suppress_typing_transforms = true;
+        self.replace_text_in_range(range_utf16, insertion, window, cx);
+        self.suppress_typing_transforms = previous;
+    }
+
     fn insert_pasted_document_text(
         &mut self,
         insertion: &str,
@@ -6362,7 +6375,7 @@ impl MarkionApp {
         let insertion_start = self.active_tab().safe_selected_range().start;
         let insertion_end = insertion_start + insertion.len();
         self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-        self.replace_text_in_range(None, insertion, window, cx);
+        self.replace_pasted_text_in_range(None, insertion, window, cx);
         self.active_tab_mut().finish_undo_capture();
         self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
     }

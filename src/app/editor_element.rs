@@ -205,7 +205,6 @@ impl EntityInputHandler for MarkionApp {
         // The composition session is over; its version chain is void.
         self.ime_input_target = None;
     }
-
     fn replace_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
@@ -289,6 +288,7 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
         let markdown_auto_pair = self.markdown_auto_pair;
+        let suppress_typing_transforms = self.suppress_typing_transforms;
         let tab = self.active_tab_mut();
         let mut range = range_utf16
             .as_ref()
@@ -298,7 +298,8 @@ impl EntityInputHandler for MarkionApp {
 
         let mut paired_text: Option<String> = None;
         let mut pair_selection: Option<Range<usize>> = None;
-        let skip_ime_pair = active_marked_range.is_some() || committing_ime;
+        let skip_ime_pair =
+            suppress_typing_transforms || active_marked_range.is_some() || committing_ime;
         let restricted_pair_field = !matches!(tab.kind(), DocumentKind::Markdown)
             || (visual_edit
                 && tab

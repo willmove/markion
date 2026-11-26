@@ -431,6 +431,7 @@ impl MarkionApp {
             #[cfg(test)]
             last_tab_strip_reveal: None,
             input_marked_len: 0,
+            suppress_typing_transforms: false,
             document_input_target: None,
             ime_input_target: None,
             selected_tree_path: None,

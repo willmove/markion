@@ -3384,6 +3384,9 @@ struct MarkionApp {
     // Byte length of the trailing IME composition inside whichever redirected
     // text field (file-tree filter / search) currently has logical focus.
     input_marked_len: usize,
+    /// Suppresses typing-only conversions while a paste synchronously reuses
+    /// the shared checked document-input pipeline.
+    suppress_typing_transforms: bool,
     /// Last document identity/version reported to the platform text service.
     /// A callback for another tab or an older version is rejected instead of
     /// being reinterpreted against the current active document.
