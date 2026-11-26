@@ -1871,7 +1871,7 @@ impl MarkionApp {
         }
         // Bump the generation even when disabled so a pending timer from a
         // previous schedule is invalidated.
-        let active_index = self.active_tab;
+        let recovery_id = self.active_tab().recovery_id;
         let autosave_enabled = self.auto_save_preferences.enabled;
         let delay = Duration::from_secs(self.auto_save_preferences.delay_secs.max(1));
         let recovery_dir = self.recovery_dir.clone();
@@ -1885,7 +1885,7 @@ impl MarkionApp {
         cx.spawn(async move |this, cx| {
             Timer::after(delay).await;
             let _ = this.update(cx, |app, cx| {
-                app.run_due_autosave(active_index, generation, recovery_dir, cx);
+                app.run_due_autosave(recovery_id, generation, recovery_dir, cx);
             });
         })
         .detach();
@@ -1898,14 +1898,19 @@ impl MarkionApp {
     /// `gpui::Timer` is real-time and outside the test executor's clock.
     pub(super) fn run_due_autosave(
         &mut self,
-        active_index: usize,
+        recovery_id: u64,
         generation: u64,
         recovery_dir: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        // Validate the tab still exists and its generation matches, so a tab
-        // switch (or close) between schedule and fire does not autosave the
-        // wrong tab or a removed one.
+        // Re-locate by stable identity because closing another tab may have
+        // shifted the scheduled tab's index.
+        let Some(active_index) = self.tabs.iter().position(|tab| {
+            tab.document_tab()
+                .is_some_and(|document| document.recovery_id == recovery_id)
+        }) else {
+            return;
+        };
         let Some(tab) = self.tabs.get(active_index) else {
             return;
         };

@@ -21259,7 +21259,7 @@ fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
         app.schedule_autosave(cx);
         let generation = app.active_tab().autosave_generation;
         let recovery_dir = app.recovery_dir.clone();
-        app.run_due_autosave(0, generation, recovery_dir, cx);
+        app.run_due_autosave(app.active_tab().recovery_id, generation, recovery_dir, cx);
         assert!(app.active_tab().autosave_in_flight);
     });
     cx.run_until_parked();
@@ -21270,6 +21270,75 @@ fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
         assert_eq!(app.active_tab().last_recovery_file, None);
     });
     assert_eq!(fs::read_to_string(&path).unwrap(), "v2");
+}
+
+fn issue_58_left_close_preserves_pending_autosave(silent_save: bool, cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let alpha = dir.path().join("alpha.md");
+    let beta = dir.path().join("beta.md");
+    let recovery_dir = dir.path().join("recovery");
+    fs::write(&alpha, "Alpha notes").unwrap();
+    fs::write(&beta, "Beta notes").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences = AutoSavePreferences {
+            enabled: true,
+            silent_save,
+            delay_secs: 1,
+        };
+        app.recovery_dir = recovery_dir.clone();
+        app.session_path = dir.path().join("session.toml");
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&alpha).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&beta).unwrap()),
+        ];
+        app.active_tab = 1;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("Beta notes?");
+        app.schedule_autosave(cx);
+        let recovery_id = app.active_tab().recovery_id;
+        let generation = app.active_tab().autosave_generation;
+        app.active_tab = 0;
+        app.close_tab_confirmed(cx);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+        assert!(app.active_tab().is_dirty());
+        app.run_due_autosave(recovery_id, generation, recovery_dir.clone(), cx);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+        assert_eq!(app.active_tab().document.text(), "Beta notes?");
+        assert_eq!(app.active_tab().is_dirty(), !silent_save);
+        if silent_save {
+            assert!(app.active_tab().last_recovery_file.is_none());
+        } else {
+            let recovery = app.active_tab().last_recovery_file.as_ref().unwrap();
+            assert_eq!(load_recovery_file(recovery).unwrap().text, "Beta notes?");
+        }
+    });
+    assert_eq!(
+        fs::read_to_string(beta).unwrap(),
+        if silent_save {
+            "Beta notes?"
+        } else {
+            "Beta notes"
+        }
+    );
+}
+
+#[gpui::test]
+fn issue_58_left_close_preserves_pending_silent_autosave(cx: &mut TestAppContext) {
+    issue_58_left_close_preserves_pending_autosave(true, cx);
+}
+
+#[gpui::test]
+fn issue_58_left_close_preserves_pending_recovery_only(cx: &mut TestAppContext) {
+    issue_58_left_close_preserves_pending_autosave(false, cx);
 }
 
 #[gpui::test]
@@ -21295,7 +21364,12 @@ fn autosave_silent_save_off_keeps_named_file_and_recovery(cx: &mut TestAppContex
         app.active_tab_mut().document.set_text("in-memory");
         app.schedule_autosave(cx);
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
     });
     cx.run_until_parked();
 
@@ -21335,7 +21409,12 @@ fn issue_28_retained_untitled_recovery_survives_restart_and_new_autosave(cx: &mu
             .document
             .set_text("# New grocery draft");
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
         (retained, retained_bytes)
     });
     cx.run_until_parked();
@@ -21348,7 +21427,12 @@ fn issue_28_retained_untitled_recovery_survives_restart_and_new_autosave(cx: &mu
             .document
             .set_text("# New grocery draft updated");
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
         snapshot
     });
     cx.run_until_parked();
@@ -21531,7 +21615,12 @@ fn issue_29_explicit_save_cancels_an_autosave_before_it_starts(cx: &mut TestAppC
     app.update(cx, |app, cx| {
         app.active_tab_mut().document.set_text("older autosave");
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, app.recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            app.recovery_dir.clone(),
+            cx,
+        );
         assert!(app.active_tab().autosave_in_flight);
         app.active_tab_mut().document.set_text("newer manual text");
         assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
@@ -21578,7 +21667,12 @@ fn discard_during_in_flight_autosave_writes_nothing(silent_save: bool, cx: &mut 
         app.active_tab_mut().document.set_text("discarded");
         app.schedule_autosave(cx);
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
         assert!(app.active_tab().autosave_in_flight);
         app.close_tab_confirmed(cx);
         assert_eq!(app.tabs.len(), 1);
