@@ -23693,6 +23693,59 @@ fn file_tree_rename_unchanged_name_preserves_file_and_open_tab(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn issue_57_background_dirty_tab_refuses_file_tree_rename(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let daily = root.join("daily.md");
+    let other = root.join("other.md");
+    fs::write(&daily, "saved line").unwrap();
+    fs::write(&other, "other note").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&daily).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&other).unwrap()),
+        ];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.push_undo_snapshot();
+        app.active_tab_mut().document.insert(0, "Keep this draft: ");
+        app.active_tab = 1;
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.active_tab().path(), Some(other.as_path()));
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::File(daily.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            app.pending_name_input.as_mut().unwrap().buffer = "renamed.md".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, t(app.language, Msg::StatusSaveBeforeRename));
+        assert_eq!(app.active_tab, 0);
+        assert!(daily.exists());
+        assert!(!root.join("renamed.md").exists());
+        assert_eq!(fs::read_to_string(&daily).unwrap(), "saved line");
+        assert_eq!(fs::read_to_string(&other).unwrap(), "other note");
+        assert_eq!(app.tabs[0].path(), Some(daily.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "Keep this draft: saved line");
+        assert!(app.tabs[0].is_dirty());
+        assert_eq!(app.tabs[0].undo_stack.len(), 1);
+        assert_eq!(app.tabs[1].document.text(), "other note");
+        assert!(!app.tabs[1].is_dirty());
+    });
+}
+
+#[gpui::test]
 fn tab_context_copy_path_reports_status_and_skips_untitled(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.md");

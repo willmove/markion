@@ -1045,11 +1045,14 @@ impl MarkionApp {
                     cx.notify();
                     return;
                 };
-                // Refuse renaming the active document while it is dirty; the
-                // user should save first to avoid losing unsaved edits.
-                let needs_save = self.active_tab().path() == Some(target.as_path())
-                    && self.active_tab().is_dirty();
-                if needs_save {
+                // Refuse renaming any open dirty document; activating it makes
+                // the save-first status target the affected tab.
+                let needs_save = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.path() == Some(target.as_path()) && tab.is_dirty());
+                if let Some(index) = needs_save {
+                    self.switch_active_tab(index, cx);
                     self.status = t(self.language, Msg::StatusSaveBeforeRename).into();
                     cx.notify();
                     return;
