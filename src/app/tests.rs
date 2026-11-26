@@ -13334,6 +13334,38 @@ fn read_mode_does_not_register_an_editable_input_surface(cx: &mut TestAppContext
     });
 }
 
+#[gpui::test]
+fn issue_90_read_find_field_accepts_typed_query(cx: &mut TestAppContext) {
+    let source = "local note\n\n**Keep** this line.\n\nKeep the copy.";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Read;
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(600.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    for letter in ["K", "e", "e", "p"] {
+        cx.simulate_input(letter);
+    }
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.search_query.buffer, "Keep");
+        assert_eq!(app.search_matches.len(), 2);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(!app.active_tab().is_dirty());
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
 #[test]
 fn custom_theme_palette_uses_definition_colors() {
     let theme = ThemeDefinition {

@@ -733,6 +733,18 @@ impl Render for MarkionApp {
                                     .relative()
                                     .flex_1()
                                     .min_h_0()
+                                    .when(
+                                        matches!(view_mode, ViewMode::Read)
+                                            && self.search_focus == Some(SearchField::Find),
+                                        |pane| {
+                                            pane.child(
+                                                div()
+                                                    .absolute()
+                                                    .size_full()
+                                                    .child(VisualInputElement { app: cx.entity() }),
+                                            )
+                                        },
+                                    )
                                     .child(
                                         div()
                                             .size_full()
