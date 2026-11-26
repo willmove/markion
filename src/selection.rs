@@ -379,11 +379,17 @@ impl CellSelection {
         };
         let mut edits = Vec::new();
         let authored = &document.text()[self.target.source_range.clone()];
-        let markdown = &authored[crate::table_column_width_prefix_len(authored)..];
+        let prefix_len = crate::table_column_width_prefix_len(authored);
+        let markdown = &authored[prefix_len..];
+        let column_count = crate::table::parse_markdown_table(markdown)
+            .ok_or(BlockEditError::Ambiguous)?
+            .column_count();
+        let top_level = block.quote_context.is_none() && block.list_depth == 0;
         for (row, column, replacement) in updates {
+            let line_index = if *row == 0 { 0 } else { row + 1 };
             let line = markdown
                 .lines()
-                .nth(if *row == 0 { 0 } else { row + 1 })
+                .nth(line_index)
                 .ok_or(BlockEditError::Ambiguous)?;
             if *column >= crate::table::markdown_table_cell_ranges(line).len() {
                 if replacement.is_empty() {
@@ -395,7 +401,25 @@ impl CellSelection {
                 .iter()
                 .find(|cell| cell.row == *row && cell.column == *column)
                 .ok_or(BlockEditError::Ambiguous)?;
-            edits.push((cell.field.source_range.clone(), replacement));
+            if top_level && replacement.is_empty() {
+                let line_start = self.target.source_range.start
+                    + prefix_len
+                    + markdown
+                        .split_inclusive('\n')
+                        .take(line_index)
+                        .map(str::len)
+                        .sum::<usize>();
+                let content = line.trim_start_matches([' ', '\t']);
+                let content_start = line_start + (line.len() - content.len());
+                if *column == 0 && !content.starts_with('|') {
+                    edits.push((content_start..content_start, "|"));
+                }
+                if *column + 1 == column_count && !line.trim_end().ends_with('|') {
+                    let line_end = line_start + line.len();
+                    edits.push((line_end..line_end, "|"));
+                }
+            }
+            edits.push((cell.field.source_range.clone(), replacement.as_str()));
         }
         edits.sort_by_key(|(range, _)| range.start);
         let Some((first, _)) = edits.first() else {
@@ -606,6 +630,50 @@ mod tests {
         assert_eq!(table.rows[1][1], "😀");
         assert_eq!(table.alignments[1], crate::TableAlignment::Right);
         assert!(cells.clear(&doc).is_err());
+    }
+
+    #[test]
+    fn issue_62_clearing_edge_cells_without_outer_pipes_preserves_grid() {
+        for (source, anchor, head, expected) in [
+            (
+                "Item | Owner\n--- | ---\nTea | Ravi\nRice | Mina",
+                (1, 0),
+                (2, 0),
+                vec![vec!["Item", "Owner"], vec!["", "Ravi"], vec!["", "Mina"]],
+            ),
+            (
+                "Item | Owner\n--- | ---\nTea | Ravi\nRice | Mina",
+                (0, 0),
+                (1, 0),
+                vec![vec!["", "Owner"], vec!["", "Ravi"], vec!["Rice", "Mina"]],
+            ),
+            (
+                "A | B | C\n--- | --- | ---\n1 | 2 | 3",
+                (0, 2),
+                (0, 2),
+                vec![vec!["A", "B", ""], vec!["1", "2", "3"]],
+            ),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let table = blocks
+                .iter()
+                .find(|block| matches!(block.kind, crate::VisualBlockKind::Table { .. }))
+                .unwrap();
+            let mut selection = CellSelection::new(&doc, table, anchor);
+            selection.head = head;
+            let clear = selection.clear(&doc).unwrap();
+            let mut edited = source.to_string();
+            edited.replace_range(clear.range, &clear.replacement);
+            let reparsed = crate::table::parse_markdown_table(&edited)
+                .unwrap_or_else(|| panic!("cleared table no longer parses: {edited:?}"));
+            let actual = reparsed
+                .rows
+                .iter()
+                .map(|row| row.iter().map(String::as_str).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "edited source: {edited:?}");
+        }
     }
 
     #[test]
