@@ -24973,6 +24973,33 @@ fn issue_59_read_mode_document_edit_actions_are_inert(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_70_closed_find_previous_steps_backward_from_current_position(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for (source, query, caret, expected) in [
+        ("red sun, blue sun, gold sun.", "sun", 28, 24..27),
+        ("red sun, blue sun, gold sun.", "sun", 8, 4..7),
+        ("甲灯 / 乙灯 / 丙灯", "灯", 0, 21..24),
+    ] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+                app.active_tab = 0;
+                app.active_tab_mut().selected_range = caret..caret;
+                app.search_query.set_text(query);
+                app.search_visible = false;
+                app.search_generation = None;
+                app.current_search_index = None;
+                let version = app.active_tab().document.version();
+                app.find_previous(&FindPrevious, window, cx);
+                assert_eq!(app.active_tab().selected_range, expected);
+                assert_eq!(app.active_tab().document.text(), source);
+                assert_eq!(app.active_tab().document.version(), version);
+            });
+        });
+    }
+}
+
+#[gpui::test]
 fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_states(
     cx: &mut TestAppContext,
 ) {

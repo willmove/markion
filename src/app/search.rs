@@ -94,18 +94,11 @@ impl MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let was_visible = self.search_visible;
         self.search_visible = true;
         self.refresh_search_matches();
         if self.search_matches.is_empty() {
             self.status = self.search_summary().into();
             cx.notify();
-            return;
-        }
-        if !was_visible {
-            if let Some(index) = self.current_search_index {
-                self.select_search_match(index, cx);
-            }
             return;
         }
         let previous = self
