@@ -10246,6 +10246,54 @@ fn visual_edit_navigation_follows_wrapped_lines_without_reparsing(cx: &mut TestA
 }
 
 #[gpui::test]
+fn issue_99_visual_end_stops_before_soft_line_break(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("Alpha\nBeta\n"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let snapshot = app
+            .active_tab()
+            .visual_navigation_snapshots
+            .get(&0)
+            .unwrap();
+        assert_eq!(snapshot.line_index_for_source(1), Some(0));
+        assert_eq!(snapshot.line_boundary_source(0, true), Some(5));
+    });
+    cx.dispatch_action(End);
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), 5));
+    cx.simulate_input("!");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Alpha!\nBeta\n");
+        app.active_tab_mut().document.set_text("Alpha\nBeta\n");
+        app.active_tab_mut().selected_range = 1..1;
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(SelectEnd);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 1..5)
+    });
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Ax\nBeta\n")
+    });
+}
+
+#[gpui::test]
 fn visual_navigation_line_windows_walk_wrapped_lines_both_ways(cx: &mut TestAppContext) {
     let source = (0..160)
         .map(|index| format!("word{index} "))
