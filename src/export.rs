@@ -1769,15 +1769,15 @@ fn render_docx_table(
 }
 
 /// Raw HTML `<table>` blocks feed the parsed grid (rowspan/colspan resolved
-/// upstream) into the same `w:tbl` structure: header cells are bold and the
-/// header row gets `w:tblHeader`, `colspan` becomes `w:gridSpan`, and
+/// upstream) into the same `w:tbl` structure: header cells are bold, only
+/// actual column-header rows get `w:tblHeader`, `colspan` becomes `w:gridSpan`,
 /// `rowspan` becomes `w:vMerge` restart/continue pairs.
 fn render_docx_html_table(state: &mut DocxRenderState, grid: &HtmlTableGrid) {
     let columns = grid.columns.max(1);
     let column_width = state.text_column_twips() / columns as u32;
     push_table_open(state, columns, column_width);
     for row in &grid.rows {
-        push_table_row_open(state, row.iter().any(|cell| cell.is_header));
+        push_table_row_open(state, row.iter().any(|cell| cell.is_header_row));
         for cell in row {
             let mut props = format!(
                 "<w:tcW w:w=\"{}\" w:type=\"dxa\"/>",
@@ -2835,6 +2835,20 @@ mod tests {
         let rels = entry(&bytes, "word/_rels/document.xml.rels");
         assert!(rels.contains("Target=\"https://example.com/?a=1&amp;b=2\""));
         assert!(rels.contains("TargetMode=\"External\""));
+    }
+
+    #[test]
+    fn issue_85_html_row_headers_do_not_repeat_body_rows() {
+        let document = MarkdownDocument::from_text(
+            "<table>\n<thead><tr><th>Item</th><th>Units</th></tr></thead>\n<tbody>\n<tr><th scope=\"row\">Amber</th><td>24</td></tr>\n<tr><td>Blue</td><td>13</td></tr>\n</tbody>\n</table>",
+        );
+        let xml = entry(&docx_parts(&document), "word/document.xml");
+        assert_eq!(xml.matches("<w:tblHeader/>").count(), 1, "{xml}");
+        let amber = xml.find(">Amber</w:t>").unwrap();
+        let row_start = xml[..amber].rfind("<w:tr>").unwrap();
+        assert!(!xml[row_start..amber].contains("<w:tblHeader/>"));
+        let row_end = xml[amber..].find("</w:tr>").unwrap() + amber;
+        assert!(xml[row_start..row_end].contains("<w:b/>"));
     }
 
     #[test]
