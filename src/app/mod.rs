@@ -1277,8 +1277,9 @@ impl SearchFieldState {
         self.marked_range = marked.then_some(range.start..self.cursor);
     }
 
-    fn backspace(&mut self) {
+    fn backspace(&mut self) -> bool {
         self.clamp_to_boundaries();
+        let had_marked = self.marked_range.is_some();
         let selection = self
             .marked_range
             .clone()
@@ -1288,14 +1289,17 @@ impl SearchFieldState {
         } else {
             selection
         };
+        let changed = had_marked || !range.is_empty();
         self.buffer.replace_range(range.clone(), "");
         self.cursor = range.start;
         self.anchor = self.cursor;
         self.marked_range = None;
+        changed
     }
 
-    fn delete_forward(&mut self) {
+    fn delete_forward(&mut self) -> bool {
         self.clamp_to_boundaries();
+        let had_marked = self.marked_range.is_some();
         let selection = self
             .marked_range
             .clone()
@@ -1305,10 +1309,12 @@ impl SearchFieldState {
         } else {
             selection
         };
+        let changed = had_marked || !range.is_empty();
         self.buffer.replace_range(range.clone(), "");
         self.cursor = range.start;
         self.anchor = self.cursor;
         self.marked_range = None;
+        changed
     }
 
     fn selected_text(&self) -> Option<&str> {

@@ -25000,6 +25000,50 @@ fn issue_70_closed_find_previous_steps_backward_from_current_position(cx: &mut T
 }
 
 #[gpui::test]
+fn issue_71_noop_find_field_deletions_preserve_current_match(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for (source, query) in [
+        ("red sun, blue sun, gold sun.", "sun"),
+        ("甲灯 / 乙灯 / 丙灯", "灯"),
+    ] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+                app.active_tab = 0;
+                app.search_visible = true;
+                app.search_focus = Some(SearchField::Find);
+                app.search_control_focus = Some(SearchOverlayControl::FindField);
+                app.search_query.set_text(query);
+                app.search_generation = None;
+                app.refresh_search_matches();
+                app.select_search_match(0, cx);
+                app.search_query.move_caret(SearchCaretMove::Home);
+                let selected = app.active_tab().selected_range.clone();
+                let current = app.current_search_index;
+                let generation = app.search_generation.clone();
+                let version = app.active_tab().document.version();
+
+                for _ in 0..3 {
+                    app.backspace(&Backspace, window, cx);
+                    assert_eq!(app.search_query.buffer, query);
+                    assert_eq!(app.active_tab().selected_range, selected);
+                    assert_eq!(app.current_search_index, current);
+                    assert_eq!(app.search_generation, generation);
+                    assert_eq!(app.active_tab().document.version(), version);
+                    assert!(app.active_tab().undo_stack.is_empty());
+                }
+                app.search_query.move_caret(SearchCaretMove::End);
+                app.delete(&Delete, window, cx);
+                assert_eq!(app.search_query.buffer, query);
+                assert_eq!(app.active_tab().selected_range, selected);
+                assert_eq!(app.current_search_index, current);
+                assert_eq!(app.search_generation, generation);
+            });
+        });
+    }
+}
+
+#[gpui::test]
 fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_states(
     cx: &mut TestAppContext,
 ) {

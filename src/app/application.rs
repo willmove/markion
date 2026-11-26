@@ -3296,9 +3296,11 @@ impl MarkionApp {
             return true;
         }
         if let Some(field) = self.focused_search_field_mut() {
-            field.backspace();
-            self.search_generation = None;
-            self.after_input_changed(cx);
+            let changed = field.backspace();
+            if changed {
+                self.search_generation = None;
+                self.after_input_changed(cx);
+            }
             return true;
         }
         if self.backspace_overlay_text(cx) {
@@ -3322,9 +3324,11 @@ impl MarkionApp {
             return true;
         }
         if let Some(field) = self.focused_search_field_mut() {
-            field.delete_forward();
-            self.search_generation = None;
-            self.after_input_changed(cx);
+            let changed = field.delete_forward();
+            if changed {
+                self.search_generation = None;
+                self.after_input_changed(cx);
+            }
             return true;
         }
         if self.delete_overlay_text_forward(cx) {
