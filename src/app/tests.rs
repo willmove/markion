@@ -4766,6 +4766,21 @@ fn issue_86_shortcut_reset_clears_default_key_conflicts(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn issue_87_ctrl_left_is_reserved_for_word_navigation(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        app.language = Language::En;
+        app.shortcut_overrides.clear();
+        assert!(matches!(
+            app.shortcut_assignment_error("bold", "ctrl-left"),
+            Some(ShortcutCaptureError::Conflict(_))
+        ));
+        assert_eq!(app.shortcut_assignment_error("bold", "ctrl-b"), None);
+        assert!(app.shortcut_overrides.is_empty());
+    });
+}
+
+#[gpui::test]
 fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

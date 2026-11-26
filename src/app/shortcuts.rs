@@ -14,6 +14,7 @@ const RESERVED_BINDINGS: &[&str] = &[
     "backspace",
     "delete",
     "left",
+    "ctrl-left",
     "right",
     "up",
     "down",
