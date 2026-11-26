@@ -11228,6 +11228,28 @@ Intro.
     }
 
     #[test]
+    fn issue_94_literal_dollar_pairs_stay_text_in_latex_export() {
+        let doc = MarkdownDocument::from_text(
+            "First paragraph survives.\n\nPrices are \\$5 and \\$8 today.\n\nCompare \\$5 with 25% off and \\$8 today.\n\nLast paragraph survives.\n\nInline $x+2$.",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prices.tex");
+        doc.export_to(&path, ExportFormat::Latex).unwrap();
+        let latex = fs::read_to_string(path).unwrap();
+        assert!(latex.contains("Prices are \\$5 and \\$8 today."));
+        assert!(latex.contains("Compare \\$5 with 25\\% off and \\$8 today."));
+        assert!(!latex.contains("Prices are $5 and $8 today."));
+        assert!(latex.contains("Inline $x+2$."));
+
+        let entities = MarkdownDocument::from_text("Prices are &#36;5 and &#36;8 today.");
+        assert!(
+            entities
+                .render_latex_document()
+                .contains("Prices are \\$5 and \\$8 today.")
+        );
+    }
+
+    #[test]
     fn inline_math_survives_extended_superscript_extension() {
         let doc = MarkdownDocument::from_text("Inline $a^2+b^2=c^2$ and x^2^ outside.");
         let html = doc.render_html_fragment();

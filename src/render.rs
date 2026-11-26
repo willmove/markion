@@ -362,35 +362,12 @@ pub(crate) fn escape_latex_path(path: &str) -> String {
     path.replace('\\', "/").replace(' ', "\\ ")
 }
 
-/// Renders inline text for LaTeX, preserving `$...$` math runs verbatim while
-/// escaping the surrounding prose.
-pub(crate) fn render_latex_inline_text(text: &str) -> String {
-    let mut output = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('$') {
-        output.push_str(&escape_latex(&rest[..start]));
-        let after_start = &rest[start + 1..];
-        if let Some(end) = after_start.find('$') {
-            let formula = &after_start[..end];
-            output.push('$');
-            output.push_str(formula);
-            output.push('$');
-            rest = &after_start[end + 1..];
-        } else {
-            output.push_str("\\$");
-            rest = after_start;
-        }
-    }
-    output.push_str(&escape_latex(rest));
-    output
-}
-
 /// Renders resolved rich text (preview inline spans) to LaTeX, mapping the
-/// style flags to their LaTeX commands. Plain prose keeps `$...$` math runs
-/// verbatim; inline code is `\texttt` with full escaping.
+/// style flags to their LaTeX commands. Math comes only from explicit span
+/// metadata; every other non-code span is escaped as literal prose.
 pub(crate) fn render_latex_rich_text(rich: &RichText) -> String {
     if rich.spans.is_empty() {
-        return render_latex_inline_text(&rich.text);
+        return escape_latex(&rich.text);
     }
     let mut output = String::new();
     for span in &rich.spans {
@@ -403,8 +380,10 @@ pub(crate) fn render_latex_rich_text(rich: &RichText) -> String {
         }
         let mut piece = if span.style.code {
             format!("\\texttt{{{}}}", escape_latex(&span.text))
+        } else if let Some(math) = &span.math {
+            math.authored.clone()
         } else {
-            render_latex_inline_text(&span.text)
+            escape_latex(&span.text)
         };
         if span.style.bold {
             piece = format!("\\textbf{{{piece}}}");
