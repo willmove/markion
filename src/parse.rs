@@ -11,7 +11,7 @@ use std::{collections::HashSet, ops::Range};
 use pulldown_cmark::{BlockQuoteKind, CowStr, Event, HeadingLevel, Options, Parser, Tag};
 
 use crate::ImagePresentation;
-use crate::escape::escape_html_attribute;
+use crate::escape::{decode_basic_html_entities, escape_html_attribute};
 use crate::model::{
     Heading, HtmlImageDescriptor, HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan,
     InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage,
@@ -87,6 +87,8 @@ pub struct HtmlTableCell {
     pub rowspan: usize,
     /// True for `<th>` cells (rendered with header emphasis).
     pub is_header: bool,
+    /// True only for rows in `<thead>` (repeated across DOCX/PDF pages).
+    pub is_header_row: bool,
     /// True for spacer slots covering a rowspan from above.
     pub is_spacer: bool,
 }
@@ -1535,6 +1537,7 @@ struct HtmlTableParser<'a> {
     /// Per-column remaining rows held open by an active rowspan. Index = column.
     row_spans: Vec<usize>,
     current_row: Option<Vec<HtmlTableCell>>,
+    current_row_is_header: bool,
     current_cell_spans: Vec<InlineSpan>,
     grid: HtmlTableGrid,
     failed: bool,
@@ -1569,6 +1572,7 @@ impl<'a> HtmlTableParser<'a> {
             in_thead: false,
             row_spans: Vec::new(),
             current_row: None,
+            current_row_is_header: false,
             current_cell_spans: Vec::new(),
             grid: HtmlTableGrid::default(),
             failed: false,
@@ -1734,6 +1738,7 @@ impl<'a> HtmlTableParser<'a> {
 
     fn begin_row(&mut self) {
         self.current_row = Some(Vec::new());
+        self.current_row_is_header = self.in_thead;
         if self.row_spans.is_empty() {
             self.row_spans.push(0);
         }
@@ -1774,6 +1779,7 @@ impl<'a> HtmlTableParser<'a> {
             colspan,
             rowspan,
             is_header,
+            is_header_row: self.current_row_is_header,
             is_spacer: false,
         });
         self.pending_is_header = false;
@@ -1820,6 +1826,7 @@ impl<'a> HtmlTableParser<'a> {
             self.grid.has_rowspan = true;
         }
 
+        let is_header_row = self.current_row_is_header;
         let row = self
             .current_row
             .as_mut()
@@ -1831,6 +1838,7 @@ impl<'a> HtmlTableParser<'a> {
                 colspan: 1,
                 rowspan: 0,
                 is_header: false,
+                is_header_row,
                 is_spacer: true,
             });
         }
@@ -1856,6 +1864,7 @@ impl<'a> HtmlTableParser<'a> {
                     colspan: 1,
                     rowspan: 0,
                     is_header: false,
+                    is_header_row: self.current_row_is_header,
                     is_spacer: true,
                 });
                 col += 1;
@@ -1867,6 +1876,12 @@ impl<'a> HtmlTableParser<'a> {
                 }
             }
             if !row.is_empty() {
+                let repeat_header = self.current_row_is_header
+                    || (self.grid.rows.is_empty()
+                        && row.iter().all(|cell| cell.is_spacer || cell.is_header));
+                for cell in &mut row {
+                    cell.is_header_row = repeat_header;
+                }
                 let row_columns = row.iter().map(|c| c.colspan).sum::<usize>();
                 if row_columns > self.grid.columns {
                     self.grid.columns = row_columns;
@@ -1874,6 +1889,7 @@ impl<'a> HtmlTableParser<'a> {
                 self.grid.rows.push(row);
             }
         }
+        self.current_row_is_header = false;
         self.pending_is_header = false;
         self.pending_colspan = 1;
         self.pending_rowspan = 1;
@@ -2723,10 +2739,11 @@ fn render_extended_segment_html(
         ExtendedInlineSegment::Emoji(emoji) => output.push_str(emoji),
         ExtendedInlineSegment::AutoLink(url) if !autolink => output.push_str(url),
         ExtendedInlineSegment::AutoLink(url) => {
-            let href = if url.starts_with("www.") {
-                format!("https://{url}")
+            let decoded = decode_basic_html_entities(url);
+            let href = if decoded.starts_with("www.") {
+                format!("https://{decoded}")
             } else {
-                url.clone()
+                decoded
             };
             output.push_str(&format!(
                 "<a href=\"{}\">{}</a>",

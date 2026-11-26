@@ -734,7 +734,7 @@ fn sanitize_file_name(name: &str) -> String {
         })
         .collect::<String>()
         .trim()
-        .trim_matches('.')
+        .trim_end_matches('.')
         .to_string();
 
     if sanitized.is_empty() {
@@ -1548,6 +1548,40 @@ mod tests {
         assert_ne!(error.kind(), io::ErrorKind::NotFound);
         assert!(!dir.path().join("docs - copy").exists());
         assert!(folder.join("guide.md").exists());
+    }
+
+    #[test]
+    fn issue_105_unique_names_keep_leading_dots_and_real_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "agenda.md", "VISIBLE ORIGINAL");
+        write(root, "archive/keep.md", "original folder child");
+        let mut tree = FileTree::scan(root).unwrap();
+
+        let draft = tree.create_unique_file(root, ".draft.md").unwrap();
+        assert_eq!(draft, root.join(".draft.md"));
+        assert!(!root.join("draft.md").exists());
+
+        let agenda = tree.create_unique_file(root, ".agenda.md").unwrap();
+        assert_eq!(agenda, root.join(".agenda.md"));
+        assert_eq!(
+            fs::read_to_string(root.join("agenda.md")).unwrap(),
+            "VISIBLE ORIGINAL"
+        );
+        let second_agenda = tree.create_unique_file(root, ".agenda.md").unwrap();
+        assert_eq!(second_agenda, root.join(".agenda 1.md"));
+
+        let archive = tree.create_unique_directory(root, ".archive").unwrap();
+        assert_eq!(archive, root.join(".archive"));
+        assert_eq!(
+            fs::read_to_string(root.join("archive/keep.md")).unwrap(),
+            "original folder child"
+        );
+        assert!(!root.join("archive 1").exists());
+        assert_eq!(
+            tree.create_unique_file(root, " trailing. ").unwrap(),
+            root.join("trailing")
+        );
     }
 
     #[test]

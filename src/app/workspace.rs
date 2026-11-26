@@ -34,11 +34,10 @@ impl MarkionApp {
     pub(super) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
         // Data-text documents have no Markdown derivation: Read, Visual Edit,
         // and Split Preview are not offered for them. While such a tab is
-        // active, non-source targets are no-ops — the document stays on its
+        // active, every view-mode write is a no-op — the document stays on its
         // source surface and the stored app-level mode is kept so a Markdown
         // tab resumes it when reactivated.
-        if self.active_document_kind() == DocumentKind::Data && !matches!(view_mode, ViewMode::Edit)
-        {
+        if self.active_document_kind() == DocumentKind::Data {
             return;
         }
         assign_view_mode(&mut self.view_mode, view_mode);
@@ -469,6 +468,12 @@ impl MarkionApp {
                 return;
             }
             self.close_visual_block_menu(cx);
+            return;
+        }
+        if self.tab_context_menu.is_some() {
+            self.tab_context_menu = None;
+            self.active_menu = None;
+            cx.notify();
             return;
         }
         if self.preferences_panel_open {
@@ -1045,11 +1050,16 @@ impl MarkionApp {
                     cx.notify();
                     return;
                 };
-                // Refuse renaming the active document while it is dirty; the
-                // user should save first to avoid losing unsaved edits.
-                let needs_save = self.active_tab().path() == Some(target.as_path())
-                    && self.active_tab().is_dirty();
-                if needs_save {
+                // Refuse renaming any open dirty document; activating it makes
+                // the save-first status target the affected tab.
+                let needs_save = self.tabs.iter().position(|tab| {
+                    tab.is_dirty()
+                        && tab.path().is_some_and(|path| {
+                            remap_path_after_move(path, &target, &target).is_some()
+                        })
+                });
+                if let Some(index) = needs_save {
+                    self.switch_active_tab(index, cx);
                     self.status = t(self.language, Msg::StatusSaveBeforeRename).into();
                     cx.notify();
                     return;
@@ -1382,15 +1392,7 @@ impl MarkionApp {
         new_path: &Path,
         cx: &mut Context<Self>,
     ) {
-        let matching: Vec<usize> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tab)| (tab.path() == Some(old_path)).then_some(i))
-            .collect();
-        for index in matching {
-            self.repoint_tab_to_path(index, new_path, cx);
-        }
+        self.remap_tabs_after_move(old_path, new_path, cx);
     }
 
     fn repoint_tab_to_path(&mut self, index: usize, new_path: &Path, cx: &mut Context<Self>) {

@@ -69,22 +69,33 @@ pub(crate) fn adjust_offset_for_line_insert(
 }
 
 pub(crate) fn heading_level_at(text: &str, line_start: usize) -> Option<u8> {
-    let marker_len = heading_marker_len_at(text, line_start);
-    (marker_len > 0).then(|| (marker_len - 1) as u8)
+    atx_heading_parts_at(text, line_start).map(|(level, _)| level)
 }
 
 pub(crate) fn heading_marker_len_at(text: &str, line_start: usize) -> usize {
+    atx_heading_parts_at(text, line_start).map_or(0, |(_, marker_len)| marker_len)
+}
+
+fn atx_heading_parts_at(text: &str, line_start: usize) -> Option<(u8, usize)> {
     let line_end = text[line_start..]
         .find('\n')
         .map_or(text.len(), |line_end| line_start + line_end);
     let line = &text[line_start..line_end];
-    let hash_count = line.bytes().take_while(|byte| *byte == b'#').count();
-
-    if (1..=6).contains(&hash_count) && line.as_bytes().get(hash_count) == Some(&b' ') {
-        hash_count + 1
-    } else {
-        0
+    let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indent > 3 {
+        return None;
     }
+    let hash_count = line
+        .bytes()
+        .skip(indent)
+        .take_while(|byte| *byte == b'#')
+        .count();
+    if !(1..=6).contains(&hash_count)
+        || !matches!(line.as_bytes().get(indent + hash_count), Some(b' ' | b'\t'))
+    {
+        return None;
+    }
+    Some((hash_count as u8, indent + hash_count + 1))
 }
 
 pub(crate) fn selected_line_starts(text: &str, range: std::ops::Range<usize>) -> Vec<usize> {
@@ -207,6 +218,9 @@ pub(crate) fn ordered_list_marker(rest: &str) -> Option<String> {
         .take_while(|(_, ch)| ch.is_ascii_digit())
         .map(|(index, ch)| index + ch.len_utf8())
         .last()?;
+    if digit_end > 9 {
+        return None;
+    }
     let number = rest[..digit_end].parse::<u64>().ok()?;
     let delimiter = rest[digit_end..].chars().next()?;
     if !matches!(delimiter, '.' | ')') {
@@ -277,7 +291,7 @@ pub(crate) fn list_marker_at(line: &str) -> Option<ListMarker> {
         .bytes()
         .take_while(|byte| byte.is_ascii_digit())
         .count();
-    if digits > 0
+    if (1..=9).contains(&digits)
         && matches!(rest.as_bytes().get(digits), Some(b'.' | b')'))
         && rest.as_bytes().get(digits + 1) == Some(&b' ')
     {
@@ -314,6 +328,9 @@ fn empty_ordered_marker(rest: &str) -> bool {
     else {
         return false;
     };
+    if digit_end > 9 {
+        return false;
+    }
     let Some(delimiter) = rest[digit_end..].chars().next() else {
         return false;
     };

@@ -1712,7 +1712,7 @@ mod tests {
         assert_eq!(&document.text()[opening_fence], "```");
         assert_eq!(&document.text()[info_range.unwrap()], "rust extra");
         assert_eq!(&document.text()[info.source_range], "rust");
-        assert_eq!(&document.text()[payload.source_range], "let 名称 = 1;\n");
+        assert_eq!(&document.text()[payload.source_range], "let 名称 = 1;");
         assert_eq!(&document.text()[closing_fence], "```");
     }
 

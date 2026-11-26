@@ -4801,6 +4801,48 @@ fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn issue_86_shortcut_reset_clears_default_key_conflicts(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let preferences_path = dir.path().join("config.toml");
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.preferences_path = preferences_path.clone();
+        app.language = Language::En;
+        app.shortcut_overrides.clear();
+        app.shortcut_overrides
+            .insert("bold".into(), "ctrl-alt-b".into());
+        app.shortcut_overrides
+            .insert("italic".into(), "ctrl-b".into());
+        app.rebind_keys(cx);
+        assert_eq!(
+            app.shortcut_assignment_error("bold", "ctrl-b"),
+            Some(ShortcutCaptureError::Conflict("Italic".into()))
+        );
+        app.reset_shortcut("bold", cx);
+        assert!(app.shortcut_overrides.is_empty());
+        assert_eq!(app.shortcut_assignment_error("bold", "ctrl-b"), None);
+        assert_eq!(app.shortcut_assignment_error("italic", "ctrl-i"), None);
+    });
+    let saved = load_app_preferences(&preferences_path).unwrap();
+    assert!(saved.shortcut_overrides.is_empty());
+}
+
+#[gpui::test]
+fn issue_87_ctrl_left_is_reserved_for_word_navigation(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        app.language = Language::En;
+        app.shortcut_overrides.clear();
+        assert!(matches!(
+            app.shortcut_assignment_error("bold", "ctrl-left"),
+            Some(ShortcutCaptureError::Conflict(_))
+        ));
+        assert_eq!(app.shortcut_assignment_error("bold", "ctrl-b"), None);
+        assert!(app.shortcut_overrides.is_empty());
+    });
+}
+
+#[gpui::test]
 fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -4858,6 +4900,63 @@ fn stable_visual_inline_preference_toggle_reflects_state_without_editing_documen
         assert_eq!(
             app.status,
             t(app.language, Msg::StatusStableVisualInlineOff)
+        );
+    });
+}
+
+#[gpui::test]
+fn issue_83_url_only_edits_preserve_authored_label_escapes(cx: &mut TestAppContext) {
+    let source = r#"Read [Rate \*per day\*](old.md "Notes") today."#;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let cursor = source.find("te").unwrap();
+        app.open_link_editor_at(cursor, cx);
+        app.link_editor.as_mut().unwrap().url = "new.md".into();
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.confirm_link_editor(window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"Read [Rate \*per day\*](new.md "Notes") today."#
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.open_link_editor_at(source.find("te").unwrap(), cx);
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.confirm_link_editor(window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"Read [Rate \*per day\*](new.md "Notes") today."#
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            r#"![Look for \*here\*](old%20map.png)"#,
+        ))];
+        app.active_tab = 0;
+        app.open_image_properties_at(0, cx);
+        app.link_editor.as_mut().unwrap().title = "Later".into();
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.confirm_link_editor(window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"![Look for \*here\*](old%20map.png "Later")"#
         );
     });
 }
@@ -6536,6 +6635,38 @@ fn set_view_mode_no_ops_non_source_targets_for_data_documents(cx: &mut TestAppCo
         app.open_in_new_tab(MarkdownDocument::new(), cx);
         assert_eq!(app.rendered_view_mode(), ViewMode::Split);
     });
+}
+
+#[gpui::test]
+fn issue_65_data_view_shortcuts_preserve_markdown_mode(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("config.json");
+    fs::write(&json, "{\"a\": 1}\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    for stored in [ViewMode::Split, ViewMode::VisualEdit, ViewMode::Read] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+                app.active_tab = 0;
+                app.set_view_mode(stored, cx);
+                app.open_in_new_tab(MarkdownDocument::open(&json).unwrap(), cx);
+                assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+
+                app.toggle_source_split_mode(&ToggleSourceSplitMode, window, cx);
+                assert_eq!(app.view_mode, stored);
+                assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+                app.toggle_view_mode(&ToggleViewMode, window, cx);
+                assert_eq!(app.view_mode, stored);
+                assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+                app.set_view_mode(ViewMode::Edit, cx);
+                assert_eq!(app.view_mode, stored);
+
+                app.active_tab = 0;
+                assert_eq!(app.rendered_view_mode(), stored);
+            });
+        });
+    }
 }
 
 #[test]
@@ -9077,12 +9208,12 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
             .visual_last_projection
             .as_ref()
             .expect("code payload projection");
-        assert_eq!(projection, "let 名称 = 1;\n");
+        assert_eq!(projection, "let 名称 = 1;");
         assert!(revealed.is_empty());
         assert!(
             app.highlight_cache
                 .borrow()
-                .contains_key(&(Some("rust".into()), "let 名称 = 1;\n".into()))
+                .contains_key(&(Some("rust".into()), "let 名称 = 1;".into()))
         );
     });
 
@@ -10376,6 +10507,92 @@ fn visual_edit_navigation_follows_wrapped_lines_without_reparsing(cx: &mut TestA
 }
 
 #[gpui::test]
+fn issue_99_visual_end_stops_before_soft_line_break(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("Alpha\nBeta\n"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let snapshot = app
+            .active_tab()
+            .visual_navigation_snapshots
+            .get(&0)
+            .unwrap();
+        assert_eq!(snapshot.line_index_for_source(1), Some(0));
+        assert_eq!(snapshot.line_boundary_source(0, true), Some(5));
+    });
+    cx.dispatch_action(End);
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), 5));
+    cx.simulate_input("!");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Alpha!\nBeta\n");
+        app.active_tab_mut().document.set_text("Alpha\nBeta\n");
+        app.active_tab_mut().selected_range = 1..1;
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(SelectEnd);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 1..5)
+    });
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Ax\nBeta\n")
+    });
+}
+
+#[gpui::test]
+fn issue_101_visual_delete_and_empty_code_typing_keep_fences_closed(cx: &mut TestAppContext) {
+    let source = "Before.\n\n```python\nprint(1)\n```\n\nAfter.\n";
+    let cursor = source.find("print(1)").unwrap() + "print(1)".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(Delete);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        app.active_tab_mut()
+            .document
+            .set_text("```python\n```\n\nAfter.\n");
+        app.active_tab_mut().selected_range = 10..10;
+    });
+    cx.run_until_parked();
+    cx.simulate_input("pass");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```python\npass\n```\n\nAfter.\n"
+        );
+        assert_eq!(app.cursor_offset(), 14);
+    });
+}
+
+#[gpui::test]
 fn visual_navigation_line_windows_walk_wrapped_lines_both_ways(cx: &mut TestAppContext) {
     let source = (0..160)
         .map(|index| format!("word{index} "))
@@ -10783,6 +11000,113 @@ fn visual_edit_reuses_focused_large_document_row_after_early_edit(cx: &mut TestA
 }
 
 #[gpui::test]
+fn issue_89_undo_restores_collapsed_caret_before_single_delete(cx: &mut TestAppContext) {
+    for mode in [ViewMode::Edit, ViewMode::VisualEdit] {
+        for backward in [false, true] {
+            let (app, cx) = cx.add_window_view(|_, cx| {
+                let mut app = MarkionApp::new(cx);
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("AqB"))];
+                app.view_mode = mode;
+                app.active_tab_mut().selected_range = if backward { 2..2 } else { 1..1 };
+                app
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    if backward {
+                        app.backspace(&Backspace, window, cx);
+                    } else {
+                        app.delete(&Delete, window, cx);
+                    }
+                    assert_eq!(app.active_tab().document.text(), "AB");
+                    app.undo(&Undo, window, cx);
+                    assert_eq!(app.active_tab().document.text(), "AqB");
+                    assert_eq!(
+                        app.active_tab().selected_range,
+                        if backward { 2..2 } else { 1..1 }
+                    );
+                    EntityInputHandler::replace_text_in_range(app, None, "X", window, cx);
+                    assert_eq!(
+                        app.active_tab().document.text(),
+                        if backward { "AqXB" } else { "AXqB" }
+                    );
+                });
+            });
+        }
+    }
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("AqB"))];
+        app.active_tab_mut().selected_range = 1..2;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.delete(&Delete, window, cx);
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().selected_range, 1..2);
+            EntityInputHandler::replace_text_in_range(app, None, "X", window, cx);
+            assert_eq!(app.active_tab().document.text(), "AXB");
+        });
+    });
+}
+
+#[gpui::test]
+fn issue_97_cut_and_selection_delete_preserve_unselected_closer(cx: &mut TestAppContext) {
+    for mode in [ViewMode::Edit, ViewMode::VisualEdit] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.markdown_auto_pair = true;
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("Use f() here."))];
+            app.view_mode = mode;
+            app.active_tab_mut().selected_range = 5..6;
+            app
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.cut(&Cut, window, cx);
+                assert_eq!(app.active_tab().document.text(), "Use f) here.");
+                assert_eq!(
+                    cx.read_from_clipboard().and_then(|item| item.text()),
+                    Some("(".into())
+                );
+                app.undo(&Undo, window, cx);
+                assert_eq!(app.active_tab().document.text(), "Use f() here.");
+                assert_eq!(app.active_tab().selected_range, 5..6);
+            });
+        });
+    }
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.markdown_auto_pair = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("Order [] now."))];
+        app.active_tab_mut().selected_range = 6..7;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.delete(&Delete, window, cx);
+            assert_eq!(app.active_tab().document.text(), "Order ] now.");
+        });
+    });
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.markdown_auto_pair = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("f()"))];
+        app.active_tab_mut().selected_range = 2..2;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.backspace(&Backspace, window, cx);
+            assert_eq!(app.active_tab().document.text(), "f");
+        });
+    });
+}
+
+#[gpui::test]
 fn visual_edit_structural_backspace_is_one_undoable_tab_local_edit(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -10970,6 +11294,8 @@ fn markdown_auto_pair_inserts_wraps_skips_and_unwraps(cx: &mut TestAppContext) {
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("**"))];
         app.active_tab = 0;
         app.active_tab_mut().selected_range = 1..1;
+        app.document_input_target = None;
+        app.ime_input_target = None;
     });
     cx.dispatch_action(Backspace);
     app.update(cx, |app, _| {
@@ -11176,6 +11502,42 @@ fn visual_edit_task_checkbox_click_toggles_and_undoes(cx: &mut TestAppContext) {
         app.toggle_visual_task_checkbox(0, cx);
         assert_eq!(app.active_tab().document.text(), "- [ ] done");
     });
+}
+
+#[gpui::test]
+fn issue_69_nested_quote_checkboxes_accept_extra_marker_spacing(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for ending in ["\n", "\r\n"] {
+        let source = ["Away", "", ">  > - [ ] Send", ">  > - [X] File"].join(ending);
+        let (send, file) = app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            let blocks = app.active_tab().document.visual_blocks_shared();
+            let find = |needle: &str| {
+                blocks
+                    .iter()
+                    .position(|block| {
+                        matches!(block.kind, VisualBlockKind::ListItem { .. })
+                            && source[block.source_range.clone()].contains(needle)
+                    })
+                    .unwrap()
+            };
+            (find("Send"), find("File"))
+        });
+        app.update(cx, |app, cx| {
+            app.toggle_visual_task_checkbox(send, cx);
+            app.toggle_visual_task_checkbox(file, cx);
+            assert_eq!(
+                app.active_tab().document.text(),
+                source
+                    .replacen("[ ] Send", "[x] Send", 1)
+                    .replacen("[X] File", "[ ] File", 1)
+            );
+            assert_eq!(app.active_tab().undo_stack.len(), 2);
+        });
+    }
 }
 
 #[gpui::test]
@@ -13376,6 +13738,38 @@ fn read_mode_does_not_register_an_editable_input_surface(cx: &mut TestAppContext
     });
 }
 
+#[gpui::test]
+fn issue_90_read_find_field_accepts_typed_query(cx: &mut TestAppContext) {
+    let source = "local note\n\n**Keep** this line.\n\nKeep the copy.";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Read;
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(600.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    for letter in ["K", "e", "e", "p"] {
+        cx.simulate_input(letter);
+    }
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.search_query.buffer, "Keep");
+        assert_eq!(app.search_matches.len(), 2);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(!app.active_tab().is_dirty());
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
 #[test]
 fn custom_theme_palette_uses_definition_colors() {
     let theme = ThemeDefinition {
@@ -14092,11 +14486,39 @@ fn discard_confirmation_is_scoped_to_dirty_document_tabs() {
     assert!(!image.requires_discard_confirmation());
 }
 
-#[test]
-fn image_scale_down_fit_preserves_aspect_ratio_without_upscaling() {
-    assert_eq!(scale_down_image_size(200, 100, 100.0, 80.0), (100.0, 50.0));
-    assert_eq!(scale_down_image_size(40, 20, 100.0, 80.0), (40.0, 20.0));
-    assert_eq!(scale_down_image_size(40, 200, 100.0, 80.0), (16.0, 80.0));
+#[gpui::test]
+fn issue_104_image_reflow_fits_open_tab_rename_prompt(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("portrait.png");
+    write_solid_png(&image_path, 144, 640, [20, 40, 60, 255]);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.sidebar_visible = false;
+        app.open_supported_path(image_path.clone(), OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        app
+    });
+    cx.update(|window, _| window.resize(size(px(520.), px(360.))));
+    cx.run_until_parked();
+    let initial_surface = cx.debug_bounds("image-tab-surface").unwrap();
+    let initial_image = cx.debug_bounds("image-tab-bitmap").unwrap();
+    assert!(initial_image.size.height <= initial_surface.size.height);
+
+    app.update(cx, |app, cx| {
+        app.pending_name_input = Some(PendingNameInput::new(
+            PendingNameKind::Rename,
+            dir.path().to_path_buf(),
+            Some(image_path.clone()),
+            "portrait.png",
+        ));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let resized_surface = cx.debug_bounds("image-tab-surface").unwrap();
+    let resized_image = cx.debug_bounds("image-tab-bitmap").unwrap();
+    assert!(resized_surface.size.height < initial_surface.size.height);
+    assert!(resized_image.size.height <= resized_surface.size.height);
+    assert!(resized_image.size.width <= resized_surface.size.width);
 }
 
 #[gpui::test]
@@ -15210,6 +15632,36 @@ fn outline_fold_reconciliation_survives_offsets_and_drops_obsolete_keys() {
 }
 
 #[test]
+fn issue_64_unrelated_heading_edit_preserves_parent_fold() {
+    let original = vec![
+        outline_heading(1, "Archive", 0),
+        outline_heading(2, "Notes", 10),
+        outline_heading(1, "Draft", 20),
+    ];
+    let original_keys = outline_node_keys(&original);
+    let mut collapsed = HashSet::from([original_keys[0].clone()]);
+    let renamed = vec![
+        outline_heading(1, "Archive", 0),
+        outline_heading(2, "Notes", 10),
+        outline_heading(1, "Published", 20),
+    ];
+    let renamed_keys = outline_node_keys(&renamed);
+
+    reconcile_outline_collapsed_keys(&mut collapsed, &original_keys, &renamed_keys);
+    assert_eq!(collapsed, HashSet::from([renamed_keys[0].clone()]));
+    let projection = project_outline_rows(&renamed, &collapsed, None);
+    assert_eq!(
+        projection
+            .rows
+            .iter()
+            .map(|row| row.outline_index)
+            .collect::<Vec<_>>(),
+        [0, 2]
+    );
+    assert!(projection.rows[0].collapsed);
+}
+
+#[test]
 fn outline_fold_reconciliation_is_conservative_for_changed_duplicates() {
     let duplicates = vec![
         outline_heading(1, "Same", 0),
@@ -15560,6 +16012,43 @@ fn hash_link_activation_jumps_without_mutating_or_opening_url(cx: &mut TestAppCo
         assert_eq!(tab.document.version(), version);
         assert_eq!(tab.document.text(), source);
     });
+}
+
+#[gpui::test]
+fn issue_95_footnote_navigation_and_lookup_ignore_label_case(cx: &mut TestAppContext) {
+    for (reference, definition) in [("BLUE", "blue"), ("Blue", "BLUE")] {
+        let source = format!("Notes.\n\n[^{reference}] cited.\n\n[^{definition}]: Cobalt chorus.");
+        let definition_offset = source.find(&format!("[^{definition}]:")).unwrap();
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            app
+        });
+        app.update(cx, |app, cx| {
+            let version = app.active_tab().document.version();
+            app.activate_visual_navigation(
+                &VisualNavigationTarget::Footnote {
+                    label: reference.into(),
+                },
+                cx,
+            );
+            assert_eq!(
+                app.active_tab().selected_range,
+                definition_offset..definition_offset
+            );
+            assert_eq!(
+                app.active_tab()
+                    .document
+                    .footnote_definition_text(reference),
+                Some("Cobalt chorus.".into())
+            );
+            assert_eq!(app.active_tab().document.text(), source);
+            assert_eq!(app.active_tab().document.version(), version);
+            assert!(app.active_tab().undo_stack.is_empty());
+        });
+    }
 }
 
 #[gpui::test]
@@ -17379,6 +17868,54 @@ fn session_restore_skips_missing_paths_and_untitled_tabs() {
 
     assert!(session_open_files_from_paths([None, Some(existing.as_path())]).len() == 1);
     assert!(session_open_files_from_paths([None::<&Path>, None]).is_empty());
+}
+
+#[gpui::test]
+fn issue_79_session_restore_preserves_recent_files(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let alpha = dir.path().join("alpha.md");
+    let beta = dir.path().join("beta.md");
+    fs::write(&alpha, "Alpha: first note.").unwrap();
+    fs::write(&beta, "Beta: second note.").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.session_path = dir.path().join("session.toml");
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.session.clear_recent();
+        app.session.touch_recent(comparable_document_path(&beta));
+        app.session.touch_recent(comparable_document_path(&alpha));
+        app.session.workspace_root = Some(dir.path().to_path_buf());
+        app.session.open_files = vec![alpha.clone(), beta.clone()];
+        app.session.active_file = Some(alpha.clone());
+        app.restore_session_on_startup(&StartupOpenIntent::None, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+        assert_eq!(
+            app.session.recent_files,
+            vec![
+                comparable_document_path(&alpha),
+                comparable_document_path(&beta),
+            ]
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.session.clear_recent();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+        app.active_tab = 0;
+        app.restore_session_on_startup(&StartupOpenIntent::None, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.session.recent_files.is_empty());
+    });
 }
 
 #[test]
@@ -20159,6 +20696,96 @@ fn pasted_plain_text_clipboard_still_pastes_verbatim(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_67_paste_never_applies_typing_transforms(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.markdown_auto_pair = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("A word B"))];
+        app
+    });
+
+    for (source, selection, pasted, expected, plain) in [
+        ("A word B", 2..6, "[", "A [ B", true),
+        ("A word B", 2..6, "[", "A [ B", false),
+        ("A  B", 2..2, "[", "A [ B", true),
+        ("A ] B", 2..2, "]", "A ]] B", true),
+        (
+            "See www.example.com more",
+            19..19,
+            " ",
+            "See www.example.com  more",
+            true,
+        ),
+    ] {
+        app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = selection;
+        });
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(pasted.to_string()));
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                if plain {
+                    app.paste_plain_text(&PastePlainText, window, cx);
+                } else {
+                    app.paste(&Paste, window, cx);
+                }
+                assert_eq!(app.active_tab().document.text(), expected);
+                assert_eq!(app.active_tab().undo_stack.len(), 1);
+            });
+        });
+    }
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("A word B"))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 2..6;
+            EntityInputHandler::replace_text_in_range(app, None, "[", window, cx);
+            assert_eq!(app.active_tab().document.text(), "A [word] B");
+        });
+    });
+}
+
+#[gpui::test]
+fn issue_73_rich_text_paste_preserves_formatted_separator_space(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "New note".to_string(),
+            "<p><strong>New </strong>note</p>".to_string(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.paste(&Paste, window, cx);
+            assert_eq!(app.active_tab().document.text(), "**New** note");
+            let blocks = app.active_tab().document.preview_blocks();
+            assert!(blocks.iter().any(|block| match block {
+                PreviewBlock::Paragraph { text, .. } => {
+                    text.text == "New note"
+                        && text
+                            .spans
+                            .iter()
+                            .any(|span| span.text == "New" && span.style.bold)
+                }
+                _ => false,
+            }));
+            assert!(app.active_tab_mut().apply_undo());
+            assert_eq!(app.active_tab().document.text(), "");
+            app.paste_plain_text(&PastePlainText, window, cx);
+            assert_eq!(app.active_tab().document.text(), "New note");
+        });
+    });
+}
+
+#[gpui::test]
 fn pasted_clipboard_html_with_empty_conversion_falls_back_to_plain_text(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -21520,7 +22147,7 @@ fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
         app.schedule_autosave(cx);
         let generation = app.active_tab().autosave_generation;
         let recovery_dir = app.recovery_dir.clone();
-        app.run_due_autosave(0, generation, recovery_dir, cx);
+        app.run_due_autosave(app.active_tab().recovery_id, generation, recovery_dir, cx);
         assert!(app.active_tab().autosave_in_flight);
     });
     cx.run_until_parked();
@@ -21531,6 +22158,75 @@ fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
         assert_eq!(app.active_tab().last_recovery_file, None);
     });
     assert_eq!(fs::read_to_string(&path).unwrap(), "v2");
+}
+
+fn issue_58_left_close_preserves_pending_autosave(silent_save: bool, cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let alpha = dir.path().join("alpha.md");
+    let beta = dir.path().join("beta.md");
+    let recovery_dir = dir.path().join("recovery");
+    fs::write(&alpha, "Alpha notes").unwrap();
+    fs::write(&beta, "Beta notes").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences = AutoSavePreferences {
+            enabled: true,
+            silent_save,
+            delay_secs: 1,
+        };
+        app.recovery_dir = recovery_dir.clone();
+        app.session_path = dir.path().join("session.toml");
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&alpha).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&beta).unwrap()),
+        ];
+        app.active_tab = 1;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("Beta notes?");
+        app.schedule_autosave(cx);
+        let recovery_id = app.active_tab().recovery_id;
+        let generation = app.active_tab().autosave_generation;
+        app.active_tab = 0;
+        app.close_tab_confirmed(cx);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+        assert!(app.active_tab().is_dirty());
+        app.run_due_autosave(recovery_id, generation, recovery_dir.clone(), cx);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+        assert_eq!(app.active_tab().document.text(), "Beta notes?");
+        assert_eq!(app.active_tab().is_dirty(), !silent_save);
+        if silent_save {
+            assert!(app.active_tab().last_recovery_file.is_none());
+        } else {
+            let recovery = app.active_tab().last_recovery_file.as_ref().unwrap();
+            assert_eq!(load_recovery_file(recovery).unwrap().text, "Beta notes?");
+        }
+    });
+    assert_eq!(
+        fs::read_to_string(beta).unwrap(),
+        if silent_save {
+            "Beta notes?"
+        } else {
+            "Beta notes"
+        }
+    );
+}
+
+#[gpui::test]
+fn issue_58_left_close_preserves_pending_silent_autosave(cx: &mut TestAppContext) {
+    issue_58_left_close_preserves_pending_autosave(true, cx);
+}
+
+#[gpui::test]
+fn issue_58_left_close_preserves_pending_recovery_only(cx: &mut TestAppContext) {
+    issue_58_left_close_preserves_pending_autosave(false, cx);
 }
 
 #[gpui::test]
@@ -21556,7 +22252,12 @@ fn autosave_silent_save_off_keeps_named_file_and_recovery(cx: &mut TestAppContex
         app.active_tab_mut().document.set_text("in-memory");
         app.schedule_autosave(cx);
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
     });
     cx.run_until_parked();
 
@@ -21596,7 +22297,12 @@ fn issue_28_retained_untitled_recovery_survives_restart_and_new_autosave(cx: &mu
             .document
             .set_text("# New grocery draft");
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
         (retained, retained_bytes)
     });
     cx.run_until_parked();
@@ -21609,7 +22315,12 @@ fn issue_28_retained_untitled_recovery_survives_restart_and_new_autosave(cx: &mu
             .document
             .set_text("# New grocery draft updated");
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
         snapshot
     });
     cx.run_until_parked();
@@ -21792,7 +22503,12 @@ fn issue_29_explicit_save_cancels_an_autosave_before_it_starts(cx: &mut TestAppC
     app.update(cx, |app, cx| {
         app.active_tab_mut().document.set_text("older autosave");
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, app.recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            app.recovery_dir.clone(),
+            cx,
+        );
         assert!(app.active_tab().autosave_in_flight);
         app.active_tab_mut().document.set_text("newer manual text");
         assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
@@ -21839,7 +22555,12 @@ fn discard_during_in_flight_autosave_writes_nothing(silent_save: bool, cx: &mut 
         app.active_tab_mut().document.set_text("discarded");
         app.schedule_autosave(cx);
         let generation = app.active_tab().autosave_generation;
-        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        app.run_due_autosave(
+            app.active_tab().recovery_id,
+            generation,
+            recovery_dir.clone(),
+            cx,
+        );
         assert!(app.active_tab().autosave_in_flight);
         app.close_tab_confirmed(cx);
         assert_eq!(app.tabs.len(), 1);
@@ -23666,6 +24387,33 @@ fn tab_context_close_tab_switches_then_closes_clicked_tab(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn issue_96_escape_dismisses_background_tab_context_menu(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("alpha")),
+            EditorTab::new(MarkdownDocument::from_text("bravo")),
+        ];
+        app.active_tab = 0;
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+            assert!(app.tab_context_menu.is_some());
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+            assert!(app.tab_context_menu.is_none());
+            assert_eq!(app.active_tab, 0);
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+            assert_eq!(app.tabs.len(), 2);
+            assert_eq!(app.tabs[0].document.text(), "alpha");
+            assert_eq!(app.tabs[1].document.text(), "bravo");
+        });
+    });
+}
+
+#[gpui::test]
 fn close_other_tabs_cleans_silently_keeps_dirty_behind_dialog(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -23734,6 +24482,7 @@ fn close_other_tabs_cleans_silently_keeps_dirty_behind_dialog(cx: &mut TestAppCo
     app.update(cx, |app, _| {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.active_tab().document.text(), "A");
+        assert!(app.status.is_empty(), "discard must clear pending status");
     });
 }
 
@@ -23950,6 +24699,150 @@ fn file_tree_rename_unchanged_name_preserves_file_and_open_tab(cx: &mut TestAppC
         assert_eq!(app.active_tab().path(), Some(path.as_path()));
         assert_eq!(app.active_tab().document.text(), "# Ledger\n\nBalance: 42");
         assert_eq!(app.selected_tree_path.as_deref(), Some(path.as_path()));
+    });
+}
+
+#[gpui::test]
+fn issue_57_background_dirty_tab_refuses_file_tree_rename(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let daily = root.join("daily.md");
+    let other = root.join("other.md");
+    fs::write(&daily, "saved line").unwrap();
+    fs::write(&other, "other note").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&daily).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&other).unwrap()),
+        ];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.push_undo_snapshot();
+        app.active_tab_mut().document.insert(0, "Keep this draft: ");
+        app.active_tab = 1;
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.active_tab().path(), Some(other.as_path()));
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::File(daily.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            app.pending_name_input.as_mut().unwrap().buffer = "renamed.md".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, t(app.language, Msg::StatusSaveBeforeRename));
+        assert_eq!(app.active_tab, 0);
+        assert!(daily.exists());
+        assert!(!root.join("renamed.md").exists());
+        assert_eq!(fs::read_to_string(&daily).unwrap(), "saved line");
+        assert_eq!(fs::read_to_string(&other).unwrap(), "other note");
+        assert_eq!(app.tabs[0].path(), Some(daily.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "Keep this draft: saved line");
+        assert!(app.tabs[0].is_dirty());
+        assert_eq!(app.tabs[0].undo_stack.len(), 1);
+        assert_eq!(app.tabs[1].document.text(), "other note");
+        assert!(!app.tabs[1].is_dirty());
+    });
+}
+
+#[gpui::test]
+fn issue_61_folder_rename_remaps_descendants_and_protects_dirty(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let plans = root.join("Plans");
+    let daily = plans.join("daily.md");
+    let nested = plans.join("sub/index.md");
+    let outside = root.join("outside.md");
+    fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    fs::write(&daily, "saved line").unwrap();
+    fs::write(&nested, "nested note").unwrap();
+    fs::write(&outside, "other note").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&daily).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&nested).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&outside).unwrap()),
+        ];
+        app.active_tab = 2;
+        app.workspace_root = root.clone();
+        app.session_path = root.join("session.toml");
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::Directory(plans.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            app.pending_name_input.as_mut().unwrap().buffer = "Archive".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+
+    let archive = root.join("Archive");
+    let moved_daily = archive.join("daily.md");
+    let moved_nested = archive.join("sub/index.md");
+    app.update(cx, |app, _| {
+        assert!(!plans.exists());
+        assert_eq!(app.tabs[0].path(), Some(moved_daily.as_path()));
+        assert_eq!(app.tabs[1].path(), Some(moved_nested.as_path()));
+        assert_eq!(app.tabs[2].path(), Some(outside.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "saved line");
+        assert_eq!(app.tabs[1].document.text(), "nested note");
+        let end = app.tabs[0].document.text().len();
+        app.tabs[0].document.insert(end, " + draft");
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+        assert_eq!(
+            fs::read_to_string(&moved_daily).unwrap(),
+            "saved line + draft"
+        );
+        assert!(!plans.exists());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "other note");
+
+        app.active_tab = 0;
+        app.push_undo_snapshot();
+        let end = app.active_tab().document.text().len();
+        app.active_tab_mut().document.insert(end, " unsaved");
+        app.active_tab = 2;
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::Directory(archive.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            app.pending_name_input.as_mut().unwrap().buffer = "Other".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, t(app.language, Msg::StatusSaveBeforeRename));
+        assert_eq!(app.active_tab, 0);
+        assert!(archive.exists());
+        assert!(!root.join("Other").exists());
+        assert_eq!(app.tabs[0].path(), Some(moved_daily.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "saved line + draft unsaved");
+        assert!(app.tabs[0].is_dirty());
+        assert_eq!(app.tabs[0].undo_stack.len(), 1);
     });
 }
 
@@ -24778,6 +25671,143 @@ fn search_navigation_wraps_and_read_mode_gates_replacement_without_losing_state(
 }
 
 #[gpui::test]
+fn issue_59_read_mode_document_edit_actions_are_inert(cx: &mut TestAppContext) {
+    #[derive(Clone, Copy)]
+    enum Action {
+        Cut,
+        Paste,
+        PastePlain,
+        Delete,
+        Backspace,
+        Bold,
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("read-only.md");
+    let source = "local note\n\nKeep this line.";
+    fs::write(&path, source).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+
+    cx.update(|window, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("SWAPPED".to_string()));
+        app.update(cx, |app, cx| {
+            for selected in [0..10, 0..0] {
+                for action in [
+                    Action::Cut,
+                    Action::Paste,
+                    Action::PastePlain,
+                    Action::Delete,
+                    Action::Backspace,
+                    Action::Bold,
+                ] {
+                    app.tabs[0] = EditorTab::new(MarkdownDocument::open(&path).unwrap());
+                    app.view_mode = ViewMode::Read;
+                    app.active_tab_mut().selected_range = selected.clone();
+                    let version = app.active_tab().document.version();
+                    match action {
+                        Action::Cut => app.cut(&Cut, window, cx),
+                        Action::Paste => app.paste(&Paste, window, cx),
+                        Action::PastePlain => app.paste_plain_text(&PastePlainText, window, cx),
+                        Action::Delete => app.delete(&Delete, window, cx),
+                        Action::Backspace => app.backspace(&Backspace, window, cx),
+                        Action::Bold => app.bold(&Bold, window, cx),
+                    }
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert_eq!(app.active_tab().document.version(), version);
+                    assert!(!app.active_tab().is_dirty());
+                    assert!(app.active_tab().undo_stack.is_empty());
+                }
+            }
+            app.search_visible = true;
+            app.search_focus = Some(SearchField::Find);
+            app.search_control_focus = Some(SearchOverlayControl::FindField);
+            app.search_query.set_text("find");
+            app.paste(&Paste, window, cx);
+            assert!(app.search_query.buffer.contains("SWAPPED"));
+            assert_eq!(app.active_tab().document.text(), source);
+            assert!(!app.active_tab().is_dirty());
+        });
+    });
+    assert_eq!(fs::read_to_string(path).unwrap(), source);
+}
+
+#[gpui::test]
+fn issue_70_closed_find_previous_steps_backward_from_current_position(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for (source, query, caret, expected) in [
+        ("red sun, blue sun, gold sun.", "sun", 28, 24..27),
+        ("red sun, blue sun, gold sun.", "sun", 8, 4..7),
+        ("甲灯 / 乙灯 / 丙灯", "灯", 0, 21..24),
+    ] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+                app.active_tab = 0;
+                app.active_tab_mut().selected_range = caret..caret;
+                app.search_query.set_text(query);
+                app.search_visible = false;
+                app.search_generation = None;
+                app.current_search_index = None;
+                let version = app.active_tab().document.version();
+                app.find_previous(&FindPrevious, window, cx);
+                assert_eq!(app.active_tab().selected_range, expected);
+                assert_eq!(app.active_tab().document.text(), source);
+                assert_eq!(app.active_tab().document.version(), version);
+            });
+        });
+    }
+}
+
+#[gpui::test]
+fn issue_71_noop_find_field_deletions_preserve_current_match(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for (source, query) in [
+        ("red sun, blue sun, gold sun.", "sun"),
+        ("甲灯 / 乙灯 / 丙灯", "灯"),
+    ] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+                app.active_tab = 0;
+                app.search_visible = true;
+                app.search_focus = Some(SearchField::Find);
+                app.search_control_focus = Some(SearchOverlayControl::FindField);
+                app.search_query.set_text(query);
+                app.search_generation = None;
+                app.refresh_search_matches();
+                app.select_search_match(0, cx);
+                app.search_query.move_caret(SearchCaretMove::Home);
+                let selected = app.active_tab().selected_range.clone();
+                let current = app.current_search_index;
+                let generation = app.search_generation.clone();
+                let version = app.active_tab().document.version();
+
+                for _ in 0..3 {
+                    app.backspace(&Backspace, window, cx);
+                    assert_eq!(app.search_query.buffer, query);
+                    assert_eq!(app.active_tab().selected_range, selected);
+                    assert_eq!(app.current_search_index, current);
+                    assert_eq!(app.search_generation, generation);
+                    assert_eq!(app.active_tab().document.version(), version);
+                    assert!(app.active_tab().undo_stack.is_empty());
+                }
+                app.search_query.move_caret(SearchCaretMove::End);
+                app.delete(&Delete, window, cx);
+                assert_eq!(app.search_query.buffer, query);
+                assert_eq!(app.active_tab().selected_range, selected);
+                assert_eq!(app.current_search_index, current);
+                assert_eq!(app.search_generation, generation);
+            });
+        });
+    }
+}
+
+#[gpui::test]
 fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_states(
     cx: &mut TestAppContext,
 ) {
@@ -24841,6 +25871,39 @@ fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_state
     cx.run_until_parked();
     assert!(cx.debug_bounds("search-read-guidance").is_some());
     app.update(cx, |app, _| assert!(!app.replace_visible));
+}
+
+#[gpui::test]
+fn issue_91_file_tree_summary_counts_only_visible_files(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("EmptyShelf")).unwrap();
+    fs::create_dir_all(root.join("Notes")).unwrap();
+    fs::write(root.join("start.md"), "start").unwrap();
+    fs::write(root.join("Notes/a.md"), "a").unwrap();
+    fs::write(root.join("Notes/b.md"), "b").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.to_path_buf();
+        app.file_tree = Some(FileTree::scan(root).unwrap());
+        app.collapsed_tree_paths = HashSet::from([root.join("Notes")]);
+        app
+    });
+
+    app.update(cx, |app, _| {
+        app.file_tree_query = "emptyshelf".into();
+        assert_eq!(app.file_tree_summary(), "0 file matches");
+        app.file_tree_query.clear();
+        assert_eq!(app.file_tree_summary(), "1 files visible");
+
+        app.file_tree_query = "a.md".into();
+        assert_eq!(app.file_tree_summary(), "1 file matches");
+        app.file_tree_query.clear();
+        assert_eq!(app.file_tree_summary(), "1 files visible");
+        app.collapsed_tree_paths.clear();
+        assert_eq!(app.file_tree_summary(), "3 files visible");
+    });
 }
 
 #[test]
@@ -26638,16 +27701,17 @@ fn visual_nested_list_whitespace_enter_pointer_and_undo(cx: &mut TestAppContext)
                     let mut previous = before;
                     for step in 0..5 {
                         if step == 0 {
-                            let continuation = format!("\n{indent}- ");
+                            let continuation = format!("{eol}{indent}- ");
                             expected.insert_str(cursor, &continuation);
                             cursor += continuation.len();
                         } else if step == 1 {
-                            let start = head.len() + 1;
+                            let start = head.len() + eol.len();
                             expected.replace_range(start..cursor, "");
-                            cursor = start;
+                            expected.insert_str(start, eol);
+                            cursor = start + eol.len();
                         } else {
-                            expected.insert(cursor, '\n');
-                            cursor += 1;
+                            expected.insert_str(cursor, eol);
+                            cursor += eol.len();
                         }
                         cx.dispatch_action(InsertNewline);
                         cx.run_until_parked();
@@ -26758,7 +27822,7 @@ fn visual_list_enter_creates_visible_row_and_moves_caret(cx: &mut TestAppContext
         cx.run_until_parked();
         app.update(cx, |app, _| {
             let tab = app.active_tab();
-            assert_eq!(tab.document.text(), format!("{}\n{}", &source[..cursor], suffix));
+            assert_eq!(tab.document.text(), format!("{}\n\n{}", &source[..cursor], suffix));
             let after = tab.visual_caret_bounds.expect("caret after exiting list");
             assert!(after.top() > before.top() + px(5.), "exiting list lost row for {suffix:?}: {before:?} -> {after:?}; cursor {}; blocks {:?}", tab.cursor_offset(), tab.document.visual_blocks());
         });
@@ -26811,8 +27875,12 @@ fn visual_list_pointer_enter_exit_and_typing_keep_visible_caret(cx: &mut TestApp
                 });
                 cx.simulate_keystrokes("enter");
                 cx.run_until_parked();
-                let continued =
-                    format!("{}\n{}{}", &source[..cursor], next[item], &source[cursor..]);
+                let continued = format!(
+                    "{}{eol}{}{}",
+                    &source[..cursor],
+                    next[item],
+                    &source[cursor..]
+                );
                 app.update(cx, |app, _| {
                     let tab = app.active_tab();
                     assert_eq!(tab.document.text(), continued);
@@ -26908,7 +27976,7 @@ fn visual_list_link_tail_blank_row_has_caret(cx: &mut TestAppContext) {
         let tab = app.active_tab();
         assert_eq!(
             tab.document.text(),
-            "- [链接](https://example.com) 第三\n\n\n"
+            "- [链接](https://example.com) 第三\n\n\n\n"
         );
         assert!(tab.visual_caret_bounds.unwrap().top() > before.top() + px(5.));
     });
@@ -28028,6 +29096,56 @@ fn issue_33_forward_word_actions_do_not_split_crlf(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_106_visual_select_all_replaces_complete_inline_constructs(cx: &mut TestAppContext) {
+    let cases = [
+        (
+            "See [map](trail.md)\n\nKeep this line.",
+            "X\n\nKeep this line.",
+        ),
+        ("[map](trail.md) is ready", "X"),
+        ("Walk **home**", "X"),
+    ];
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(cases[0].0))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    for (index, (source, expected)) in cases.into_iter().enumerate() {
+        if index > 0 {
+            app.update(cx, |app, cx| {
+                app.active_tab_mut().document.set_text(source);
+                app.active_tab_mut().selected_range = 0..0;
+                cx.notify();
+            });
+        }
+        cx.run_until_parked();
+        let undo_before = app.update(cx, |app, _| app.active_tab().undo_stack.len());
+        cx.dispatch_action(SelectAll);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.active_tab().selected_range,
+                0..app.active_tab().document.paragraph_range_at(0).end,
+                "source: {source}"
+            );
+        });
+        cx.simulate_input("X");
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), expected);
+            assert_eq!(app.active_tab().undo_stack.len(), undo_before + 1);
+        });
+    }
+}
+
+#[gpui::test]
 fn baseline_word_actions_and_progressive_select_all_work_on_source(cx: &mut TestAppContext) {
     let source = "hello world\n\nsecond";
     let (app, cx) = cx.add_window_view(|_, cx| {
@@ -28327,6 +29445,71 @@ fn contextual_bullet_and_url_input_use_one_exact_mutation(cx: &mut TestAppContex
     cx.dispatch_action(Undo);
     app.update(cx, |app, _| {
         assert!(app.active_tab().document.text().is_empty())
+    });
+}
+
+#[gpui::test]
+fn issue_60_data_file_typing_stays_literal_with_markdown_control(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("settings.yaml");
+    let toml = dir.path().join("settings.toml");
+    let yaml_source = "endpoint: https://example.test/api\nretries: 3\n";
+    fs::write(&yaml, yaml_source).unwrap();
+    fs::write(&toml, "retrycount = 3").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&yaml).unwrap())];
+        app.markdown_auto_pair = true;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().kind(), DocumentKind::Data);
+        let cursor = yaml_source.find("/api").unwrap() + 4;
+        app.active_tab_mut().selected_range = cursor..cursor;
+    });
+    cx.simulate_input(" ");
+    cx.simulate_input("# staging");
+    app.update(cx, |app, _| {
+        let expected = "endpoint: https://example.test/api # staging\nretries: 3\n";
+        assert_eq!(app.active_tab().document.text(), expected);
+        app.active_tab_mut().document.force_save().unwrap();
+        assert_eq!(fs::read_to_string(&yaml).unwrap(), expected);
+        assert_eq!(MarkdownDocument::open(&yaml).unwrap().text(), expected);
+    });
+
+    for (typed, expected) in [("_", "retry_count = 3"), ("-", "retry-count = 3")] {
+        app.update(cx, |app, _| {
+            fs::write(&toml, "retrycount = 3").unwrap();
+            app.tabs = vec![EditorTab::new(MarkdownDocument::open(&toml).unwrap())];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 5..5;
+        });
+        cx.simulate_input(typed);
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), expected);
+        });
+    }
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "https://example.test/api",
+        ))];
+        app.active_tab = 0;
+        let end = app.active_tab().document.text().len();
+        app.active_tab_mut().selected_range = end..end;
+    });
+    cx.simulate_input(" ");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().kind(), DocumentKind::Markdown);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "[https://example.test/api](https://example.test/api) "
+        );
     });
 }
 

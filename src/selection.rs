@@ -287,15 +287,19 @@ impl CellSelection {
             html.push_str("<tr>");
             for col in columns.clone() {
                 let text = table.rows[row].get(col).map(String::as_str).unwrap_or("");
-                let fragment = MarkdownDocument::from_text(text);
+                // Keep table-cell text in an inline paragraph context rather
+                // than reinterpreting visible leading markers as block syntax.
+                let fragment = MarkdownDocument::from_text(format!("\u{2060}{text}"));
+                let plain = fragment.plain_text_preview();
                 line.push(
-                    fragment
-                        .plain_text_preview()
+                    plain
+                        .strip_prefix('\u{2060}')
+                        .unwrap_or(&plain)
                         .trim_end_matches('\n')
                         .to_string(),
                 );
                 html.push_str("<td>");
-                html.push_str(&fragment.render_html_fragment());
+                html.push_str(&fragment.render_html_fragment().replacen('\u{2060}', "", 1));
                 html.push_str("</td>");
             }
             plain.push(line.join("\t"));
@@ -387,8 +391,12 @@ impl CellSelection {
             block.quote_context.as_ref(),
         )
         .ok_or(BlockEditError::Ambiguous)?;
-        let authored_cells = crate::table::table_cell_source_ranges(source.markdown())
-            .ok_or(BlockEditError::Ambiguous)?;
+        let markdown = source.markdown();
+        let column_count = crate::table::parse_markdown_table(markdown)
+            .ok_or(BlockEditError::Ambiguous)?
+            .column_count();
+        let authored_cells =
+            crate::table::table_cell_source_ranges(markdown).ok_or(BlockEditError::Ambiguous)?;
         for (row, column, replacement) in updates {
             let authored = authored_cells
                 .iter()
@@ -404,7 +412,28 @@ impl CellSelection {
                 .iter()
                 .find(|cell| cell.row == *row && cell.column == *column)
                 .ok_or(BlockEditError::Ambiguous)?;
-            edits.push((cell.field.source_range.clone(), replacement));
+            if block.list_depth == 0 && replacement.is_empty() {
+                let line_index = if *row == 0 { 0 } else { row + 1 };
+                let mut lines = markdown.split_inclusive('\n');
+                let line_start = lines.by_ref().take(line_index).map(str::len).sum::<usize>();
+                let line = lines
+                    .next()
+                    .ok_or(BlockEditError::Ambiguous)?
+                    .trim_end_matches(['\r', '\n']);
+                let line_range = source
+                    .source_range(line_start..line_start + line.len())
+                    .ok_or(BlockEditError::Ambiguous)?;
+                let content = line.trim_start_matches([' ', '\t']);
+                let content_start = line_range.start + (line.len() - content.len());
+                if *column == 0 && !content.starts_with('|') {
+                    edits.push((content_start..content_start, "|"));
+                }
+                if *column + 1 == column_count && !line.trim_end().ends_with('|') {
+                    let line_end = line_range.end;
+                    edits.push((line_end..line_end, "|"));
+                }
+            }
+            edits.push((cell.field.source_range.clone(), replacement.as_str()));
         }
         edits.sort_by_key(|(range, _)| range.start);
         let Some((first, _)) = edits.first() else {
@@ -615,6 +644,109 @@ mod tests {
         assert_eq!(table.rows[1][1], "😀");
         assert_eq!(table.alignments[1], crate::TableAlignment::Right);
         assert!(cells.clear(&doc).is_err());
+    }
+
+    #[test]
+    fn issue_88_table_copy_keeps_visible_block_marker_characters() {
+        let source = "| A | B |\n| --- | --- |\n| 1. Pack | # Label |\n| - Call | > Status |\n| **Bold** | *Italic* |";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let table = blocks
+            .iter()
+            .find(|block| matches!(block.kind, crate::VisualBlockKind::Table { .. }))
+            .unwrap();
+        let mut selection = CellSelection::new(&doc, table, (1, 0));
+        selection.head = (3, 1);
+        let clipboard = selection.clipboard(&doc).unwrap();
+        assert_eq!(
+            clipboard.plain,
+            "1. Pack\t# Label\n- Call\t> Status\nBold\tItalic"
+        );
+        assert!(clipboard.html.contains("1. Pack"));
+        assert!(clipboard.html.contains("# Label"));
+        assert!(clipboard.html.contains("- Call"));
+        assert!(clipboard.html.contains("&gt; Status"));
+        assert!(clipboard.html.contains("<strong>Bold</strong>"));
+        assert!(clipboard.html.contains("<em>Italic</em>"));
+        for unexpected in ["<ol>", "<ul>", "<h1>", "<blockquote>"] {
+            assert!(!clipboard.html.contains(unexpected), "{}", clipboard.html);
+        }
+    }
+
+    #[test]
+    fn issue_62_clearing_edge_cells_without_outer_pipes_preserves_grid() {
+        for (source, anchor, head, expected) in [
+            (
+                "Item | Owner\n--- | ---\nTea | Ravi\nRice | Mina",
+                (1, 0),
+                (2, 0),
+                vec![vec!["Item", "Owner"], vec!["", "Ravi"], vec!["", "Mina"]],
+            ),
+            (
+                "Item | Owner\n--- | ---\nTea | Ravi\nRice | Mina",
+                (0, 0),
+                (1, 0),
+                vec![vec!["", "Owner"], vec!["", "Ravi"], vec!["Rice", "Mina"]],
+            ),
+            (
+                "A | B | C\n--- | --- | ---\n1 | 2 | 3",
+                (0, 2),
+                (0, 2),
+                vec![vec!["A", "B", ""], vec!["1", "2", "3"]],
+            ),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let table = blocks
+                .iter()
+                .find(|block| matches!(block.kind, crate::VisualBlockKind::Table { .. }))
+                .unwrap();
+            let mut selection = CellSelection::new(&doc, table, anchor);
+            selection.head = head;
+            let clear = selection.clear(&doc).unwrap();
+            let mut edited = source.to_string();
+            edited.replace_range(clear.range, &clear.replacement);
+            let reparsed = crate::table::parse_markdown_table(&edited)
+                .unwrap_or_else(|| panic!("cleared table no longer parses: {edited:?}"));
+            let actual = reparsed
+                .rows
+                .iter()
+                .map(|row| row.iter().map(String::as_str).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "edited source: {edited:?}");
+        }
+    }
+
+    #[test]
+    fn clearing_quoted_edge_cells_without_outer_pipes_preserves_grid() {
+        let source = ">  > Item | Owner\r\n>  > --- | ---\r\n>  > Tea | Ravi\r\n>  > Rice | Mina";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let table = blocks
+            .iter()
+            .find(|block| matches!(block.kind, crate::VisualBlockKind::Table { .. }))
+            .unwrap();
+        let mut selection = CellSelection::new(&doc, table, (1, 0));
+        selection.head = (2, 0);
+        let clear = selection.clear(&doc).unwrap();
+        let mut edited = source.to_string();
+        edited.replace_range(clear.range, &clear.replacement);
+        assert_eq!(
+            edited,
+            ">  > Item | Owner\r\n>  > --- | ---\r\n>  > | | Ravi\r\n>  > | | Mina",
+        );
+        let edited_doc = MarkdownDocument::from_text(edited);
+        let edited_blocks = edited_doc.visual_blocks_shared();
+        let edited_table = edited_blocks
+            .iter()
+            .find(|block| matches!(block.kind, crate::VisualBlockKind::Table { .. }))
+            .unwrap();
+        assert!(edited_table.quote_context.is_some());
+        let parsed = CellSelection::new(&edited_doc, edited_table, (1, 0))
+            .table(&edited_doc)
+            .unwrap();
+        assert_eq!(parsed.rows[1], ["", "Ravi"]);
+        assert_eq!(parsed.rows[2], ["", "Mina"]);
     }
 
     #[test]

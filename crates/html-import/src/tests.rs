@@ -343,6 +343,22 @@ fn whitespace_collapses_around_inline_elements() {
 }
 
 #[test]
+fn issue_73_formatted_run_edge_spaces_stay_outside_markers() {
+    for (html, expected) in [
+        ("<p><strong>New </strong>note</p>", "**New** note"),
+        ("<p>Save<em> this</em></p>", "Save *this*"),
+        (
+            "<p>Ship<strong> the small </strong>parcel.</p>",
+            "Ship **the small** parcel.",
+        ),
+        ("<p>a <b> bold </b> c</p>", "a **bold** c"),
+        ("<p>New<strong>note</strong></p>", "New**note**"),
+    ] {
+        assert_eq!(md(html), expected);
+    }
+}
+
+#[test]
 fn crlf_input_is_tolerated() {
     assert_eq!(md("<p>a</p>\r\n<p>b</p>"), "a\n\nb");
     assert_eq!(md("<p\r\nclass=MsoNormal>x</p>"), "x");

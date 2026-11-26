@@ -164,7 +164,7 @@ fn outline_key_is_unambiguous(key: &OutlineNodeKey, keys: &[OutlineNodeKey]) -> 
     key.0.iter().enumerate().all(|(depth, segment)| {
         keys.iter()
             .filter(|candidate| {
-                candidate.0.len() > depth
+                candidate.0.len() == depth + 1
                     && candidate.0[..depth] == key.0[..depth]
                     && candidate.0[depth].level == segment.level
                     && candidate.0[depth].title == segment.title
@@ -454,11 +454,23 @@ impl VisualNavigationSnapshot {
         let line = self.lines.get(line_index)?;
         let mut best: Option<(Pixels, usize)> = None;
         for window in &line.windows {
-            let display = if end {
+            let mut display = if end {
                 window.end_display
             } else {
                 window.start_display
             };
+            if end
+                && window
+                    .layout
+                    .position_for_index(display)
+                    .is_some_and(|point| point.y >= window.sample_y(line.y))
+            {
+                let sample = gpui::point(px(f32::MAX), window.sample_y(line.y));
+                display = match window.layout.index_for_position(sample) {
+                    Ok(index) | Err(index) => index,
+                }
+                .clamp(window.start_display, window.end_display);
+            }
             let candidates = window.projection.boundary_candidates(display);
             let source = if end {
                 candidates.upstream_source
@@ -471,6 +483,9 @@ impl VisualNavigationSnapshot {
             let Some(point) = window.layout.position_for_index(display) else {
                 continue;
             };
+            if end && point.y >= window.sample_y(line.y) {
+                continue;
+            }
             let rank = if end { point.x } else { Pixels::ZERO - point.x };
             if best.is_none_or(|(best_rank, _)| rank > best_rank) {
                 best = Some((rank, source));

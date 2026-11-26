@@ -41,10 +41,10 @@ pub use recovery::{
 };
 pub use resources::{
     IMAGE_EXTENSIONS, ImportedImage, OrganizeCandidate, PublishedDocxImport, ResourceDirectory,
-    StagedImagePublication, document_asset_dir, document_scope_root, image_extension_supported,
-    import_image_bytes, import_image_bytes_to, import_image_file, import_image_file_to,
-    organize_candidates, publish_docx_import, publish_staged_image, resolve_local_reference,
-    resolve_resource_directory, stage_image_bytes, stage_image_file,
+    StagedImagePublication, document_asset_dir, document_scope_root, encode_local_reference_url,
+    image_extension_supported, import_image_bytes, import_image_bytes_to, import_image_file,
+    import_image_file_to, organize_candidates, publish_docx_import, publish_staged_image,
+    resolve_local_reference, resolve_resource_directory, stage_image_bytes, stage_image_file,
 };
 pub use session::{
     load_session_state, parse_session_state, render_session_state, save_session_state,

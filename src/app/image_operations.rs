@@ -1189,7 +1189,7 @@ fn local_keep_url(document_path: Option<&Path>, image_path: &Path) -> String {
         .and_then(Path::parent)
         .and_then(|directory| image_path.strip_prefix(directory).ok())
         .unwrap_or(image_path);
-    relative.to_string_lossy().replace('\\', "/")
+    markion::encode_local_reference_url(&relative.to_string_lossy())
 }
 
 fn rebase_offset(offset: usize, edits: &[Range<usize>], replacement_lengths: &[usize]) -> usize {
@@ -1209,6 +1209,25 @@ fn rebase_offset(offset: usize, edits: &[Range<usize>], replacement_lengths: &[u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issue_84_keep_urls_roundtrip_reserved_filename_characters() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = dir.path().join("Field notes.md");
+        for (name, expected) in [
+            ("Field%20view.png", "Field%2520view.png"),
+            ("Sketch #2.png", "Sketch%20%232.png"),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, b"image").unwrap();
+            let url = local_keep_url(Some(&document), &path);
+            assert_eq!(url, expected);
+            assert_eq!(
+                markion::resolve_local_reference(dir.path(), &url),
+                Some(path)
+            );
+        }
+    }
 
     #[test]
     fn selection_rebase_preserves_positions_between_multiple_edits() {

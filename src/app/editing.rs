@@ -2503,8 +2503,8 @@ impl MarkionApp {
         let Some(target) = inline_image_at(self.active_tab().document.text(), offset) else {
             return;
         };
-        let replacement = serialize_inline_image(
-            &target.label,
+        let replacement = serialize_inline_image_with_authored_label(
+            &target.authored_label,
             &target.url,
             target.title.as_deref(),
             Some(ImagePresentation {
@@ -2880,6 +2880,10 @@ impl MarkionApp {
         cx.notify();
     }
 
+    fn read_only_document_action(&self) -> bool {
+        matches!(self.rendered_view_mode(), ViewMode::Read) && !self.has_text_input_focus()
+    }
+
     pub(super) fn apply_markdown_format(
         &mut self,
         format: MarkdownFormat,
@@ -2897,6 +2901,11 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        if matches!(self.rendered_view_mode(), ViewMode::Read) {
+            self.status = t(self.language, Msg::StatusNoFormattingChange).into();
+            cx.notify();
+            return;
+        }
         tracing::debug!(
             target: "markion::editing",
             op = "apply_markdown_format",
@@ -3580,15 +3589,25 @@ impl MarkionApp {
                 self.move_to(image.full_range.start, cx);
                 return;
             }
-            let presentation =
-                inline_image_at(self.active_tab().document.text(), editor.source_range.start)
-                    .and_then(|image| image.presentation);
-            let replacement = serialize_inline_image(
-                &editor.label,
-                editor.url.trim(),
-                (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
-                presentation,
-            );
+            let target =
+                inline_image_at(self.active_tab().document.text(), editor.source_range.start);
+            let presentation = target.as_ref().and_then(|image| image.presentation);
+            let replacement =
+                if let Some(target) = target.filter(|target| target.label == editor.label) {
+                    serialize_inline_image_with_authored_label(
+                        &target.authored_label,
+                        editor.url.trim(),
+                        (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+                        presentation,
+                    )
+                } else {
+                    serialize_inline_image(
+                        &editor.label,
+                        editor.url.trim(),
+                        (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+                        presentation,
+                    )
+                };
             let start = editor.source_range.start;
             self.replace_exact_inline_target(editor.source_range, replacement, cx);
             self.move_to(start, cx);
@@ -3635,6 +3654,14 @@ impl MarkionApp {
                     (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
                 )
             }
+        } else if let Some(target) =
+            inline_link_at(&current, 0).filter(|target| target.label == editor.label)
+        {
+            serialize_inline_link_with_authored_label(
+                &target.authored_label,
+                editor.url.trim(),
+                (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+            )
         } else {
             serialize_inline_link(
                 &editor.label,
@@ -5475,10 +5502,23 @@ impl MarkionApp {
             .iter()
             .map(|run| run.content_range.end)
             .max();
-        Some(match (start, end) {
-            (Some(start), Some(end)) => start..end,
-            _ => block.source_range.clone(),
-        })
+        if start.is_some() || end.is_some() {
+            let source = &self.active_tab().document.text()[block.source_range.clone()];
+            let content_end =
+                block.source_range.start + source.trim_end_matches(['\r', '\n']).len();
+            let content_start = block.block_prefix.as_ref().map_or_else(
+                || {
+                    block
+                        .quote_context
+                        .as_ref()
+                        .and_then(|quote| quote.marker_ranges.first())
+                        .map_or(block.source_range.start, |range| range.end)
+                },
+                |prefix| prefix.source_range.end,
+            );
+            return Some(content_start.min(content_end)..content_end);
+        }
+        Some(block.source_range.clone())
     }
 
     fn current_text_block_range(&self) -> Range<usize> {
@@ -6065,6 +6105,9 @@ impl MarkionApp {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            return;
+        }
         if !self.has_text_input_focus() && self.delete_source_selection(cx) {
             return;
         }
@@ -6125,14 +6168,20 @@ impl MarkionApp {
             return;
         }
         if self.active_tab().selected_range.is_empty() {
-            let boundary = self.previous_boundary(self.cursor_offset());
-            self.select_to(boundary, cx);
+            let cursor = self.cursor_offset();
+            let boundary = self.previous_boundary(cursor);
+            let range = self.active_tab().range_to_utf16(&(boundary..cursor));
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
+            self.replace_text_in_range(Some(range), "", window, cx);
+            return;
         }
-        self.replace_text_in_range(None, "", window, cx);
+        self.replace_text_without_typing_transforms(None, "", window, cx);
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            return;
+        }
         if !self.has_text_input_focus() && self.delete_source_selection(cx) {
             return;
         }
@@ -6191,11 +6240,14 @@ impl MarkionApp {
             return;
         }
         if self.active_tab().selected_range.is_empty() {
-            let boundary = self.next_boundary(self.cursor_offset());
-            self.select_to(boundary, cx);
+            let cursor = self.cursor_offset();
+            let boundary = self.next_boundary(cursor);
+            let range = self.active_tab().range_to_utf16(&(cursor..boundary));
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
+            self.replace_text_in_range(Some(range), "", window, cx);
+            return;
         }
-        self.replace_text_in_range(None, "", window, cx);
+        self.replace_text_without_typing_transforms(None, "", window, cx);
     }
 
     fn delete_stable_opaque_token(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
@@ -6248,6 +6300,9 @@ impl MarkionApp {
     }
 
     fn paste_from_clipboard(&mut self, plain: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            return;
+        }
         let Some(item) = cx.read_from_clipboard() else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();
             cx.notify();
@@ -6297,7 +6352,7 @@ impl MarkionApp {
                 .is_some();
             if inside_fenced_code {
                 self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-                self.replace_text_in_range(None, &text, window, cx);
+                self.replace_text_without_typing_transforms(None, &text, window, cx);
                 self.active_tab_mut().finish_undo_capture();
                 if self.code_block_preferences.format_on_paste {
                     let updated_range = self.active_tab().safe_selected_range();
@@ -6339,6 +6394,19 @@ impl MarkionApp {
         }
     }
 
+    fn replace_text_without_typing_transforms(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        insertion: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = self.suppress_typing_transforms;
+        self.suppress_typing_transforms = true;
+        self.replace_text_in_range(range_utf16, insertion, window, cx);
+        self.suppress_typing_transforms = previous;
+    }
+
     fn insert_pasted_document_text(
         &mut self,
         insertion: &str,
@@ -6348,7 +6416,7 @@ impl MarkionApp {
         let insertion_start = self.active_tab().safe_selected_range().start;
         let insertion_end = insertion_start + insertion.len();
         self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-        self.replace_text_in_range(None, insertion, window, cx);
+        self.replace_text_without_typing_transforms(None, insertion, window, cx);
         self.active_tab_mut().finish_undo_capture();
         self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
     }
@@ -6398,6 +6466,11 @@ impl MarkionApp {
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only_document_action() {
+            self.status = t(self.language, Msg::StatusNothingToCut).into();
+            cx.notify();
+            return;
+        }
         if !self.has_text_input_focus() && self.active_tab().structured_selection.is_some() {
             self.copy_source_selection(cx);
             self.delete_source_selection(cx);
@@ -6425,7 +6498,7 @@ impl MarkionApp {
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
             cx.write_to_clipboard(ClipboardItem::new_string(text));
-            self.replace_text_in_range(None, "", window, cx);
+            self.replace_text_without_typing_transforms(None, "", window, cx);
             self.status = t(self.language, Msg::StatusCutSelection).into();
             cx.notify();
         } else {
@@ -7299,11 +7372,12 @@ impl MarkionApp {
             }
             VisualNavigationTarget::Footnote { label } => {
                 let blocks = self.active_tab().document.visual_blocks_shared();
+                let needle = label.to_lowercase();
                 let Some(block_index) = blocks.iter().position(|block| {
                     matches!(
                         &block.kind,
                         VisualBlockKind::FootnoteDefinition { label: def }
-                            if def == label
+                            if def.to_lowercase() == needle
                     )
                 }) else {
                     return;

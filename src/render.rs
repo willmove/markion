@@ -5,7 +5,7 @@
 //! and the shared stylesheet string they emit into.
 
 use crate::escape::decode_basic_html_entities;
-use crate::model::{RichText, TableAlignment};
+use crate::model::{PreviewBlock, RichText, TableAlignment};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Tag, TagEnd};
 use std::ops::Range;
 use typune_markdown::{MathStyle, serialize_math_html};
@@ -362,35 +362,12 @@ pub(crate) fn escape_latex_path(path: &str) -> String {
     path.replace('\\', "/").replace(' ', "\\ ")
 }
 
-/// Renders inline text for LaTeX, preserving `$...$` math runs verbatim while
-/// escaping the surrounding prose.
-pub(crate) fn render_latex_inline_text(text: &str) -> String {
-    let mut output = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('$') {
-        output.push_str(&escape_latex(&rest[..start]));
-        let after_start = &rest[start + 1..];
-        if let Some(end) = after_start.find('$') {
-            let formula = &after_start[..end];
-            output.push('$');
-            output.push_str(formula);
-            output.push('$');
-            rest = &after_start[end + 1..];
-        } else {
-            output.push_str("\\$");
-            rest = after_start;
-        }
-    }
-    output.push_str(&escape_latex(rest));
-    output
-}
-
 /// Renders resolved rich text (preview inline spans) to LaTeX, mapping the
-/// style flags to their LaTeX commands. Plain prose keeps `$...$` math runs
-/// verbatim; inline code is `\texttt` with full escaping.
+/// style flags to their LaTeX commands. Math comes only from explicit span
+/// metadata; every other non-code span is escaped as literal prose.
 pub(crate) fn render_latex_rich_text(rich: &RichText) -> String {
     if rich.spans.is_empty() {
-        return render_latex_inline_text(&rich.text);
+        return escape_latex(&rich.text);
     }
     let mut output = String::new();
     for span in &rich.spans {
@@ -403,8 +380,10 @@ pub(crate) fn render_latex_rich_text(rich: &RichText) -> String {
         }
         let mut piece = if span.style.code {
             format!("\\texttt{{{}}}", escape_latex(&span.text))
+        } else if let Some(math) = &span.math {
+            math.authored.clone()
         } else {
-            render_latex_inline_text(&span.text)
+            escape_latex(&span.text)
         };
         if span.style.bold {
             piece = format!("\\textbf{{{piece}}}");
@@ -475,18 +454,80 @@ pub(crate) fn latex_listing_language(language: Option<&str>) -> Option<&'static 
     }
 }
 
-/// Appends one `\item` line, rendering task-list state as checkbox symbols.
-pub(crate) fn push_latex_list_item(output: &mut String, checked: Option<bool>, text: &RichText) {
+/// Appends one `\item` line with its resolved ordered label, if any.
+pub(crate) fn push_latex_list_item(
+    output: &mut String,
+    index: Option<u64>,
+    checked: Option<bool>,
+    text: &RichText,
+) {
+    let label = index.map(|value| format!("[{value}.]")).unwrap_or_default();
     let marker = match checked {
         Some(true) => "$\\boxtimes$ ",
         Some(false) => "$\\square$ ",
         None => "",
     };
     output.push_str(&format!(
-        "\\item {}{}\n",
-        marker,
+        "\\item{label} {marker}{}\n",
         render_latex_rich_text(text)
     ));
+}
+
+/// Renders a contiguous list-item stream with its resolved nesting and kinds.
+pub(crate) fn render_latex_list(output: &mut String, items: &[PreviewBlock]) {
+    let mut cursor = 0;
+    while cursor < items.len() {
+        let PreviewBlock::ListItem { level, .. } = &items[cursor] else {
+            unreachable!("LaTeX list slices contain only list items");
+        };
+        render_latex_list_environment(output, items, &mut cursor, *level);
+    }
+}
+
+fn render_latex_list_environment(
+    output: &mut String,
+    items: &[PreviewBlock],
+    cursor: &mut usize,
+    level: usize,
+) {
+    let PreviewBlock::ListItem { ordered, .. } = &items[*cursor] else {
+        unreachable!("LaTeX list environments start at a list item");
+    };
+    let environment = if *ordered { "enumerate" } else { "itemize" };
+    output.push_str(&format!("\\begin{{{environment}}}\n"));
+
+    while *cursor < items.len() {
+        let PreviewBlock::ListItem {
+            level: item_level,
+            ordered,
+            index,
+            checked,
+            text,
+            ..
+        } = &items[*cursor]
+        else {
+            unreachable!("LaTeX list slices contain only list items");
+        };
+        if *item_level != level || *ordered != (environment == "enumerate") {
+            break;
+        }
+        push_latex_list_item(output, if *ordered { *index } else { None }, *checked, text);
+        *cursor += 1;
+
+        while *cursor < items.len() {
+            let PreviewBlock::ListItem {
+                level: child_level, ..
+            } = &items[*cursor]
+            else {
+                unreachable!("LaTeX list slices contain only list items");
+            };
+            if *child_level <= level {
+                break;
+            }
+            render_latex_list_environment(output, items, cursor, *child_level);
+        }
+    }
+    output.push_str(&format!("\\end{{{environment}}}\n"));
 }
 
 /// Renders a Markdown table as a LaTeX `longtable`, deriving the column spec
@@ -506,10 +547,7 @@ pub(crate) fn render_latex_table(rows: &[Vec<RichText>], alignments: &[TableAlig
         .collect();
     let mut output = format!("\\begin{{longtable}}{{{column_spec}}}\n");
     for (index, row) in rows.iter().enumerate() {
-        let mut cells = row
-            .iter()
-            .map(|cell| escape_latex(&cell.text))
-            .collect::<Vec<_>>();
+        let mut cells = row.iter().map(render_latex_rich_text).collect::<Vec<_>>();
         cells.resize(columns, String::new());
         output.push_str(&cells.join(" & "));
         output.push_str(" \\\\\n");

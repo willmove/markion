@@ -781,10 +781,10 @@ pub fn duplicate_block(
     }
     let unit = source_unit(source, blocks, index)?;
     let authored = source.get(unit.clone()).ok_or(BlockEditError::Ambiguous)?;
-    let separator = if unit.end == source.len() && !authored.ends_with(['\n', '\r']) {
-        preferred_line_ending(source).repeat(2)
-    } else {
-        String::new()
+    let separator = match trailing_line_endings(authored) {
+        "" => preferred_line_ending(source).repeat(2),
+        "\n" | "\r" | "\r\n" => preferred_line_ending(source).to_string(),
+        _ => String::new(),
     };
     let replacement = format!("{authored}{separator}{authored}");
     let second_start = unit.start + authored.len() + separator.len();
@@ -1344,7 +1344,7 @@ fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MarkdownDocument;
+    use crate::{MarkdownDocument, PreviewBlock};
 
     #[test]
     fn issue_52_list_indent_moves_exactly_one_level_and_keeps_children() {
@@ -2200,6 +2200,53 @@ mod tests {
         let duplicate =
             duplicate_block(two_blocks.text(), two_blocks.version(), &blocks, &last).unwrap();
         assert_eq!(duplicate.replacement, "two\n\ntwo");
+    }
+
+    #[test]
+    fn issue_93_duplicate_single_newline_paragraphs_stay_independent() {
+        for ending in ["\n", "\r\n"] {
+            let source = format!("Review notes.{ending}");
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let paragraph = blocks
+                .iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+                .unwrap();
+            let target = BlockTarget::from_block(doc.version(), paragraph);
+            let edit = duplicate_block(doc.text(), doc.version(), &blocks, &target).unwrap();
+            let expected = format!("Review notes.{ending}{ending}Review notes.{ending}");
+            assert_eq!(edit.replacement, expected);
+            let duplicated = MarkdownDocument::from_text(&expected);
+            assert_eq!(
+                duplicated
+                    .preview_blocks()
+                    .iter()
+                    .filter(|block| matches!(block, PreviewBlock::Paragraph { .. }))
+                    .count(),
+                2
+            );
+
+            let blocks = duplicated.visual_blocks_shared();
+            let paragraphs = blocks
+                .iter()
+                .filter(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+                .collect::<Vec<_>>();
+            let second = BlockTarget::from_block(duplicated.version(), paragraphs[1]);
+            let delete =
+                delete_block(duplicated.text(), duplicated.version(), &blocks, &second).unwrap();
+            let mut restored = duplicated.text().to_string();
+            restored.replace_range(delete.range, &delete.replacement);
+            assert!(restored.starts_with("Review notes."));
+            let restored = MarkdownDocument::from_text(&restored);
+            assert_eq!(
+                restored
+                    .preview_blocks()
+                    .iter()
+                    .filter(|block| matches!(block, PreviewBlock::Paragraph { .. }))
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]

@@ -56,7 +56,8 @@ use inline_edit::image_presentation_from_title;
 pub use inline_edit::{
     ImageAlignment, ImagePresentation, InlineMarkdownTarget, SimpleHtmlAnchor,
     clamp_image_width_percent, inline_image_at, inline_link_at, serialize_html_anchor,
-    serialize_inline_image, serialize_inline_link, simple_html_anchor_at, snap_image_width_percent,
+    serialize_inline_image, serialize_inline_image_with_authored_label, serialize_inline_link,
+    serialize_inline_link_with_authored_label, simple_html_anchor_at, snap_image_width_percent,
 };
 
 /// Markdown shown in the first in-memory document when Markion starts.
@@ -303,12 +304,12 @@ pub use storage::{
     PublishedDocxImport, RecoveryInventoryEntry, RecoverySourceState, ResourceDirectory,
     StagedImagePublication, TEXT_EXTENSIONS, default_image_recovery_dir, delete_recovery_file,
     discard_image_recovery_record, document_asset_dir, document_kind_for_path, document_scope_root,
-    file_tree_watch_path_is_relevant, image_extension_supported, import_image_bytes,
-    import_image_bytes_to, import_image_file, import_image_file_to, init_logging,
-    inspect_recovery_files, is_data_path, is_markdown_path, is_openable_text_path, is_text_path,
-    list_image_recovery_records, list_recovery_files, list_theme_definitions, load_app_preferences,
-    load_recovery_file, load_session_state, load_theme_definition, organize_candidates,
-    parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
+    encode_local_reference_url, file_tree_watch_path_is_relevant, image_extension_supported,
+    import_image_bytes, import_image_bytes_to, import_image_file, import_image_file_to,
+    init_logging, inspect_recovery_files, is_data_path, is_markdown_path, is_openable_text_path,
+    is_text_path, list_image_recovery_records, list_recovery_files, list_theme_definitions,
+    load_app_preferences, load_recovery_file, load_session_state, load_theme_definition,
+    organize_candidates, parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
     parse_theme_definition, publish_docx_import, publish_staged_image, render_app_preferences,
     render_session_state, render_theme_definition, resolve_local_reference,
     resolve_resource_directory, save_app_preferences, save_image_recovery_record,
@@ -341,7 +342,7 @@ use parse::{
 use diagram::collect_html_diagrams;
 use render::{
     DEFAULT_CSS, annotate_math_html, collect_html_math, escape_latex, escape_latex_path,
-    latex_listing_language, push_latex_list_item, render_latex_rich_text, render_latex_table,
+    latex_listing_language, render_latex_list, render_latex_rich_text, render_latex_table,
 };
 
 pub use export::{backend_status_msg, pandoc_available};
@@ -1954,8 +1955,8 @@ impl MarkdownDocument {
         }
 
         let mut transformed = self.text.clone();
-        let mut removed_before_start = 0usize;
-        let mut removed_before_end = 0usize;
+        let mut start_delta = 0isize;
+        let mut end_delta = 0isize;
         let mut removed_total = 0usize;
         for line_start in line_starts.iter().copied() {
             let adjusted_line_start = line_start - removed_total;
@@ -1965,12 +1966,18 @@ impl MarkdownDocument {
             }
 
             transformed.replace_range(adjusted_line_start..adjusted_line_start + remove_len, "");
-            if line_start < range.start {
-                removed_before_start += remove_len;
-            }
-            if line_start < range.end {
-                removed_before_end += remove_len;
-            }
+            adjust_offset_for_line_marker_removal(
+                range.start,
+                line_start,
+                remove_len,
+                &mut start_delta,
+            );
+            adjust_offset_for_line_marker_removal(
+                range.end,
+                line_start,
+                remove_len,
+                &mut end_delta,
+            );
             removed_total += remove_len;
         }
 
@@ -1978,8 +1985,7 @@ impl MarkdownDocument {
             self.apply_transformed_text(MutationOrigin::MarkdownFormat, transformed);
         }
 
-        range.start.saturating_sub(removed_before_start)
-            ..range.end.saturating_sub(removed_before_end)
+        offset_with_delta(range.start, start_delta)..offset_with_delta(range.end, end_delta)
     }
 
     pub fn apply_markdown_format(
@@ -2022,7 +2028,7 @@ impl MarkdownDocument {
         match format {
             MarkdownFormat::Bold => self.wrap_inline(range, "**", "**", "bold"),
             MarkdownFormat::Italic => self.wrap_inline(range, "*", "*", "italic"),
-            MarkdownFormat::InlineCode => self.wrap_inline(range, "`", "`", "code"),
+            MarkdownFormat::InlineCode => self.wrap_inline_code(range),
             MarkdownFormat::Strikethrough => self.wrap_inline(range, "~~", "~~", "text"),
             MarkdownFormat::Link => self.wrap_link(range, false),
             MarkdownFormat::Image => self.wrap_link(range, true),
@@ -2293,6 +2299,9 @@ impl MarkdownDocument {
         let selection_in_table =
             formatted_table_cell_range(&table_replacement, selected_row, selected_column)?;
 
+        let remove_obsolete_comment = matches!(column_edit, Some(ColumnPercentEdit::Delete(_)))
+            && old_percents.is_some()
+            && table.column_count() == 1;
         let rewritten_percents = match (column_edit, old_percents) {
             (Some(ColumnPercentEdit::Insert(insert_at)), Some(percents)) => {
                 adjust_column_percents_for_insert(&percents, insert_at)
@@ -2306,27 +2315,35 @@ impl MarkdownDocument {
             _ => None,
         };
 
-        let (replace_range, replacement, table_start) =
-            if let (Some(comment_range), Some(percents)) =
-                (leading_comment.clone(), rewritten_percents)
-            {
-                let comment = format_table_column_width_comment(&percents);
-                let header_indent =
-                    &self.text[self.line_start_at(table_range.start)..table_range.start];
-                let prefix = format!("{comment}{line_ending}{header_indent}");
-                let table_start = comment_range.start + prefix.len();
-                (
-                    comment_range.start..table_range.end,
-                    format!("{prefix}{table_replacement}"),
-                    table_start,
-                )
-            } else {
-                (
-                    table_range.clone(),
-                    table_replacement.clone(),
-                    table_range.start,
-                )
-            };
+        let (replace_range, replacement, table_start) = if remove_obsolete_comment {
+            let comment_range = leading_comment
+                .clone()
+                .expect("obsolete width comment must exist");
+            (
+                comment_range.start..table_range.end,
+                table_replacement.clone(),
+                comment_range.start,
+            )
+        } else if let (Some(comment_range), Some(percents)) =
+            (leading_comment.clone(), rewritten_percents)
+        {
+            let comment = format_table_column_width_comment(&percents);
+            let header_indent =
+                &self.text[self.line_start_at(table_range.start)..table_range.start];
+            let prefix = format!("{comment}{line_ending}{header_indent}");
+            let table_start = comment_range.start + prefix.len();
+            (
+                comment_range.start..table_range.end,
+                format!("{prefix}{table_replacement}"),
+                table_start,
+            )
+        } else {
+            (
+                table_range.clone(),
+                table_replacement.clone(),
+                table_range.start,
+            )
+        };
 
         let selected_range =
             table_start + selection_in_table.start..table_start + selection_in_table.end;
@@ -2380,6 +2397,100 @@ impl MarkdownDocument {
         Some(replace_range.start..replace_range.start + line.len())
     }
 
+    fn wrap_inline_code(&mut self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        for padding in [0, 1] {
+            if range.start < padding || range.end + padding > self.text.len() {
+                continue;
+            }
+            if padding == 1
+                && (self.text.as_bytes().get(range.start - 1) != Some(&b' ')
+                    || self.text.as_bytes().get(range.end) != Some(&b' '))
+            {
+                continue;
+            }
+            let opening_end = range.start - padding;
+            let closing_start = range.end + padding;
+            let opening = self.text.as_bytes()[..opening_end]
+                .iter()
+                .rev()
+                .take_while(|byte| **byte == b'`')
+                .count();
+            let closing = self.text.as_bytes()[closing_start..]
+                .iter()
+                .take_while(|byte| **byte == b'`')
+                .count();
+            if opening > 0 && opening == closing {
+                let outer = opening_end - opening..closing_start + closing;
+                let replacement = self.text[range.clone()].to_string();
+                let content_len = replacement.len();
+                self.apply_current_range(
+                    MutationOrigin::MarkdownFormat,
+                    outer.clone(),
+                    &replacement,
+                );
+                return outer.start..outer.start + content_len;
+            }
+        }
+
+        let selected = &self.text[range.clone()];
+        let opening = selected
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        let closing = selected
+            .as_bytes()
+            .iter()
+            .rev()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        if opening > 0 && opening == closing && selected.len() > opening + closing {
+            let mut content = &selected[opening..selected.len() - closing];
+            if content.starts_with(' ')
+                && content.ends_with(' ')
+                && content.chars().any(|ch| ch != ' ')
+            {
+                content = &content[1..content.len() - 1];
+            }
+            let replacement = content.to_string();
+            let content_len = replacement.len();
+            self.apply_current_range(MutationOrigin::MarkdownFormat, range.clone(), &replacement);
+            return range.start..range.start + content_len;
+        }
+
+        let inner = if selected.is_empty() {
+            "code"
+        } else {
+            selected
+        };
+        let mut longest = 0usize;
+        let mut current = 0usize;
+        for byte in inner.bytes() {
+            if byte == b'`' {
+                current += 1;
+                longest = longest.max(current);
+            } else {
+                current = 0;
+            }
+        }
+        let delimiter = "`".repeat(longest + 1);
+        let padding = inner.starts_with('`')
+            || inner.ends_with('`')
+            || (inner.starts_with(' ')
+                && inner.ends_with(' ')
+                && inner.chars().any(|ch| ch != ' '));
+        let content = if padding {
+            format!(" {inner} ")
+        } else {
+            inner.to_string()
+        };
+        let replacement = format!("{delimiter}{content}{delimiter}");
+        let inner_start = range.start + delimiter.len() + usize::from(padding);
+        let inner_end = inner_start + inner.len();
+        self.apply_current_range(MutationOrigin::MarkdownFormat, range, &replacement);
+        inner_start..inner_end
+    }
+
     fn wrap_inline(
         &mut self,
         range: std::ops::Range<usize>,
@@ -2387,7 +2498,29 @@ impl MarkdownDocument {
         suffix: &str,
         placeholder: &str,
     ) -> std::ops::Range<usize> {
-        if range.start >= prefix.len()
+        let combine_italic_with_bold = if prefix == "*" && suffix == "*" {
+            let before = self.text.as_bytes()[..range.start]
+                .iter()
+                .rev()
+                .take_while(|byte| **byte == b'*')
+                .count();
+            let after = self.text.as_bytes()[range.end..]
+                .iter()
+                .take_while(|byte| **byte == b'*')
+                .count();
+            let selected = self.text[range.clone()].as_bytes();
+            let selected_before = selected.iter().take_while(|byte| **byte == b'*').count();
+            let selected_after = selected
+                .iter()
+                .rev()
+                .take_while(|byte| **byte == b'*')
+                .count();
+            (before == 2 && after == 2) || (selected_before == 2 && selected_after == 2)
+        } else {
+            false
+        };
+        if !combine_italic_with_bold
+            && range.start >= prefix.len()
             && range.end + suffix.len() <= self.text.len()
             && self.text.is_char_boundary(range.start - prefix.len())
             && self.text.is_char_boundary(range.end + suffix.len())
@@ -2403,7 +2536,8 @@ impl MarkdownDocument {
             return range.start - prefix.len()..range.end - prefix.len();
         }
 
-        if range.end - range.start >= prefix.len() + suffix.len()
+        if !combine_italic_with_bold
+            && range.end - range.start >= prefix.len() + suffix.len()
             && self.text[range.clone()].starts_with(prefix)
             && self.text[range.clone()].ends_with(suffix)
         {
@@ -2454,13 +2588,30 @@ impl MarkdownDocument {
 
     fn wrap_code_fence(&mut self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
         let selected = &self.text[range.clone()];
+        let separate_suffix = self
+            .text
+            .as_bytes()
+            .get(range.end)
+            .is_some_and(|byte| !matches!(byte, b'\r' | b'\n'));
         let inner = if selected.is_empty() {
             "code"
         } else {
             selected.trim_matches('\n')
         };
-        let replacement = format!("```\n{inner}\n```");
-        let inner_start = range.start + "```\n".len();
+        let suffix = if separate_suffix { "\n" } else { "" };
+        let longest = inner
+            .lines()
+            .map(|line| {
+                line.trim_start_matches([' ', '\t'])
+                    .bytes()
+                    .take_while(|byte| *byte == b'`')
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
+        let fence = "`".repeat(3.max(longest + 1));
+        let replacement = format!("{fence}\n{inner}\n{fence}{suffix}");
+        let inner_start = range.start + fence.len() + 1;
         let inner_end = inner_start + inner.len();
         self.apply_current_range(MutationOrigin::MarkdownFormat, range, &replacement);
         inner_start..inner_end
@@ -2773,6 +2924,38 @@ impl MarkdownDocument {
         offset.min(line_end)
     }
 
+    fn plain_block_prefix_removal_edit(&self, prefix: Range<usize>) -> VisualStructuralEdit {
+        let line_start = self.line_start_at(prefix.start);
+        let needs_separator = if prefix.start == line_start && line_start > 0 {
+            let mut previous_end = line_start - 1;
+            if previous_end > 0 && self.text.as_bytes()[previous_end - 1] == b'\r' {
+                previous_end -= 1;
+            }
+            let previous_start = self.text[..previous_end]
+                .rfind('\n')
+                .map_or(0, |index| index + 1);
+            let previous = &self.text[previous_start..previous_end];
+            previous.trim_start().starts_with('>') || list_marker_at(previous).is_some()
+        } else {
+            false
+        };
+        let replacement = if needs_separator {
+            if self.text.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            }
+        } else {
+            ""
+        };
+        let next = prefix.start + replacement.len();
+        VisualStructuralEdit {
+            range: prefix,
+            replacement: replacement.to_string(),
+            selection_after: next..next,
+        }
+    }
+
     pub fn insert_markdown_newline(&mut self, byte_index: usize) -> usize {
         let cursor = clamp_to_char_boundary(&self.text, byte_index);
         let line_start = self.text[..cursor].rfind('\n').map_or(0, |index| index + 1);
@@ -2783,12 +2966,23 @@ impl MarkdownDocument {
         let after_cursor = &self.text[cursor..line_end];
 
         if after_cursor.trim().is_empty() && is_empty_list_marker(before_cursor) {
-            self.apply_current_range(MutationOrigin::StructuralEdit, line_start..cursor, "");
-            return line_start;
+            let edit = self.plain_block_prefix_removal_edit(line_start..cursor);
+            let next = edit.selection_after.start;
+            self.apply_current_range(
+                MutationOrigin::StructuralEdit,
+                edit.range,
+                &edit.replacement,
+            );
+            return next;
         }
 
         let continuation = markdown_continuation(before_cursor);
-        let insertion = format!("\n{continuation}");
+        let newline = if self.text.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let insertion = format!("{newline}{continuation}");
         self.apply_current_range(MutationOrigin::StructuralEdit, cursor..cursor, &insertion);
         cursor + insertion.len()
     }
@@ -2798,23 +2992,27 @@ impl MarkdownDocument {
     /// exactly one undo snapshot and perform exactly one document replacement.
     pub fn visual_enter_edit(&self, byte_index: usize) -> Option<VisualStructuralEdit> {
         let cursor = clamp_to_char_boundary(&self.text, byte_index);
-        let prefix = visual::structural_prefix_at(&self.text, cursor)?;
+        let prefix = visual::structural_prefix_at(&self.text, cursor);
         let line_start = self.line_start_at(cursor);
         let line_end = self.line_end_at(cursor);
-        if cursor < prefix.source_range.end {
+        if prefix
+            .as_ref()
+            .is_some_and(|prefix| cursor < prefix.source_range.end)
+        {
             return None;
         }
-        let content_is_empty = self.text[prefix.source_range.end..line_end]
-            .trim()
-            .is_empty();
-        let exits_when_empty = matches!(
-            prefix.kind,
-            VisualBlockPrefixKind::BlockQuote { .. }
-                | VisualBlockPrefixKind::UnorderedList { .. }
-                | VisualBlockPrefixKind::OrderedList { .. }
-                | VisualBlockPrefixKind::TaskList { .. }
-        );
-        let empty_structure_exit = content_is_empty && exits_when_empty;
+        let empty_structure_exit = prefix.as_ref().is_some_and(|prefix| {
+            self.text[prefix.source_range.end..line_end]
+                .trim()
+                .is_empty()
+                && matches!(
+                    prefix.kind,
+                    VisualBlockPrefixKind::BlockQuote { .. }
+                        | VisualBlockPrefixKind::UnorderedList { .. }
+                        | VisualBlockPrefixKind::OrderedList { .. }
+                        | VisualBlockPrefixKind::TaskList { .. }
+                )
+        });
 
         let blocks = self.visual_blocks_shared();
         let active_block = blocks.iter().find(|block| {
@@ -2840,17 +3038,32 @@ impl MarkdownDocument {
         if !supported_block && !orphaned_empty_structure {
             return None;
         }
-        if empty_structure_exit {
-            let next = prefix.source_range.start;
+        let newline = if self.text.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let Some(prefix) = prefix else {
+            let quote = active_block.quote_context.as_ref()?;
+            let continuation = format!(
+                "{}{}",
+                "> ".repeat(quote.depth),
+                markdown_continuation(&self.text[line_start..cursor])
+            );
+            let replacement = format!("{newline}{continuation}");
+            let next = cursor + replacement.len();
             return Some(VisualStructuralEdit {
-                range: prefix.source_range,
-                replacement: String::new(),
+                range: cursor..cursor,
+                replacement,
                 selection_after: next..next,
             });
+        };
+        if empty_structure_exit {
+            return Some(self.plain_block_prefix_removal_edit(prefix.source_range));
         }
 
         let continuation = markdown_continuation(&self.text[line_start..cursor]);
-        let replacement = format!("\n{continuation}");
+        let replacement = format!("{newline}{continuation}");
         let next = cursor + replacement.len();
         Some(VisualStructuralEdit {
             range: cursor..cursor,
@@ -2900,12 +3113,7 @@ impl MarkdownDocument {
                 selection_after: next..next,
             });
         }
-        let next = prefix.source_range.start;
-        Some(VisualStructuralEdit {
-            range: prefix.source_range,
-            replacement: String::new(),
-            selection_after: next..next,
-        })
+        Some(self.plain_block_prefix_removal_edit(prefix.source_range))
     }
 
     pub fn render_html_fragment(&self) -> String {
@@ -2977,7 +3185,10 @@ impl MarkdownDocument {
                         3 => "subsubsection",
                         _ => "paragraph",
                     };
-                    output.push_str(&format!("\\{command}{{{}}}\n\n", escape_latex(&text.text)));
+                    output.push_str(&format!(
+                        "\\{command}{{{}}}\n\n",
+                        render_latex_rich_text(&text)
+                    ));
                 }
                 PreviewBlock::Paragraph { text, .. } => {
                     output.push_str(&render_latex_rich_text(&text));
@@ -2993,31 +3204,13 @@ impl MarkdownDocument {
                     output.push_str(&render_latex_rich_text(&text));
                     output.push_str("\n\\end{quote}\n\n");
                 }
-                PreviewBlock::ListItem {
-                    ordered,
-                    checked,
-                    text,
-                    ..
-                } => {
-                    let environment = if ordered { "enumerate" } else { "itemize" };
-                    output.push_str(&format!("\\begin{{{environment}}}\n"));
-                    push_latex_list_item(&mut output, checked, &text);
-                    // Consecutive same-kind items share one environment.
-                    while let Some(PreviewBlock::ListItem {
-                        ordered: next_ordered,
-                        ..
-                    }) = blocks.peek()
-                    {
-                        if *next_ordered != ordered {
-                            break;
-                        }
-                        let Some(PreviewBlock::ListItem { checked, text, .. }) = blocks.next()
-                        else {
-                            unreachable!("peeked a list item");
-                        };
-                        push_latex_list_item(&mut output, checked, &text);
+                block @ PreviewBlock::ListItem { .. } => {
+                    let mut items = vec![block];
+                    while matches!(blocks.peek(), Some(PreviewBlock::ListItem { .. })) {
+                        items.push(blocks.next().expect("peeked list item"));
                     }
-                    output.push_str(&format!("\\end{{{environment}}}\n\n"));
+                    render_latex_list(&mut output, &items);
+                    output.push('\n');
                 }
                 PreviewBlock::BlockQuote {
                     children,
@@ -3033,32 +3226,13 @@ impl MarkdownDocument {
                     let mut children = children.into_iter().peekable();
                     while let Some(child) = children.next() {
                         match child {
-                            PreviewBlock::ListItem {
-                                ordered,
-                                checked,
-                                text,
-                                ..
-                            } => {
-                                let environment = if ordered { "enumerate" } else { "itemize" };
-                                output.push_str(&format!("\\begin{{{environment}}}\n"));
-                                push_latex_list_item(&mut output, checked, &text);
-                                // Consecutive same-kind items share one environment.
-                                while let Some(PreviewBlock::ListItem {
-                                    ordered: next_ordered,
-                                    ..
-                                }) = children.peek()
+                            child @ PreviewBlock::ListItem { .. } => {
+                                let mut items = vec![child];
+                                while matches!(children.peek(), Some(PreviewBlock::ListItem { .. }))
                                 {
-                                    if *next_ordered != ordered {
-                                        break;
-                                    }
-                                    let Some(PreviewBlock::ListItem { checked, text, .. }) =
-                                        children.next()
-                                    else {
-                                        unreachable!("peeked a list item");
-                                    };
-                                    push_latex_list_item(&mut output, checked, &text);
+                                    items.push(children.next().expect("peeked list item"));
                                 }
-                                output.push_str(&format!("\\end{{{environment}}}\n"));
+                                render_latex_list(&mut output, &items);
                             }
                             PreviewBlock::Paragraph { text, .. } => {
                                 output.push_str(&render_latex_rich_text(&text));
@@ -3468,12 +3642,43 @@ impl MarkdownDocument {
                 .field_containing(&range)
                 .map(|field| (block, field))
         })?;
-        let replacement = sanitize_visual_field_replacement(
+        let mut replacement = sanitize_visual_field_replacement(
             &self.text,
             field.kind,
             &field.source_range,
             replacement,
         );
+        let mut trailing_separator_len = 0;
+        if matches!(
+            field.kind,
+            VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload
+        ) && range.end == field.source_range.end
+            && !replacement.is_empty()
+            && !replacement.ends_with(['\r', '\n'])
+        {
+            let closing = match block.editor.as_ref()? {
+                VisualBlockEditor::Code { closing_fence, .. } => Some(closing_fence),
+                VisualBlockEditor::Math {
+                    closing_delimiter, ..
+                } if field.kind == VisualEditorFieldKind::MathPayload
+                    && self.text[closing_delimiter.clone()].starts_with('`') =>
+                {
+                    Some(closing_delimiter)
+                }
+                _ => None,
+            };
+            if closing.is_some_and(|closing| {
+                !closing.is_empty() && field.source_range.end == closing.start
+            }) {
+                let newline = if self.text.contains("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                trailing_separator_len = newline.len();
+                replacement.push_str(newline);
+            }
+        }
         if let VisualEditorFieldKind::TableCell { row, column } = field.kind {
             let source = table::TableSource::new(
                 &self.text,
@@ -3545,7 +3750,8 @@ impl MarkdownDocument {
             range,
             replacement,
             inserted_range_after: inserted_start..inserted_end,
-            selection_after: inserted_end..inserted_end,
+            selection_after: inserted_end - trailing_separator_len
+                ..inserted_end - trailing_separator_len,
         })
     }
 
@@ -3694,11 +3900,13 @@ impl MarkdownDocument {
             if field_index > 0 {
                 return Some(fields[field_index - 1].source_range.clone());
             }
-            let boundary = block_index
-                .checked_sub(1)
-                .and_then(|previous| blocks.get(previous))
+            let boundary = blocks[..block_index]
+                .iter()
+                .rev()
+                .find(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
                 .map_or(fields[field_index].source_range.start, |block| {
-                    block.source_range.end
+                    let source = &self.text[block.source_range.clone()];
+                    block.source_range.start + source.trim_end_matches(['\r', '\n']).len()
                 });
             Some(boundary..boundary)
         }
@@ -4744,13 +4952,13 @@ impl MarkdownDocument {
 
     /// Definition body for a footnote label, if the document defines one.
     pub fn footnote_definition_text(&self, label: &str) -> Option<String> {
-        let needle = label.trim();
+        let needle = label.trim().to_lowercase();
         if needle.is_empty() {
             return None;
         }
         self.footnotes()
             .into_iter()
-            .find(|note| note.label == needle)
+            .find(|note| note.label.to_lowercase() == needle)
             .map(|note| note.text)
     }
 
@@ -6974,11 +7182,11 @@ mod tests {
         let quote_end = latex.find("\\end{quote}").expect("quote environment end");
         let itemize = latex.find("\\begin{enumerate}").expect("quoted enumerate");
         assert!(itemize > quote_start && itemize < quote_end);
-        assert!(latex[quote_start..quote_end].contains("\\item first"));
-        assert!(latex[quote_start..quote_end].contains("\\item second"));
+        assert!(latex[quote_start..quote_end].contains("\\item[1.] first"));
+        assert!(latex[quote_start..quote_end].contains("\\item[2.] second"));
         let quote = &latex[quote_start..quote_end];
-        assert!(quote.find("intro") < quote.find("\\item first"));
-        assert!(quote.find("\\item second") < quote.find("outro"));
+        assert!(quote.find("intro") < quote.find("\\item[1.] first"));
+        assert!(quote.find("\\item[2.] second") < quote.find("outro"));
     }
 
     #[test]
@@ -7570,6 +7778,29 @@ mod tests {
     }
 
     #[test]
+    fn issue_98_crlf_newlines_match_document_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crlf-newline.md");
+        fs::write(&path, b"AlphaBeta\r\nTail\r\n").unwrap();
+        let mut document = MarkdownDocument::open(&path).unwrap();
+        let cursor = document.insert_markdown_newline(5);
+        assert_eq!(document.text(), "Alpha\r\nBeta\r\nTail\r\n");
+        assert_eq!(cursor, 7);
+        document.force_save().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"Alpha\r\nBeta\r\nTail\r\n");
+
+        let mut visual = MarkdownDocument::from_text("- AlphaBeta\r\nTail\r\n");
+        let edit = visual.visual_enter_edit(7).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        assert_eq!(visual.text(), "- Alpha\r\n- Beta\r\nTail\r\n");
+        assert_eq!(edit.selection_after, 11..11);
+
+        let mut lf = MarkdownDocument::from_text("AlphaBeta\nTail\n");
+        assert_eq!(lf.insert_markdown_newline(5), 6);
+        assert_eq!(lf.text(), "Alpha\nBeta\nTail\n");
+    }
+
+    #[test]
     fn markdown_newline_continues_lists() {
         let mut unordered = MarkdownDocument::from_text("- item");
         let cursor = unordered.insert_markdown_newline(unordered.text().len());
@@ -7704,6 +7935,34 @@ mod tests {
     }
 
     #[test]
+    fn issue_100_visual_enter_continues_lazy_quote_lines() {
+        for (source, expected) in [
+            (
+                "> Keep\nthese words # Topic",
+                "> Keep\nthese words \n> # Topic",
+            ),
+            (
+                "> Outer\n> > Inner\ncontinued # Topic",
+                "> Outer\n> > Inner\ncontinued \n> > # Topic",
+            ),
+        ] {
+            let mut document = MarkdownDocument::from_text(source);
+            let cursor = source.find('#').unwrap();
+            let edit = document.visual_enter_edit(cursor).unwrap();
+            document.replace_range(edit.range, &edit.replacement);
+            assert_eq!(document.text(), expected);
+            assert_eq!(
+                edit.selection_after.start,
+                document.text().rfind('#').unwrap()
+            );
+            assert!(edit.selection_after.is_empty());
+        }
+
+        let plain = MarkdownDocument::from_text("Alpha\nBeta");
+        assert!(plain.visual_enter_edit(9).is_none());
+    }
+
+    #[test]
     fn visual_backspace_demotes_top_level_blocks_and_outdents_nested_lists() {
         let cases = [
             ("# 标题", 2, "标题"),
@@ -7728,6 +7987,47 @@ mod tests {
         assert_eq!(nested.text(), "- 项目");
         assert_eq!(edit.selection_after, 2..2);
         assert!(nested.visual_backspace_edit(nested.text().len()).is_none());
+    }
+
+    #[test]
+    fn issue_77_plain_paragraph_after_container_gets_blank_boundary() {
+        let mut source = MarkdownDocument::from_text("- Tea");
+        source.insert_markdown_newline(source.text().len());
+        let cursor = source.insert_markdown_newline(source.text().len());
+        assert_eq!(source.text(), "- Tea\n\n");
+        source.insert(cursor, "Done.");
+        assert_eq!(source.text(), "- Tea\n\nDone.");
+        assert!(matches!(
+            source.preview_blocks().as_slice(),
+            [
+                PreviewBlock::ListItem { .. },
+                PreviewBlock::Paragraph { .. }
+            ]
+        ));
+
+        let mut visual = MarkdownDocument::from_text("- Tea");
+        let edit = visual.visual_enter_edit(visual.text().len()).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        let edit = visual.visual_enter_edit(visual.text().len()).unwrap();
+        visual.replace_range(edit.range, &edit.replacement);
+        visual.insert(edit.selection_after.start, "Done.");
+        assert_eq!(visual.text(), "- Tea\n\nDone.");
+
+        let mut demoted = MarkdownDocument::from_text("* Tea\n* Note.\n* Cocoa");
+        let cursor = demoted.text().find("Note.").unwrap();
+        let edit = demoted.visual_backspace_edit(cursor).unwrap();
+        demoted.replace_range(edit.range, &edit.replacement);
+        assert_eq!(demoted.text(), "* Tea\n\nNote.\n* Cocoa");
+        assert!(demoted.preview_blocks().iter().any(|block| matches!(
+            block,
+            PreviewBlock::Paragraph { text, .. } if text.text == "Note."
+        )));
+
+        let mut quote = MarkdownDocument::from_text("> Memo\r\n> ");
+        let edit = quote.visual_enter_edit(quote.text().len()).unwrap();
+        quote.replace_range(edit.range, &edit.replacement);
+        quote.insert(edit.selection_after.start, "Outside.");
+        assert_eq!(quote.text(), "> Memo\r\n\r\nOutside.");
     }
 
     #[test]
@@ -8137,6 +8437,23 @@ mod tests {
     }
 
     #[test]
+    fn issue_72_partial_indent_selection_endpoints_clamp_to_line_start() {
+        let source = "KEEP\n    alpha\n    beta\nTAIL";
+        let mut doc = MarkdownDocument::from_text(source);
+        let range = doc.outdent_lines(6..24);
+        assert_eq!(doc.text(), "KEEP\nalpha\nbeta\nTAIL");
+        assert_eq!(range, 5..16);
+        assert_eq!(&doc.text()[range.clone()], "alpha\nbeta\n");
+        doc.indent_lines(range);
+        assert_eq!(doc.text(), source);
+
+        let mut endpoint = MarkdownDocument::from_text("KEEP\n    alpha\nTAIL");
+        let range = endpoint.outdent_lines(6..7);
+        assert_eq!(endpoint.text(), "KEEP\nalpha\nTAIL");
+        assert_eq!(range, 5..5);
+    }
+
+    #[test]
     fn outdent_keeps_empty_cursor_range_valid_at_line_start() {
         let mut doc = MarkdownDocument::from_text("top\n    nested");
         let cursor = "top\n".len();
@@ -8157,6 +8474,60 @@ mod tests {
         let range = doc.apply_markdown_format(range, MarkdownFormat::Bold);
         assert_eq!(doc.text(), "write text");
         assert_eq!(range, 6..10);
+    }
+
+    #[test]
+    fn issue_63_italic_combines_with_and_unwraps_only_bold_italic_layer() {
+        for word in ["draft", "café"] {
+            let mut doc = MarkdownDocument::from_text(format!("Review {word} today."));
+            let start = "Review ".len();
+            let range = doc.apply_markdown_format(start..start + word.len(), MarkdownFormat::Bold);
+            assert_eq!(doc.text(), format!("Review **{word}** today."));
+
+            let range = doc.apply_markdown_format(range, MarkdownFormat::Italic);
+            assert_eq!(doc.text(), format!("Review ***{word}*** today."));
+            let blocks = doc.preview_blocks();
+            assert!(blocks.iter().any(|block| {
+                match block {
+                    PreviewBlock::Paragraph { text, .. } => text
+                        .spans
+                        .iter()
+                        .any(|span| span.text == word && span.style.bold && span.style.italic),
+                    _ => false,
+                }
+            }));
+
+            let range = doc.apply_markdown_format(range, MarkdownFormat::Italic);
+            assert_eq!(doc.text(), format!("Review **{word}** today."));
+            assert_eq!(&doc.text()[range], word);
+        }
+    }
+
+    #[test]
+    fn issue_68_inline_code_preserves_backticks_and_edge_spaces() {
+        for selected in ["a`b", "naïve`note", "`note", "note`", " plan "] {
+            let mut doc = MarkdownDocument::from_text(format!("Say {selected} today."));
+            let start = "Say ".len();
+            let range = doc
+                .apply_markdown_format(start..start + selected.len(), MarkdownFormat::InlineCode);
+            assert_eq!(&doc.text()[range.clone()], selected);
+            let blocks = doc.preview_blocks();
+            assert!(
+                blocks.iter().any(|block| match block {
+                    PreviewBlock::Paragraph { text, .. } => text
+                        .spans
+                        .iter()
+                        .any(|span| span.style.code && span.text == selected),
+                    _ => false,
+                }),
+                "selected text was not one exact code span: {:?}",
+                doc.text()
+            );
+
+            let restored = doc.apply_markdown_format(range, MarkdownFormat::InlineCode);
+            assert_eq!(doc.text(), format!("Say {selected} today."));
+            assert_eq!(&doc.text()[restored], selected);
+        }
     }
 
     #[test]
@@ -8232,6 +8603,31 @@ mod tests {
         let range = caret.apply_markdown_format(7..7, MarkdownFormat::Paragraph);
         assert_eq!(caret.text(), "Heading\nBody");
         assert_eq!(range, 3..3);
+    }
+
+    #[test]
+    fn issue_80_indented_atx_headings_convert_without_literal_hashes() {
+        for source in [" # Budget\n\nFollow-up", " #\tBudget\n\nFollow-up"] {
+            let mut paragraph = MarkdownDocument::from_text(source);
+            let start = source.find("Budget").unwrap();
+            let range = paragraph
+                .apply_markdown_format(start..start + "Budget".len(), MarkdownFormat::Paragraph);
+            assert_eq!(paragraph.text(), "Budget\n\nFollow-up");
+            assert_eq!(&paragraph.text()[range.clone()], "Budget");
+            assert!(paragraph.outline().is_empty());
+
+            let range = paragraph.apply_markdown_format(range, MarkdownFormat::Heading(2));
+            assert_eq!(paragraph.text(), "## Budget\n\nFollow-up");
+            assert_eq!(&paragraph.text()[range], "## Budget");
+            assert_eq!(paragraph.outline()[0].title, "Budget");
+            assert_eq!(paragraph.outline()[0].level, 2);
+
+            let mut heading = MarkdownDocument::from_text(source);
+            let range = heading
+                .apply_markdown_format(start..start + "Budget".len(), MarkdownFormat::Heading(2));
+            assert_eq!(heading.text(), "## Budget\n\nFollow-up");
+            assert_eq!(&heading.text()[range], "Budget");
+        }
     }
 
     #[test]
@@ -8428,12 +8824,77 @@ mod tests {
     }
 
     #[test]
+    fn issue_81_task_list_format_preserves_overlong_ordered_numbers() {
+        let mut long =
+            MarkdownDocument::from_text("1234567890. Check shipment status.\n\nFile the receipt.");
+        long.apply_markdown_format(0..long.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(
+            long.text(),
+            "- [ ] 1234567890. Check shipment status.\n\n- [ ] File the receipt."
+        );
+
+        let mut parenthesized = MarkdownDocument::from_text("1234567890123) Catalog entry.");
+        parenthesized
+            .apply_markdown_format(0..parenthesized.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(parenthesized.text(), "- [ ] 1234567890123) Catalog entry.");
+
+        let mut valid = MarkdownDocument::from_text("123456789. Check shipment status.");
+        valid.apply_markdown_format(0..valid.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(valid.text(), "- [ ] Check shipment status.");
+    }
+
+    #[test]
     fn markdown_format_wraps_selection_in_code_fence() {
         let mut doc = MarkdownDocument::from_text("fn main() {}");
         let range = doc.apply_markdown_format(0..doc.text().len(), MarkdownFormat::CodeFence);
 
         assert_eq!(doc.text(), "```\nfn main() {}\n```");
         assert_eq!(range, 4.."```\nfn main() {}".len());
+    }
+
+    #[test]
+    fn issue_74_code_fence_closes_on_its_own_line_before_suffix() {
+        for (source, selected, expected) in [
+            ("one\ntwo\n# After\n", 0..8, "```\none\ntwo\n```\n# After\n"),
+            (
+                "one\ntwo tail.\n\n# After\n",
+                0..7,
+                "```\none\ntwo\n```\n tail.\n\n# After\n",
+            ),
+        ] {
+            let mut doc = MarkdownDocument::from_text(source);
+            doc.apply_markdown_format(selected, MarkdownFormat::CodeFence);
+            assert_eq!(doc.text(), expected);
+            let blocks = doc.preview_blocks();
+            assert!(matches!(blocks[0], PreviewBlock::CodeBlock { .. }));
+            assert!(blocks.iter().any(|block| matches!(
+                block,
+                PreviewBlock::Heading { level: 1, text, .. } if text.text == "After"
+            )));
+        }
+    }
+
+    #[test]
+    fn issue_75_code_fence_uses_delimiter_longer_than_selected_lines() {
+        for source in [
+            "Example:\n```md\nfirst\n```\nEnd example.",
+            "Example:\n````md\nfirst\n````\nEnd example.",
+        ] {
+            let mut doc = MarkdownDocument::from_text(source);
+            doc.apply_markdown_format(0..source.len(), MarkdownFormat::CodeFence);
+            let blocks = doc.preview_blocks();
+            assert_eq!(blocks.len(), 1, "{:?}", doc.text());
+            match &blocks[0] {
+                PreviewBlock::CodeBlock { code, .. } => {
+                    assert_eq!(code, source);
+                }
+                other => panic!("expected one code block, got {other:?}"),
+            }
+        }
+
+        let mut control = MarkdownDocument::from_text("literal `` line");
+        control.apply_markdown_format(0..control.text().len(), MarkdownFormat::CodeFence);
+        assert_eq!(control.text(), "```\nliteral `` line\n```");
     }
 
     #[test]
@@ -8980,6 +9441,32 @@ mod tests {
         assert_eq!(
             edit(TableStructureEdit::ClearColumn(0)),
             "<!-- markion-cols:20,30,50 -->"
+        );
+    }
+
+    #[test]
+    fn issue_48_deleting_to_one_column_removes_stale_widths() {
+        let source =
+            "<!-- markion-cols:37,63 -->\n| Cedar | Larch |\n| :--- | ---: |\n| twelve | nine |";
+        let mut doc = MarkdownDocument::from_text(source);
+        let offset = doc.text().find("| Cedar").unwrap();
+        let version = doc.version();
+        doc.edit_table_structure_at(offset, TableStructureEdit::DeleteColumn(0))
+            .unwrap();
+        assert_eq!(doc.version(), version + 1);
+        assert!(!doc.text().contains("markion-cols"), "{}", doc.text());
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["Larch"]));
+        assert_eq!(structure_alignments(&doc), [TableAlignment::Right]);
+
+        let offset = doc.text().find("| Larch").unwrap();
+        doc.edit_table_structure_at(offset, TableStructureEdit::InsertColumn { at: 1 })
+            .unwrap();
+        assert!(!doc.text().contains("markion-cols"), "{}", doc.text());
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["Larch", ""]));
+        assert_eq!(structure_rows(&doc, 0)[1], row(&["nine", ""]));
+        assert_eq!(
+            structure_alignments(&doc),
+            [TableAlignment::Right, TableAlignment::Default]
         );
     }
 
@@ -10779,6 +11266,131 @@ Intro.
     }
 
     #[test]
+    fn issue_46_latex_export_keeps_heading_and_table_inline_styles() {
+        let doc = MarkdownDocument::from_text(
+            "# Orchard **Copper** *Amber* `gather`\n\n| Material | Tone | Action |\n| :--- | :---: | ---: |\n| **Willow** | *Violet* | `measure` |\n",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("styled.tex");
+        assert_eq!(
+            doc.export_to(&path, ExportFormat::Latex).unwrap(),
+            ExportBackend::BuiltIn
+        );
+        let latex = fs::read_to_string(path).unwrap();
+        assert!(
+            latex.contains("\\section{Orchard \\textbf{Copper} \\textit{Amber} \\texttt{gather}}")
+        );
+        assert!(latex.contains("\\textbf{Willow} & \\textit{Violet} & \\texttt{measure}"));
+        assert!(latex.contains("\\begin{longtable}{lcr}"));
+    }
+
+    #[test]
+    fn issue_51_latex_export_preserves_list_nesting_and_starts() {
+        let nested = MarkdownDocument::from_text(
+            "- Orchard **route**\n  - East gate\n  - South bench\n- River route\n  1. Stone **bridge**\n  2. [ ] Inspect *path*\n\n> - Quoted parent\n>   - Quoted child\n",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let nested_path = dir.path().join("nested.tex");
+        nested.export_to(&nested_path, ExportFormat::Latex).unwrap();
+        let latex = fs::read_to_string(nested_path).unwrap();
+        assert!(
+            latex.contains(concat!(
+                "\\begin{itemize}\n",
+                "\\item Orchard \\textbf{route}\n",
+                "\\begin{itemize}\n",
+                "\\item East gate\n",
+                "\\item South bench\n",
+                "\\end{itemize}\n",
+                "\\item River route\n",
+                "\\begin{enumerate}\n",
+                "\\item[1.] Stone \\textbf{bridge}\n",
+                "\\item[2.] $\\square$ Inspect \\textit{path}\n",
+                "\\end{enumerate}\n",
+                "\\end{itemize}\n",
+            )),
+            "{latex}"
+        );
+        assert!(
+            latex.contains(concat!(
+                "\\item Quoted parent\n",
+                "\\begin{itemize}\n",
+                "\\item Quoted child\n",
+                "\\end{itemize}\n",
+                "\\end{itemize}\n",
+            )),
+            "{latex}"
+        );
+
+        let starts = MarkdownDocument::from_text(
+            "6. Inspect roof\n7. Check gutters\n\nSome text.\n\n12. Sweep courtyard\n13. Store broom\n",
+        );
+        let starts_path = dir.path().join("starts.tex");
+        starts.export_to(&starts_path, ExportFormat::Latex).unwrap();
+        let latex = fs::read_to_string(starts_path).unwrap();
+        assert_eq!(latex.matches("\\begin{enumerate}").count(), 2, "{latex}");
+        for expected in [
+            "\\item[6.] Inspect roof",
+            "\\item[7.] Check gutters",
+            "\\item[12.] Sweep courtyard",
+            "\\item[13.] Store broom",
+        ] {
+            assert!(latex.contains(expected), "missing {expected:?} in {latex}");
+        }
+    }
+
+    #[test]
+    fn issue_66_bare_link_query_parameters_survive_html_exports() {
+        for (url, href) in [
+            (
+                "https://example.test/meet?day=sat&room=4",
+                "https://example.test/meet?day=sat&amp;room=4",
+            ),
+            (
+                "www.example.test/tasks?status=open&sort=recent&limit=10",
+                "https://www.example.test/tasks?status=open&amp;sort=recent&amp;limit=10",
+            ),
+        ] {
+            let doc = MarkdownDocument::from_text(format!("See {url}"));
+            let expected = format!("<a href=\"{href}\">");
+            assert!(doc.render_html_fragment().contains(&expected));
+
+            let dir = tempfile::tempdir().unwrap();
+            for format in [ExportFormat::Html, ExportFormat::PlainHtml] {
+                let path = dir.path().join(match format {
+                    ExportFormat::Html => "styled.html",
+                    _ => "plain.html",
+                });
+                doc.export_to(&path, format).unwrap();
+                let html = fs::read_to_string(path).unwrap();
+                assert!(html.contains(&expected), "{html}");
+                assert!(!html.contains("amp;amp;"), "{html}");
+            }
+        }
+    }
+
+    #[test]
+    fn issue_94_literal_dollar_pairs_stay_text_in_latex_export() {
+        let doc = MarkdownDocument::from_text(
+            "First paragraph survives.\n\nPrices are \\$5 and \\$8 today.\n\nCompare \\$5 with 25% off and \\$8 today.\n\nLast paragraph survives.\n\nInline $x+2$.",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prices.tex");
+        doc.export_to(&path, ExportFormat::Latex).unwrap();
+        let latex = fs::read_to_string(path).unwrap();
+        assert!(latex.contains("Prices are \\$5 and \\$8 today."));
+        assert!(latex.contains("Compare \\$5 with 25\\% off and \\$8 today."));
+        assert!(!latex.contains("Prices are $5 and $8 today."));
+        assert!(latex.contains("Inline $x+2$."));
+
+        let entities = MarkdownDocument::from_text("Prices are &#36;5 and &#36;8 today.");
+        assert!(
+            entities
+                .render_latex_document()
+                .contains("Prices are \\$5 and \\$8 today.")
+        );
+    }
+
+    #[test]
     fn inline_math_survives_extended_superscript_extension() {
         let doc = MarkdownDocument::from_text("Inline $a^2+b^2=c^2$ and x^2^ outside.");
         let html = doc.render_html_fragment();
@@ -11327,6 +11939,70 @@ Intro.
     }
 
     #[test]
+    fn issue_101_code_payload_preserves_closing_fence_separator() {
+        let source = "Before.\n\n```python\nprint(1)\n```\n\nAfter.\n";
+        let document = MarkdownDocument::from_text(source);
+        let blocks = document.visual_blocks_shared();
+        let payload = blocks
+            .iter()
+            .find_map(|block| match block.editor.as_ref()? {
+                VisualBlockEditor::Code { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(&source[payload.source_range.clone()], "print(1)");
+        let cursor = payload.source_range.end;
+        assert!(
+            document
+                .direct_visual_block_edit(cursor..cursor + 1, "")
+                .is_none()
+        );
+        assert!(
+            document
+                .visual_editor_edge_target(cursor, true)
+                .is_some_and(|target| target != cursor)
+        );
+
+        for (empty_source, expected) in [
+            (
+                "```python\n```\n\nAfter.\n",
+                "```python\npass\n```\n\nAfter.\n",
+            ),
+            (
+                "```python\r\n```\r\n\r\nAfter.\r\n",
+                "```python\r\npass\r\n```\r\n\r\nAfter.\r\n",
+            ),
+        ] {
+            let mut empty = MarkdownDocument::from_text(empty_source);
+            let field = empty
+                .visual_blocks_shared()
+                .iter()
+                .find_map(|block| match block.editor.as_ref()? {
+                    VisualBlockEditor::Code { payload, .. } => Some(payload.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let cursor = field.source_range.start;
+            let edit = empty
+                .direct_visual_block_edit(cursor..cursor, "pass")
+                .unwrap();
+            assert!(empty.validate_visual_block_edit(&edit));
+            empty.replace_range(edit.range, &edit.replacement);
+            assert_eq!(empty.text(), expected);
+            assert_eq!(edit.selection_after, cursor + 4..cursor + 4);
+        }
+
+        let blank_source = "```\nprint(1)\n\n```\n\nAfter.\n";
+        let mut blank = MarkdownDocument::from_text(blank_source);
+        let cursor = blank_source.find("print(1)").unwrap() + "print(1)".len();
+        let edit = blank
+            .direct_visual_block_edit(cursor..cursor + 1, "")
+            .expect("an authored blank code line remains editable");
+        blank.replace_range(edit.range, &edit.replacement);
+        assert_eq!(blank.text(), "```\nprint(1)\n```\n\nAfter.\n");
+    }
+
+    #[test]
     fn direct_table_edit_patches_only_cell_preserves_alignment_and_restores_logical_cell() {
         let source = "before\n\n| A | B |\n| :--- | ---: |\n| x | y |\n\nafter";
         let mut doc = MarkdownDocument::from_text(source);
@@ -11494,6 +12170,43 @@ Intro.
         );
     }
 
+    #[test]
+    fn issue_76_first_cell_shift_tab_targets_previous_block_content_end() {
+        for (source, expected_offset, expected_start) in [
+            (
+                "# Before\n| A | B |\n| --- | --- |\n| x | y |",
+                8,
+                "# BeforeNote\n",
+            ),
+            (
+                "Before\n\n| A | B |\n| --- | --- |\n| x | y |",
+                6,
+                "BeforeNote\n\n",
+            ),
+        ] {
+            let mut doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let table = blocks
+                .iter()
+                .find(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
+                .unwrap();
+            let first = table.editor.as_ref().unwrap().fields()[0]
+                .source_range
+                .clone();
+            let target = doc
+                .visual_editor_tab_target(&first, false)
+                .expect("previous block handoff");
+            assert_eq!(target, expected_offset..expected_offset);
+            doc.replace_range(target, "Note");
+            assert!(doc.text().starts_with(expected_start), "{}", doc.text());
+            assert!(
+                doc.preview_blocks()
+                    .iter()
+                    .any(|block| matches!(block, PreviewBlock::Table { .. }))
+            );
+        }
+    }
+
     // ── Diagram rendering ──
 
     #[test]
@@ -11574,7 +12287,7 @@ Intro.
             unreachable!()
         };
         let payload_range = payload.source_range.clone();
-        assert_eq!(&markdown[payload_range.clone()], "A --> B\n");
+        assert_eq!(&markdown[payload_range.clone()], "A --> B");
         assert!(visual.source_range.start <= payload_range.start);
         assert!(payload_range.end <= visual.source_range.end);
         assert_eq!(

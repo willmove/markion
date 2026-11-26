@@ -431,6 +431,7 @@ impl MarkionApp {
             #[cfg(test)]
             last_tab_strip_reveal: None,
             input_marked_len: 0,
+            suppress_typing_transforms: false,
             document_input_target: None,
             ime_input_target: None,
             selected_tree_path: None,
@@ -1871,7 +1872,7 @@ impl MarkionApp {
         }
         // Bump the generation even when disabled so a pending timer from a
         // previous schedule is invalidated.
-        let active_index = self.active_tab;
+        let recovery_id = self.active_tab().recovery_id;
         let autosave_enabled = self.auto_save_preferences.enabled;
         let delay = Duration::from_secs(self.auto_save_preferences.delay_secs.max(1));
         let recovery_dir = self.recovery_dir.clone();
@@ -1885,7 +1886,7 @@ impl MarkionApp {
         cx.spawn(async move |this, cx| {
             Timer::after(delay).await;
             let _ = this.update(cx, |app, cx| {
-                app.run_due_autosave(active_index, generation, recovery_dir, cx);
+                app.run_due_autosave(recovery_id, generation, recovery_dir, cx);
             });
         })
         .detach();
@@ -1898,14 +1899,19 @@ impl MarkionApp {
     /// `gpui::Timer` is real-time and outside the test executor's clock.
     pub(super) fn run_due_autosave(
         &mut self,
-        active_index: usize,
+        recovery_id: u64,
         generation: u64,
         recovery_dir: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        // Validate the tab still exists and its generation matches, so a tab
-        // switch (or close) between schedule and fire does not autosave the
-        // wrong tab or a removed one.
+        // Re-locate by stable identity because closing another tab may have
+        // shifted the scheduled tab's index.
+        let Some(active_index) = self.tabs.iter().position(|tab| {
+            tab.document_tab()
+                .is_some_and(|document| document.recovery_id == recovery_id)
+        }) else {
+            return;
+        };
         let Some(tab) = self.tabs.get(active_index) else {
             return;
         };
@@ -2664,12 +2670,10 @@ impl MarkionApp {
     ) {
         let mut opened_any = false;
         let mut replaced_initial = false;
-        let mut restored_paths = Vec::new();
         for path in open_files {
             match self.open_restored_snapshot_path(path.clone(), &mut replaced_initial, cx) {
                 Ok(()) => {
                     opened_any = true;
-                    restored_paths.push(path);
                 }
                 Err(err) => {
                     tracing::warn!(path = ?path, error = %err, "session restore skipped file");
@@ -2696,9 +2700,6 @@ impl MarkionApp {
             self.update_workspace_root_from_document(cx);
         }
 
-        for path in &restored_paths {
-            self.session.touch_recent(comparable_document_path(path));
-        }
         self.sync_and_persist_session();
     }
 
@@ -3290,9 +3291,11 @@ impl MarkionApp {
             return true;
         }
         if let Some(field) = self.focused_search_field_mut() {
-            field.backspace();
-            self.search_generation = None;
-            self.after_input_changed(cx);
+            let changed = field.backspace();
+            if changed {
+                self.search_generation = None;
+                self.after_input_changed(cx);
+            }
             return true;
         }
         if self.backspace_overlay_text(cx) {
@@ -3316,9 +3319,11 @@ impl MarkionApp {
             return true;
         }
         if let Some(field) = self.focused_search_field_mut() {
-            field.delete_forward();
-            self.search_generation = None;
-            self.after_input_changed(cx);
+            let changed = field.delete_forward();
+            if changed {
+                self.search_generation = None;
+                self.after_input_changed(cx);
+            }
             return true;
         }
         if self.delete_overlay_text_forward(cx) {
@@ -3347,7 +3352,18 @@ impl MarkionApp {
         let count = self
             .file_tree
             .as_ref()
-            .map(|tree| tree.filtered_entries_limited(&self.file_tree_query, 0).1)
+            .map(|tree| {
+                let (entries, _) = super::root_view::filtered_visible_file_tree_entries(
+                    tree,
+                    &self.file_tree_query,
+                    &self.collapsed_tree_paths,
+                    usize::MAX,
+                );
+                entries
+                    .iter()
+                    .filter(|entry| entry.kind == FileTreeEntryKind::File)
+                    .count()
+            })
             .unwrap_or(0);
         let msg = if self.file_tree_query.is_empty() {
             Msg::StatusFilesVisible

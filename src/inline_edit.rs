@@ -50,6 +50,8 @@ pub fn snap_image_width_percent(percent: u8) -> u8 {
 pub struct InlineMarkdownTarget {
     pub source_range: Range<usize>,
     pub label: String,
+    /// Original label bytes inside the brackets, including backslash escapes.
+    pub authored_label: String,
     pub url: String,
     pub title: Option<String>,
     pub presentation: Option<ImagePresentation>,
@@ -70,7 +72,7 @@ pub fn proven_single_line_image_span(authored: &str) -> bool {
     if !authored.starts_with("![") || authored.contains(['\n', '\r']) {
         return false;
     }
-    let Some(label_end) = find_unescaped(authored, 2, b']') else {
+    let Some(label_end) = find_label_end(authored, 2) else {
         return false;
     };
     let after = label_end + 1;
@@ -94,7 +96,7 @@ pub fn authored_image_destination_range(authored: &str) -> Option<Range<usize>> 
     if !authored.starts_with("![") || !authored.ends_with(')') {
         return None;
     }
-    let label_end = find_unescaped(authored, 2, b']')?;
+    let label_end = find_label_end(authored, 2)?;
     if authored.as_bytes().get(label_end + 1) != Some(&b'(') {
         return None;
     }
@@ -145,7 +147,7 @@ fn inline_target_at(source: &str, offset: usize, image: bool) -> Option<InlineMa
             if !authored.starts_with(prefix) || !authored.ends_with(')') {
                 return None;
             }
-            let label_end = find_unescaped(authored, prefix.len(), b']')?;
+            let label_end = find_label_end(authored, prefix.len())?;
             if authored.as_bytes().get(label_end + 1) != Some(&b'(') {
                 return None;
             }
@@ -158,6 +160,7 @@ fn inline_target_at(source: &str, offset: usize, image: bool) -> Option<InlineMa
             Some(InlineMarkdownTarget {
                 source_range: range,
                 label,
+                authored_label: authored[prefix.len()..label_end].to_string(),
                 url: destination.to_string(),
                 title,
                 presentation,
@@ -178,6 +181,23 @@ pub fn serialize_inline_image(
     serialize_target(true, alt, url, title, presentation)
 }
 
+pub fn serialize_inline_link_with_authored_label(
+    authored_label: &str,
+    url: &str,
+    title: Option<&str>,
+) -> String {
+    serialize_target_impl(false, authored_label, url, title, None, true)
+}
+
+pub fn serialize_inline_image_with_authored_label(
+    authored_label: &str,
+    url: &str,
+    title: Option<&str>,
+    presentation: Option<ImagePresentation>,
+) -> String {
+    serialize_target_impl(true, authored_label, url, title, presentation, true)
+}
+
 fn serialize_target(
     image: bool,
     label: &str,
@@ -185,12 +205,27 @@ fn serialize_target(
     title: Option<&str>,
     presentation: Option<ImagePresentation>,
 ) -> String {
+    serialize_target_impl(image, label, url, title, presentation, false)
+}
+
+fn serialize_target_impl(
+    image: bool,
+    label: &str,
+    url: &str,
+    title: Option<&str>,
+    presentation: Option<ImagePresentation>,
+    authored_label: bool,
+) -> String {
     let mut rendered = String::new();
     if image {
         rendered.push('!');
     }
     rendered.push('[');
-    rendered.push_str(&escape_label(label));
+    if authored_label {
+        rendered.push_str(label);
+    } else {
+        rendered.push_str(&escape_label(label));
+    }
     rendered.push_str("](");
     rendered.push_str(&escape_destination(url));
     let title = compose_title(title, presentation);
@@ -227,17 +262,7 @@ pub(crate) fn serialize_inline_image_with_authored_alt(
     url: &str,
     title: Option<&str>,
 ) -> String {
-    let mut rendered = String::from("![");
-    rendered.push_str(authored_alt);
-    rendered.push_str("](");
-    rendered.push_str(&escape_destination(url));
-    if let Some(title) = title.filter(|title| !title.is_empty()) {
-        rendered.push_str(" \"");
-        rendered.push_str(&title.replace('\\', "\\\\").replace('"', "\\\""));
-        rendered.push('"');
-    }
-    rendered.push(')');
-    rendered
+    serialize_target_impl(true, authored_alt, url, title, None, true)
 }
 
 pub(crate) fn authored_image_alt_source(authored: &str) -> Option<&str> {
@@ -288,6 +313,28 @@ pub(crate) fn unescape_markdown(value: &str) -> String {
         }
     }
     out
+}
+
+fn find_label_end(source: &str, start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (index, byte) in source.as_bytes().iter().copied().enumerate().skip(start) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        match byte {
+            b'[' => depth += 1,
+            b']' if depth == 0 => return Some(index),
+            b']' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) fn find_unescaped(source: &str, start: usize, needle: u8) -> Option<usize> {
@@ -557,6 +604,31 @@ mod tests {
             serialize_inline_link(&target.label, &target.url, target.title.as_deref()),
             "[标\\]签](<docs/a b.md> \"标题\")"
         );
+    }
+
+    #[test]
+    fn issue_82_inline_link_supports_balanced_brackets_in_label() {
+        let source = "Read [Minutes [draft]](old.md \"Notes\") today.";
+        let target = inline_link_at(source, source.find("nutes").unwrap()).unwrap();
+        assert_eq!(target.label, "Minutes [draft]");
+        assert_eq!(target.url, "old.md");
+        assert_eq!(target.title.as_deref(), Some("Notes"));
+        assert_eq!(
+            &source[target.source_range.clone()],
+            "[Minutes [draft]](old.md \"Notes\")"
+        );
+
+        let replacement = serialize_inline_link(&target.label, "new.md", target.title.as_deref());
+        let mut revised = source.to_string();
+        revised.replace_range(target.source_range, &replacement);
+        assert_eq!(
+            revised,
+            "Read [Minutes \\[draft\\]](new.md \"Notes\") today."
+        );
+        let reparsed = inline_link_at(&revised, revised.find("nutes").unwrap()).unwrap();
+        assert_eq!(reparsed.label, "Minutes [draft]");
+        assert_eq!(reparsed.url, "new.md");
+        assert!(!revised.contains("old.md"));
     }
 
     #[test]

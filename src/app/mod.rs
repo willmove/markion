@@ -76,11 +76,12 @@ use markion::{
     read_document_source, redistribute_adjacent_column_percents, reorder_block,
     resolve_font_family, resolve_html_img_display_size, save_app_preferences, save_session_state,
     save_text_snapshot, save_theme_definition, serialize_html_anchor, serialize_inline_image,
-    serialize_inline_link, shortcut_catalog, sidebar_tab_label, simple_html_anchor_at,
-    slash_command_edit, slash_query_at, snap_image_width_percent, t, table_column_flex_weights,
-    table_column_flex_weights_with_authored, table_column_width_prefix_len, task_checkbox_toggle,
-    tf, title_from_path, transform_block, url_auto_link_action, validate_block_target,
-    workspace_relative_path,
+    serialize_inline_image_with_authored_label, serialize_inline_link,
+    serialize_inline_link_with_authored_label, shortcut_catalog, sidebar_tab_label,
+    simple_html_anchor_at, slash_command_edit, slash_query_at, snap_image_width_percent, t,
+    table_column_flex_weights, table_column_flex_weights_with_authored,
+    table_column_width_prefix_len, task_checkbox_toggle, tf, title_from_path, transform_block,
+    url_auto_link_action, validate_block_target, workspace_relative_path,
 };
 use markion::{DEFAULT_LINE_SPACING, MAX_LINE_SPACING, MIN_LINE_SPACING, normalize_line_spacing};
 use markion_git_sync::{
@@ -1277,8 +1278,9 @@ impl SearchFieldState {
         self.marked_range = marked.then_some(range.start..self.cursor);
     }
 
-    fn backspace(&mut self) {
+    fn backspace(&mut self) -> bool {
         self.clamp_to_boundaries();
+        let had_marked = self.marked_range.is_some();
         let selection = self
             .marked_range
             .clone()
@@ -1288,14 +1290,17 @@ impl SearchFieldState {
         } else {
             selection
         };
+        let changed = had_marked || !range.is_empty();
         self.buffer.replace_range(range.clone(), "");
         self.cursor = range.start;
         self.anchor = self.cursor;
         self.marked_range = None;
+        changed
     }
 
-    fn delete_forward(&mut self) {
+    fn delete_forward(&mut self) -> bool {
         self.clamp_to_boundaries();
+        let had_marked = self.marked_range.is_some();
         let selection = self
             .marked_range
             .clone()
@@ -1305,10 +1310,12 @@ impl SearchFieldState {
         } else {
             selection
         };
+        let changed = had_marked || !range.is_empty();
         self.buffer.replace_range(range.clone(), "");
         self.cursor = range.start;
         self.anchor = self.cursor;
         self.marked_range = None;
+        changed
     }
 
     fn selected_text(&self) -> Option<&str> {
@@ -3431,6 +3438,9 @@ struct MarkionApp {
     // Byte length of the trailing IME composition inside whichever redirected
     // text field (file-tree filter / search) currently has logical focus.
     input_marked_len: usize,
+    /// Suppresses typing-only conversions while a paste synchronously reuses
+    /// the shared checked document-input pipeline.
+    suppress_typing_transforms: bool,
     /// Last document identity/version reported to the platform text service.
     /// A callback for another tab or an older version is rejected instead of
     /// being reinterpreted against the current active document.
