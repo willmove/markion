@@ -10705,6 +10705,61 @@ fn issue_89_undo_restores_collapsed_caret_before_single_delete(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn issue_97_cut_and_selection_delete_preserve_unselected_closer(cx: &mut TestAppContext) {
+    for mode in [ViewMode::Edit, ViewMode::VisualEdit] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.markdown_auto_pair = true;
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("Use f() here."))];
+            app.view_mode = mode;
+            app.active_tab_mut().selected_range = 5..6;
+            app
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.cut(&Cut, window, cx);
+                assert_eq!(app.active_tab().document.text(), "Use f) here.");
+                assert_eq!(
+                    cx.read_from_clipboard().and_then(|item| item.text()),
+                    Some("(".into())
+                );
+                app.undo(&Undo, window, cx);
+                assert_eq!(app.active_tab().document.text(), "Use f() here.");
+                assert_eq!(app.active_tab().selected_range, 5..6);
+            });
+        });
+    }
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.markdown_auto_pair = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("Order [] now."))];
+        app.active_tab_mut().selected_range = 6..7;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.delete(&Delete, window, cx);
+            assert_eq!(app.active_tab().document.text(), "Order ] now.");
+        });
+    });
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.markdown_auto_pair = true;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("f()"))];
+        app.active_tab_mut().selected_range = 2..2;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.backspace(&Backspace, window, cx);
+            assert_eq!(app.active_tab().document.text(), "f");
+        });
+    });
+}
+
+#[gpui::test]
 fn visual_edit_structural_backspace_is_one_undoable_tab_local_edit(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

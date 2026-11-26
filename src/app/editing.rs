@@ -6158,7 +6158,7 @@ impl MarkionApp {
             self.replace_text_in_range(Some(range), "", window, cx);
             return;
         }
-        self.replace_text_in_range(None, "", window, cx);
+        self.replace_text_without_typing_transforms(None, "", window, cx);
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
@@ -6230,7 +6230,7 @@ impl MarkionApp {
             self.replace_text_in_range(Some(range), "", window, cx);
             return;
         }
-        self.replace_text_in_range(None, "", window, cx);
+        self.replace_text_without_typing_transforms(None, "", window, cx);
     }
 
     fn delete_stable_opaque_token(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
@@ -6335,7 +6335,7 @@ impl MarkionApp {
                 .is_some();
             if inside_fenced_code {
                 self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-                self.replace_pasted_text_in_range(None, &text, window, cx);
+                self.replace_text_without_typing_transforms(None, &text, window, cx);
                 self.active_tab_mut().finish_undo_capture();
                 if self.code_block_preferences.format_on_paste {
                     let updated_range = self.active_tab().safe_selected_range();
@@ -6377,7 +6377,7 @@ impl MarkionApp {
         }
     }
 
-    fn replace_pasted_text_in_range(
+    fn replace_text_without_typing_transforms(
         &mut self,
         range_utf16: Option<Range<usize>>,
         insertion: &str,
@@ -6399,7 +6399,7 @@ impl MarkionApp {
         let insertion_start = self.active_tab().safe_selected_range().start;
         let insertion_end = insertion_start + insertion.len();
         self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-        self.replace_pasted_text_in_range(None, insertion, window, cx);
+        self.replace_text_without_typing_transforms(None, insertion, window, cx);
         self.active_tab_mut().finish_undo_capture();
         self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
     }
@@ -6481,7 +6481,7 @@ impl MarkionApp {
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
             cx.write_to_clipboard(ClipboardItem::new_string(text));
-            self.replace_text_in_range(None, "", window, cx);
+            self.replace_text_without_typing_transforms(None, "", window, cx);
             self.status = t(self.language, Msg::StatusCutSelection).into();
             cx.notify();
         } else {
