@@ -20050,6 +20050,42 @@ fn issue_67_paste_never_applies_typing_transforms(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_73_rich_text_paste_preserves_formatted_separator_space(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "New note".to_string(),
+            "<p><strong>New </strong>note</p>".to_string(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.paste(&Paste, window, cx);
+            assert_eq!(app.active_tab().document.text(), "**New** note");
+            let blocks = app.active_tab().document.preview_blocks();
+            assert!(blocks.iter().any(|block| match block {
+                PreviewBlock::Paragraph { text, .. } => {
+                    text.text == "New note"
+                        && text
+                            .spans
+                            .iter()
+                            .any(|span| span.text == "New" && span.style.bold)
+                }
+                _ => false,
+            }));
+            assert!(app.active_tab_mut().apply_undo());
+            assert_eq!(app.active_tab().document.text(), "");
+            app.paste_plain_text(&PastePlainText, window, cx);
+            assert_eq!(app.active_tab().document.text(), "New note");
+        });
+    });
+}
+
+#[gpui::test]
 fn pasted_clipboard_html_with_empty_conversion_falls_back_to_plain_text(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

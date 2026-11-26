@@ -268,9 +268,9 @@ fn render_blockquote(r: &mut Renderer, element: &Element) {
     r.line_start = true;
 }
 
-/// Wraps children in paired markers, skipping empty wrappers and trimming
-/// whitespace that would otherwise glue to the markers. A wrapper holding
-/// only whitespace still separates the words around it.
+/// Wraps children in paired markers, moving edge whitespace outside the
+/// markers without duplicating existing separators. A wrapper holding only
+/// whitespace still separates the words around it.
 fn wrap_children(r: &mut Renderer, children: &[Node], open: &str, close: &str) {
     if open.is_empty() {
         render_children(r, children);
@@ -289,9 +289,18 @@ fn wrap_children(r: &mut Renderer, children: &[Node], open: &str, close: &str) {
         }
         return;
     }
+    if region.chars().next().is_some_and(char::is_whitespace)
+        && !r.out.is_empty()
+        && !r.out.ends_with([' ', '\n'])
+    {
+        r.out.push(' ');
+    }
     r.out.push_str(open);
     r.out.push_str(inner);
     r.out.push_str(close);
+    if region.chars().last().is_some_and(char::is_whitespace) && !r.out.ends_with([' ', '\n']) {
+        r.out.push(' ');
+    }
     r.line_start = false;
 }
 
