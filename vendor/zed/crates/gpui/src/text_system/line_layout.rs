@@ -8,6 +8,7 @@ use std::{
     ops::Range,
     sync::Arc,
 };
+use unicode_linebreak::{BreakClass, break_property};
 
 use super::LineWrapper;
 
@@ -132,9 +133,12 @@ impl LineLayout {
         max_lines: Option<usize>,
     ) -> SmallVec<[WrapBoundary; 1]> {
         let mut boundaries = SmallVec::new();
+        if self.width <= wrap_width {
+            return boundaries;
+        }
         let mut first_non_whitespace_ix = None;
-        let mut last_candidate_ix = None;
-        let mut last_candidate_x = px(0.);
+        let mut last_candidate = None;
+        let mut last_fallback = None;
         let mut last_boundary = WrapBoundary {
             run_ix: 0,
             glyph_ix: 0,
@@ -164,15 +168,15 @@ impl LineLayout {
 
             // Here is very similar to `LineWrapper::wrap_line` to determine text wrapping,
             // but there are some differences, so we have to duplicate the code here.
-            if LineWrapper::is_word_char(ch) {
-                if prev_ch == ' ' && ch != ' ' && first_non_whitespace_ix.is_some() {
-                    last_candidate_ix = Some(boundary);
-                    last_candidate_x = x;
+            if !is_closing_punctuation(ch) {
+                if boundary > last_boundary {
+                    last_fallback = Some((boundary, x));
                 }
-            } else {
-                if ch != ' ' && first_non_whitespace_ix.is_some() {
-                    last_candidate_ix = Some(boundary);
-                    last_candidate_x = x;
+                if ch != ' '
+                    && first_non_whitespace_ix.is_some()
+                    && (prev_ch == ' ' || !LineWrapper::is_word_char(ch))
+                {
+                    last_candidate = Some((boundary, x));
                 }
             }
 
@@ -191,20 +195,33 @@ impl LineLayout {
                     break;
                 }
 
-                if let Some(last_candidate_ix) = last_candidate_ix.take() {
-                    last_boundary = last_candidate_ix;
-                    last_boundary_x = last_candidate_x;
-                } else {
-                    last_boundary = boundary;
-                    last_boundary_x = x;
+                let next_boundary = last_candidate
+                    .take()
+                    .filter(|(candidate, _)| *candidate > last_boundary)
+                    .or_else(|| last_fallback.filter(|(candidate, _)| *candidate > last_boundary));
+                if let Some((next_boundary, next_x)) = next_boundary {
+                    last_boundary = next_boundary;
+                    last_boundary_x = next_x;
+                    boundaries.push(last_boundary);
                 }
-                boundaries.push(last_boundary);
             }
             prev_ch = ch;
         }
 
         boundaries
     }
+}
+
+fn is_closing_punctuation(ch: char) -> bool {
+    matches!(
+        break_property(ch as u32),
+        BreakClass::ClosePunctuation
+            | BreakClass::CloseParenthesis
+            | BreakClass::Exclamation
+            | BreakClass::InfixSeparator
+            | BreakClass::NonStarter
+            | BreakClass::Symbol
+    ) || matches!(ch, '’' | '”')
 }
 
 /// A line of text that has been wrapped to fit a given width

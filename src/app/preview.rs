@@ -1,5 +1,11 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static PREVIEW_TEXT_LAYOUTS: std::cell::RefCell<Option<Vec<(usize, TextLayout)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 pub(super) fn read_mode_preview_is_constrained(
     view_mode: ViewMode,
     preview_adaptive_width: bool,
@@ -1657,6 +1663,15 @@ impl Element for SelectablePreviewText {
         cx: &mut App,
     ) {
         let text_layout = self.text.layout().clone();
+        #[cfg(test)]
+        PREVIEW_TEXT_LAYOUTS.with_borrow_mut(|observed| {
+            if self.block_index == 0
+                && self.run_id == PreviewTextRunId::Body
+                && let Some(layouts) = observed
+            {
+                layouts.push((self.run_offset, text_layout.clone()));
+            }
+        });
         let palette = self.entity.read(cx).palette();
         for (range, current) in self.search_ranges.clone() {
             let color = if current {
@@ -2050,17 +2065,16 @@ fn rich_inline_fragments(
     let selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
     let searches = active_preview_search_ranges(app, block_index, run_id, &rich.text);
     let run_text = SharedString::from(rich.text.clone());
-    let mut lines = vec![Vec::new()];
+    let mut prose = MixedProse::default();
+    let breaks = ProseWrapBreaks::new(&rich.text);
     let mut offset = 0;
     let mut index = 0;
     for span in &rich.spans {
         for piece in span.text.split_inclusive('\n') {
             let content = piece.strip_suffix('\n').unwrap_or(piece);
-            for fragment in content.split_inclusive(char::is_whitespace) {
-                if fragment.is_empty() {
-                    continue;
-                }
-                let range = offset..offset + fragment.len();
+            let content_range = offset..offset + content.len();
+            for (range, can_wrap_after) in breaks.fragments(content_range) {
+                let fragment = &rich.text[range.clone()];
                 let style = preview_span_highlight(span)
                     .map(|style| vec![(0..fragment.len(), style)])
                     .unwrap_or_default();
@@ -2083,16 +2097,15 @@ fn rich_inline_fragments(
                     span.link.clone().into_iter().collect(),
                 )
                 .into_any_element();
-                mixed_prose_push(
-                    &mut lines,
+                prose.push_text(
                     script_fragment(child, span.style, metrics, app, cx),
+                    can_wrap_after,
                 );
-                offset = range.end;
                 index += 1;
             }
+            offset += piece.len();
             if piece.ends_with('\n') {
-                mixed_prose_break_line(&mut lines);
-                offset += 1;
+                prose.break_line();
             }
         }
     }
@@ -2100,16 +2113,24 @@ fn rich_inline_fragments(
         .w_full()
         .flex()
         .flex_col()
-        .children(lines.into_iter().enumerate().map(|(line_index, line)| {
-            div()
-                .debug_selector(move || format!("read-inline-line-{block_index}-{line_index}"))
-                .w_full()
-                .min_h(px(metrics.1))
-                .flex()
-                .flex_wrap()
-                .items_end()
-                .children(line)
-        }))
+        .children(
+            prose
+                .into_lines()
+                .into_iter()
+                .enumerate()
+                .map(|(line_index, line)| {
+                    div()
+                        .debug_selector(move || {
+                            format!("read-inline-line-{block_index}-{line_index}")
+                        })
+                        .w_full()
+                        .min_h(px(metrics.1))
+                        .flex()
+                        .flex_wrap()
+                        .items_end()
+                        .children(line)
+                }),
+        )
         .into_any_element()
 }
 
@@ -2410,7 +2431,8 @@ pub(super) fn rich_text_with_math_element(
     let id_prefix = table_prefix.as_deref().unwrap_or(id_prefix);
     let run_text = SharedString::from(rich.text.clone());
     let inline_metrics = Some((font_size, line_height));
-    let mut lines = vec![Vec::new()];
+    let mut prose = MixedProse::default();
+    let breaks = ProseWrapBreaks::new(&rich.text);
     let mut offset = 0usize;
     let mut fragment_index = 0usize;
     for span in &rich.spans {
@@ -2418,8 +2440,7 @@ pub(super) fn rich_text_with_math_element(
         offset = span_range.end;
         if let Some(image) = &span.image {
             let selector = format!("{id_prefix}-{block_index}-image-{fragment_index}");
-            mixed_prose_push(
-                &mut lines,
+            prose.push_atom(
                 linked_preview_image(
                     preview_inline_image_view(
                         app,
@@ -2448,22 +2469,19 @@ pub(super) fn rich_text_with_math_element(
                 display_scale,
                 app.palette().text,
             ) {
-                MathCacheEntry::Ready(image) => mixed_prose_push(
-                    &mut lines,
-                    preview_math_atom(
-                        app,
-                        image,
-                        block_index,
-                        run_id,
-                        span_range,
-                        run_text.clone(),
-                        inline_metrics,
-                        // A cell may be narrower than its formula; prose and
-                        // display atoms keep their measured width.
-                        fit_table_cell,
-                        cx,
-                    ),
-                ),
+                MathCacheEntry::Ready(image) => prose.push_atom(preview_math_atom(
+                    app,
+                    image,
+                    block_index,
+                    run_id,
+                    span_range,
+                    run_text.clone(),
+                    inline_metrics,
+                    // A cell may be narrower than its formula; prose and
+                    // display atoms keep their measured width.
+                    fit_table_cell,
+                    cx,
+                )),
                 MathCacheEntry::Pending | MathCacheEntry::Error(_) => {
                     let local_len = span.text.len();
                     let mut style = HighlightStyle {
@@ -2488,8 +2506,7 @@ pub(super) fn rich_text_with_math_element(
                         preview_fragment_selection(full_selection.as_ref(), span_range.clone());
                     let search_ranges =
                         preview_fragment_search_ranges(&full_search_ranges, span_range.clone());
-                    mixed_prose_push(
-                        &mut lines,
+                    prose.push_atom(
                         SelectablePreviewText::new(
                             ElementId::from(SharedString::from(format!(
                                 "{id_prefix}-{block_index}-{fragment_index}"
@@ -2534,29 +2551,24 @@ pub(super) fn rich_text_with_math_element(
             .with_search_ranges(search_ranges)
             .with_run_offset(span_range.start)
             .into_any_element();
-            mixed_prose_push(
-                &mut lines,
-                with_footnote_tooltip(
-                    app,
-                    span.footnote.as_deref(),
-                    child,
-                    ElementId::from(SharedString::from(format!(
-                        "{id_prefix}-footnote-{block_index}-{fragment_index}"
-                    ))),
-                ),
-            );
+            prose.push_atom(with_footnote_tooltip(
+                app,
+                span.footnote.as_deref(),
+                child,
+                ElementId::from(SharedString::from(format!(
+                    "{id_prefix}-footnote-{block_index}-{fragment_index}"
+                ))),
+            ));
             fragment_index += 1;
             continue;
         }
 
-        let mut fragment_start = span_range.start;
+        let mut piece_start = span_range.start;
         for piece in span.text.split_inclusive('\n') {
             let content = piece.strip_suffix('\n').unwrap_or(piece);
-            for fragment in content.split_inclusive(char::is_whitespace) {
-                if fragment.is_empty() {
-                    continue;
-                }
-                let fragment_range = fragment_start..fragment_start + fragment.len();
+            let content_range = piece_start..piece_start + content.len();
+            for (fragment_range, can_wrap_after) in breaks.fragments(content_range) {
+                let fragment = &rich.text[fragment_range.clone()];
                 let local_range = 0..fragment.len();
                 let mut highlights = Vec::new();
                 if let Some(style) = preview_span_highlight(span) {
@@ -2571,8 +2583,7 @@ pub(super) fn rich_text_with_math_element(
                     preview_fragment_selection(full_selection.as_ref(), fragment_range.clone());
                 let search_ranges =
                     preview_fragment_search_ranges(&full_search_ranges, fragment_range.clone());
-                mixed_prose_push(
-                    &mut lines,
+                prose.push_text(
                     script_fragment(
                         SelectablePreviewText::new(
                             ElementId::from(SharedString::from(format!(
@@ -2595,13 +2606,13 @@ pub(super) fn rich_text_with_math_element(
                         app,
                         cx,
                     ),
+                    can_wrap_after,
                 );
                 fragment_index += 1;
-                fragment_start = fragment_range.end;
             }
+            piece_start += piece.len();
             if piece.ends_with('\n') {
-                mixed_prose_break_line(&mut lines);
-                fragment_start += 1;
+                prose.break_line();
             }
         }
     }
@@ -2610,7 +2621,7 @@ pub(super) fn rich_text_with_math_element(
         .w_full()
         .flex()
         .flex_col()
-        .children(lines.into_iter().map(|line| {
+        .children(prose.into_lines().into_iter().map(|line| {
             div()
                 .w_full()
                 .min_h(px(line_height))
@@ -3477,31 +3488,88 @@ fn visual_projection_fragment(
     )
 }
 
-/// Source-backed mixed layout for Visual Edit. A focused formula is already a
-/// source piece in `build_visual_projection`; other formulas remain image
-/// atoms while adjacent prose keeps exact visible-to-source segments.
-/// Inline raw-HTML `<img>` tags render through the same mixed layout as
-/// image atoms, and focused tags reveal their authored source.
-/// When inline syntax stays hidden, the same flex-wrap layout inserts a
-/// compact edit icon after each link. Open icons are not painted; Ctrl/Cmd-click
-/// on the label navigates.
-fn mixed_prose_current_line(lines: &mut Vec<Vec<gpui::AnyElement>>) -> &mut Vec<gpui::AnyElement> {
-    if lines.is_empty() {
-        lines.push(Vec::new());
+/// Compute break opportunities on the whole displayed string, across style boundaries.
+struct ProseWrapBreaks(Vec<usize>);
+
+impl ProseWrapBreaks {
+    fn new(text: &str) -> Self {
+        Self(
+            unicode_linebreak::linebreaks(text)
+                .map(|(offset, _)| offset)
+                .collect(),
+        )
     }
-    lines
-        .last_mut()
-        .expect("mixed prose keeps at least one line")
+
+    fn fragments(&self, range: Range<usize>) -> impl Iterator<Item = (Range<usize>, bool)> + '_ {
+        let first = self.0.partition_point(|offset| *offset <= range.start);
+        let last = self.0.partition_point(|offset| *offset <= range.end);
+        let mut start = range.start;
+        self.0[first..last]
+            .iter()
+            .map(|&end| (end, true))
+            .chain(std::iter::once((range.end, false)))
+            .filter_map(move |(end, can_wrap_after)| {
+                let fragment = start..end;
+                start = end;
+                (!fragment.is_empty()).then_some((fragment, can_wrap_after))
+            })
+    }
+
+    fn can_wrap_at(&self, offset: usize) -> bool {
+        self.0.binary_search(&offset).is_ok()
+    }
 }
 
-fn mixed_prose_break_line(lines: &mut Vec<Vec<gpui::AnyElement>>) {
-    lines.push(Vec::new());
+#[derive(Default)]
+struct MixedProse {
+    complete_lines: Vec<Vec<gpui::AnyElement>>,
+    line: Vec<gpui::AnyElement>,
+    pending_text: Vec<gpui::AnyElement>,
 }
 
-fn mixed_prose_push(lines: &mut Vec<Vec<gpui::AnyElement>>, child: gpui::AnyElement) {
-    mixed_prose_current_line(lines).push(child);
+impl MixedProse {
+    fn finish_text(&mut self) {
+        let child = match self.pending_text.len() {
+            0 => return,
+            1 => self.pending_text.pop().unwrap(),
+            // Keep each child's style and interaction ranges while letting the
+            // outer flex row wrap this text as one item.
+            _ => div()
+                .flex_none()
+                .flex()
+                .items_end()
+                .children(self.pending_text.drain(..))
+                .into_any_element(),
+        };
+        self.line.push(child);
+    }
+
+    fn push_text(&mut self, child: gpui::AnyElement, can_wrap_after: bool) {
+        self.pending_text.push(child);
+        if can_wrap_after {
+            self.finish_text();
+        }
+    }
+
+    fn push_atom(&mut self, child: gpui::AnyElement) {
+        self.finish_text();
+        self.line.push(child);
+    }
+
+    fn break_line(&mut self) {
+        self.finish_text();
+        self.complete_lines.push(std::mem::take(&mut self.line));
+    }
+
+    fn into_lines(mut self) -> Vec<Vec<gpui::AnyElement>> {
+        self.break_line();
+        self.complete_lines
+    }
 }
 
+/// Source-backed mixed layout for Visual Edit. Focused formulas and image tags
+/// are source pieces in the projection. Other formulas and images stay inline
+/// atoms alongside editable prose, link edit icons, and footnote tooltips.
 pub(super) fn visual_text_with_math_element(
     block: &VisualBlock,
     block_index: usize,
@@ -3583,7 +3651,8 @@ pub(super) fn visual_text_with_math_element(
     let mut pending_caret = projection
         .display_for_source(app.active_tab().cursor_offset())
         .map(|display| projection.source_for_display(display));
-    let mut lines: Vec<Vec<gpui::AnyElement>> = vec![Vec::new()];
+    let mut prose = MixedProse::default();
+    let breaks = ProseWrapBreaks::new(&projection.text);
     let mut fragment_index = 0usize;
     let mut remaining_icons = nav_icons;
     for (segment, projected_span) in projection.segments.iter().zip(&projection.spans) {
@@ -3612,20 +3681,17 @@ pub(super) fn visual_text_with_math_element(
                 app.palette().text,
             )
         {
-            mixed_prose_push(
-                &mut lines,
-                visual_math_atom(
-                    app,
-                    image,
-                    math.source_range.clone(),
-                    Some(inline_metrics),
-                    app.stable_visual_inline && math.style == MathLayoutStyle::Text,
-                    cx,
-                ),
-            );
+            prose.push_atom(visual_math_atom(
+                app,
+                image,
+                math.source_range.clone(),
+                Some(inline_metrics),
+                app.stable_visual_inline && math.style == MathLayoutStyle::Text,
+                cx,
+            ));
             fragment_index += 1;
             fragment_index += emit_navigation_icons_after(
-                mixed_prose_current_line(&mut lines),
+                &mut prose,
                 &mut remaining_icons,
                 segment.source_range.end,
                 block_index,
@@ -3645,13 +3711,16 @@ pub(super) fn visual_text_with_math_element(
         if let Some(Some(run)) = html_image
             && let Some(image) = &run.html_image
         {
-            mixed_prose_push(
-                &mut lines,
-                visual_html_image_atom(app, image, segment.source_range.clone(), document_dir, cx),
-            );
+            prose.push_atom(visual_html_image_atom(
+                app,
+                image,
+                segment.source_range.clone(),
+                document_dir,
+                cx,
+            ));
             fragment_index += 1;
             fragment_index += emit_navigation_icons_after(
-                mixed_prose_current_line(&mut lines),
+                &mut prose,
                 &mut remaining_icons,
                 segment.source_range.end,
                 block_index,
@@ -3673,150 +3742,92 @@ pub(super) fn visual_text_with_math_element(
             visual_highlight_style(projected_span.style, projected_span.link)
         };
         let can_split = visible.len() == segment.source_range.len();
-        let mut local_start = 0usize;
+        let mut piece_start = segment.display_range.start;
         for piece in visible.split_inclusive('\n') {
-            if piece.is_empty() {
-                continue;
-            }
             let had_break = piece.ends_with('\n');
-            let content = if had_break {
-                let without_lf = piece.strip_suffix('\n').unwrap_or(piece);
+            let content = if let Some(without_lf) = piece.strip_suffix('\n') {
                 without_lf.strip_suffix('\r').unwrap_or(without_lf)
             } else {
                 piece
             };
-            if !content.is_empty() {
-                if can_split {
-                    let mut content_local = 0usize;
-                    for fragment in content.split_inclusive(char::is_whitespace) {
-                        if fragment.is_empty() {
-                            continue;
-                        }
-                        let source_start = segment.source_range.start + local_start + content_local;
-                        let source_range = source_start..source_start + fragment.len();
-                        #[cfg(test)]
-                        let (test_projection, test_projection_styles) = if !recorded_full_projection
-                        {
-                            recorded_full_projection = true;
-                            (
-                                focused_test_projection.clone(),
-                                focused_test_projection_styles.clone(),
-                            )
-                        } else {
-                            (None, None)
-                        };
-                        mixed_prose_push(
-                            &mut lines,
-                            script_fragment(
-                                visual_projection_fragment(
-                                    block_index,
-                                    fragment_index,
-                                    fragment.to_string(),
-                                    source_range.clone(),
-                                    style.clone(),
-                                    &mut pending_caret,
-                                    true,
-                                    navigation_y_offset,
-                                    visual_run_footnote_label(block, &source_range),
-                                    app,
-                                    cx,
-                                    #[cfg(test)]
-                                    test_projection,
-                                    #[cfg(test)]
-                                    test_projection_styles,
-                                ),
-                                if projected_span.source {
-                                    InlineStyle::default()
-                                } else {
-                                    projected_span.style
-                                },
-                                inline_metrics,
-                                app,
-                                cx,
-                            ),
-                        );
-                        fragment_index += 1;
-                        content_local += fragment.len();
-                        fragment_index += emit_navigation_icons_after(
-                            mixed_prose_current_line(&mut lines),
-                            &mut remaining_icons,
-                            source_range.end,
+            let content_range = piece_start..piece_start + content.len();
+            let fragments = if can_split {
+                Some(breaks.fragments(content_range.clone()))
+            } else {
+                None
+            };
+            let atomic = (!can_split && !content.is_empty()).then(|| {
+                let can_wrap_after = breaks.can_wrap_at(content_range.end);
+                (content_range, can_wrap_after)
+            });
+            for (range, can_wrap_after) in fragments.into_iter().flatten().chain(atomic) {
+                // Non-identity segments use their original source bounds for
+                // hit testing, even when visible and source byte lengths differ.
+                let local_start = range.start - segment.display_range.start;
+                let source_start =
+                    (segment.source_range.start + local_start).min(segment.source_range.end);
+                let source_end = source_start
+                    .saturating_add(range.len())
+                    .min(segment.source_range.end);
+                let source_range = source_start..source_end;
+                #[cfg(test)]
+                let (test_projection, test_projection_styles) = if !recorded_full_projection {
+                    recorded_full_projection = true;
+                    (
+                        focused_test_projection.clone(),
+                        focused_test_projection_styles.clone(),
+                    )
+                } else {
+                    (None, None)
+                };
+                prose.push_text(
+                    script_fragment(
+                        visual_projection_fragment(
                             block_index,
                             fragment_index,
+                            projection.text[range].to_string(),
+                            source_range.clone(),
+                            style.clone(),
+                            &mut pending_caret,
+                            true,
+                            navigation_y_offset,
+                            visual_run_footnote_label(block, &source_range),
                             app,
                             cx,
-                        );
-                    }
-                } else {
-                    // Non-identity segment: display byte counts cannot index
-                    // into the source range, so clamp the fragment to the
-                    // segment's source bounds (rendered atoms resolve to their
-                    // edges through `boundary_candidates`).
-                    let source_start =
-                        (segment.source_range.start + local_start).min(segment.source_range.end);
-                    let source_end = source_start
-                        .saturating_add(content.len())
-                        .min(segment.source_range.end);
-                    let source_range = source_start..source_end;
-                    #[cfg(test)]
-                    let (test_projection, test_projection_styles) = if !recorded_full_projection {
-                        recorded_full_projection = true;
-                        (
-                            focused_test_projection.clone(),
-                            focused_test_projection_styles.clone(),
-                        )
-                    } else {
-                        (None, None)
-                    };
-                    mixed_prose_push(
-                        &mut lines,
-                        script_fragment(
-                            visual_projection_fragment(
-                                block_index,
-                                fragment_index,
-                                content.to_string(),
-                                source_range.clone(),
-                                style.clone(),
-                                &mut pending_caret,
-                                true,
-                                navigation_y_offset,
-                                visual_run_footnote_label(block, &source_range),
-                                app,
-                                cx,
-                                #[cfg(test)]
-                                test_projection,
-                                #[cfg(test)]
-                                test_projection_styles,
-                            ),
-                            if projected_span.source {
-                                InlineStyle::default()
-                            } else {
-                                projected_span.style
-                            },
-                            inline_metrics,
-                            app,
-                            cx,
+                            #[cfg(test)]
+                            test_projection,
+                            #[cfg(test)]
+                            test_projection_styles,
                         ),
-                    );
-                    fragment_index += 1;
-                    fragment_index += emit_navigation_icons_after(
-                        mixed_prose_current_line(&mut lines),
-                        &mut remaining_icons,
-                        source_range.end,
-                        block_index,
-                        fragment_index,
+                        if projected_span.source {
+                            InlineStyle::default()
+                        } else {
+                            projected_span.style
+                        },
+                        inline_metrics,
                         app,
                         cx,
-                    );
-                }
+                    ),
+                    can_wrap_after,
+                );
+                fragment_index += 1;
+                fragment_index += emit_navigation_icons_after(
+                    &mut prose,
+                    &mut remaining_icons,
+                    source_range.end,
+                    block_index,
+                    fragment_index,
+                    app,
+                    cx,
+                );
             }
-            local_start += piece.len();
+            piece_start += piece.len();
             if had_break {
-                mixed_prose_break_line(&mut lines);
+                prose.break_line();
             }
         }
         fragment_index += emit_navigation_icons_after(
-            mixed_prose_current_line(&mut lines),
+            &mut prose,
             &mut remaining_icons,
             segment.source_range.end,
             block_index,
@@ -3825,6 +3836,8 @@ pub(super) fn visual_text_with_math_element(
             cx,
         );
     }
+
+    let mut lines = prose.into_lines();
 
     // Blank list lines have source positions but no glyphs. Mixed prose
     // (links/math/scripts) still needs a hit target and caret on those rows.
@@ -3924,7 +3937,7 @@ fn visual_navigation_icons(
 }
 
 fn emit_navigation_icons_after(
-    children: &mut Vec<gpui::AnyElement>,
+    prose: &mut MixedProse,
     remaining: &mut Vec<(usize, VisualNavigationTarget)>,
     source_end: usize,
     block_index: usize,
@@ -3943,7 +3956,7 @@ fn emit_navigation_icons_after(
         // Open icons (↗ / # / ↓) sit in the reading line. Ctrl/Cmd-click on
         // the label navigates; the edit icon is the only remaining chrome.
         if is_link && app.stable_visual_inline {
-            children.push(visual_link_edit_icon(
+            prose.push_atom(visual_link_edit_icon(
                 block_index,
                 fragment_index + emitted,
                 edit_offset,
@@ -6483,15 +6496,18 @@ fn visual_table_cell_element(
         typography.table_font_size,
         typography.text_line_height(typography.table_font_size),
     );
-    let mut lines = vec![Vec::new()];
+    let mut prose = MixedProse::default();
+    let breaks = ProseWrapBreaks::new(&rich.text);
+    let mut offset = 0;
     let mut index = field.source_range.start;
     let mut image_index = 0;
     for span in &rich.spans {
+        let mut piece_start = offset;
+        offset += span.text.len();
         if let Some(image) = &span.image {
             let document_dir = app.active_tab().document.path().and_then(Path::parent);
             let selector = format!("visual-table-image-{block_index}-{row}-{column}-{image_index}");
-            mixed_prose_push(
-                &mut lines,
+            prose.push_atom(
                 preview_inline_image_view(
                     app,
                     &image.url,
@@ -6511,32 +6527,25 @@ fn visual_table_cell_element(
         if let Some(math) = &span.math
             && let MathCacheEntry::Ready(image) = math_entry(math)
         {
-            mixed_prose_push(
-                &mut lines,
-                visual_table_math_atom(
-                    app,
-                    image,
-                    math.source_range.clone(),
-                    block_index,
-                    metrics,
-                    cx,
-                ),
-            );
+            prose.push_atom(visual_table_math_atom(
+                app,
+                image,
+                math.source_range.clone(),
+                block_index,
+                metrics,
+                cx,
+            ));
             index += 1;
             continue;
         }
         for piece in span.text.split_inclusive('\n') {
-            for fragment in piece
-                .trim_end_matches('\n')
-                .split_inclusive(char::is_whitespace)
-            {
-                if fragment.is_empty() {
-                    continue;
-                }
+            let content = piece.strip_suffix('\n').unwrap_or(piece);
+            let content_range = piece_start..piece_start + content.len();
+            for (range, can_wrap_after) in breaks.fragments(content_range) {
                 let child = visual_projection_fragment(
                     block_index,
                     index,
-                    fragment.to_string(),
+                    rich.text[range].to_string(),
                     field.source_range.clone(),
                     visual_highlight_style(span.style, span.link.is_some()),
                     &mut None,
@@ -6551,14 +6560,15 @@ fn visual_table_cell_element(
                     #[cfg(test)]
                     None,
                 );
-                mixed_prose_push(
-                    &mut lines,
+                prose.push_text(
                     script_fragment(child, span.style, metrics, app, cx),
+                    can_wrap_after,
                 );
                 index += 1;
             }
+            piece_start += piece.len();
             if piece.ends_with('\n') {
-                mixed_prose_break_line(&mut lines);
+                prose.break_line();
             }
         }
     }
@@ -6566,7 +6576,7 @@ fn visual_table_cell_element(
         .w_full()
         .flex()
         .flex_col()
-        .children(lines.into_iter().map(|line| {
+        .children(prose.into_lines().into_iter().map(|line| {
             div()
                 .w_full()
                 .min_h(px(metrics.1))

@@ -10237,6 +10237,108 @@ API Key: `BSA2IC_xxxxxxx`\n";
 }
 
 #[gpui::test]
+fn rendered_punctuation_stays_with_bold_text_in_mixed_prose(cx: &mut TestAppContext) {
+    const BOLD: &str = "激活函数与分离容量";
+    const LAST_BOLD: &str = "量";
+    let suffix = "容量由激活函数的非线性尖锐程度决定".repeat(8);
+    for punctuation in ['：', '，', ':', ','] {
+        let source = format!("**{BOLD}**{punctuation}{suffix} $p$");
+        let bold_end = BOLD.len() - LAST_BOLD.len();
+        let bold_start = bold_end + 2;
+        let punctuation_start = BOLD.len() + 4;
+        let after_punctuation = punctuation_start + punctuation.len_utf8();
+
+        for mode in [ViewMode::VisualEdit, ViewMode::Split, ViewMode::Read] {
+            let (app, cx) = cx.add_window_view(|_, cx| {
+                let mut app = MarkionApp::new(cx);
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                app.active_tab_mut().selected_range = source.len()..source.len();
+                app.view_mode = mode;
+                app.sidebar_visible = false;
+                app.preview_adaptive_width = true;
+                app
+            });
+            preview::PREVIEW_TEXT_LAYOUTS.with_borrow_mut(|layouts| *layouts = Some(Vec::new()));
+            cx.simulate_resize(size(px(640.), px(700.)));
+            cx.run_until_parked();
+            let layouts = preview::PREVIEW_TEXT_LAYOUTS
+                .with_borrow_mut(Option::take)
+                .unwrap();
+
+            let [bold, mark, following] = if mode == ViewMode::VisualEdit {
+                app.update(cx, |app, _| {
+                    let tab = app.active_tab();
+                    let snapshot = &tab.visual_navigation_snapshots[&0];
+                    [bold_start, punctuation_start, after_punctuation].map(|source_offset| {
+                        snapshot
+                            .lines
+                            .iter()
+                            .flat_map(|line| &line.windows)
+                            .find_map(|window| {
+                                let segment =
+                                    window.projection.segments.iter().find(|segment| {
+                                        segment.source_range.contains(&source_offset)
+                                    })?;
+                                let display_offset = segment.display_range.start + source_offset
+                                    - segment.source_range.start;
+                                (window.start_display..window.end_display)
+                                    .contains(&display_offset)
+                                    .then(|| window.layout.position_for_index(display_offset))
+                                    .flatten()
+                            })
+                            .expect("source-backed glyph is painted")
+                    })
+                })
+            } else {
+                [bold_end, BOLD.len(), BOLD.len() + punctuation.len_utf8()].map(|offset| {
+                    layouts
+                        .iter()
+                        .rev()
+                        .find_map(|(start, layout)| {
+                            let local = offset.checked_sub(*start)?;
+                            (local < layout.len())
+                                .then(|| layout.position_for_index(local))
+                                .flatten()
+                        })
+                        .expect("preview glyph is painted")
+                })
+            };
+            assert_eq!(bold.y, mark.y, "{mode:?} orphaned {punctuation}");
+            assert_eq!(mark.y, following.y, "{mode:?} did not fill the line");
+            assert!(bold.x < mark.x && mark.x < following.x, "{mode:?}");
+        }
+    }
+}
+
+#[gpui::test]
+fn rendered_punctuation_stays_with_preceding_glyph_at_shaped_wrap(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    cx.update(|window, _| {
+        for punctuation in ['：', '，', ':', ',', '！', ')'] {
+            let text: SharedString = format!("甲乙{punctuation}丙").into();
+            let font_size = px(14.);
+            let runs = [window.text_style().to_run(text.len())];
+            let text_system = window.text_system();
+            let lines = text_system
+                .shape_text(text.clone(), font_size, &runs, None, None)
+                .unwrap();
+            let line = &lines[0].unwrapped_layout;
+            let before = line.x_for_index("甲乙".len());
+            let after = line.x_for_index("甲乙".len() + punctuation.len_utf8());
+            assert!(before < after);
+
+            let lines = text_system
+                .shape_text(text, font_size, &runs, Some((before + after) / 2.), None)
+                .unwrap();
+            let line = &lines[0];
+            let boundary = line.wrap_boundaries[0];
+            let start = line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+            assert_eq!(start, "甲".len(), "orphaned {punctuation}");
+        }
+    });
+}
+
+#[gpui::test]
 fn visual_edit_linked_japanese_list_wraps_with_its_marker(cx: &mut TestAppContext) {
     const SOURCE: &str = "- 日本語の説明を長く続けて、項目の本文とリンクラベルが利用可能な幅に合わせて自然な文字境界で複数行へ折り返されることを確認します。 [詳しい案内はこちらを確認してください](#destination) さらに日本語の説明を項目の最後まで追加します。\n\n## Destination\n";
     let (app, cx) = cx.add_window_view(|_, cx| {

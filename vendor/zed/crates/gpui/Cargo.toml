@@ -391,6 +391,9 @@ version = "=0.9.0"
 [dependencies.thiserror]
 version = "2.0.12"
 
+[dependencies.unicode-linebreak]
+version = "0.1.5"
+
 [dependencies.usvg]
 version = "0.45.0"
 default-features = false

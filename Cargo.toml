@@ -98,6 +98,7 @@ resvg = "0.45.1"
 usvg = "0.45.1"
 regex = "1.11"
 serde_yaml = "0.9"
+unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.12"
 # Raw-deflate compression for the built-in DOCX package writer (ZIP method 8).
 # Already in the dependency graph transitively (via flate2/image); pinned to the
