@@ -8464,6 +8464,31 @@ mod tests {
     }
 
     #[test]
+    fn issue_80_indented_atx_headings_convert_without_literal_hashes() {
+        for source in [" # Budget\n\nFollow-up", " #\tBudget\n\nFollow-up"] {
+            let mut paragraph = MarkdownDocument::from_text(source);
+            let start = source.find("Budget").unwrap();
+            let range = paragraph
+                .apply_markdown_format(start..start + "Budget".len(), MarkdownFormat::Paragraph);
+            assert_eq!(paragraph.text(), "Budget\n\nFollow-up");
+            assert_eq!(&paragraph.text()[range.clone()], "Budget");
+            assert!(paragraph.outline().is_empty());
+
+            let range = paragraph.apply_markdown_format(range, MarkdownFormat::Heading(2));
+            assert_eq!(paragraph.text(), "## Budget\n\nFollow-up");
+            assert_eq!(&paragraph.text()[range], "## Budget");
+            assert_eq!(paragraph.outline()[0].title, "Budget");
+            assert_eq!(paragraph.outline()[0].level, 2);
+
+            let mut heading = MarkdownDocument::from_text(source);
+            let range = heading
+                .apply_markdown_format(start..start + "Budget".len(), MarkdownFormat::Heading(2));
+            assert_eq!(heading.text(), "## Budget\n\nFollow-up");
+            assert_eq!(&heading.text()[range], "Budget");
+        }
+    }
+
+    #[test]
     fn markdown_format_paragraph_only_changes_intersected_atx_heading_lines() {
         let source = "# One\nordinary\n### 标题\n####### not a heading\n##no separator\n    # code";
         let mut doc = MarkdownDocument::from_text(source);
