@@ -17218,6 +17218,54 @@ fn session_restore_skips_missing_paths_and_untitled_tabs() {
     assert!(session_open_files_from_paths([None::<&Path>, None]).is_empty());
 }
 
+#[gpui::test]
+fn issue_79_session_restore_preserves_recent_files(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let alpha = dir.path().join("alpha.md");
+    let beta = dir.path().join("beta.md");
+    fs::write(&alpha, "Alpha: first note.").unwrap();
+    fs::write(&beta, "Beta: second note.").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.session_path = dir.path().join("session.toml");
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.session.clear_recent();
+        app.session.touch_recent(comparable_document_path(&beta));
+        app.session.touch_recent(comparable_document_path(&alpha));
+        app.session.workspace_root = Some(dir.path().to_path_buf());
+        app.session.open_files = vec![alpha.clone(), beta.clone()];
+        app.session.active_file = Some(alpha.clone());
+        app.restore_session_on_startup(&StartupOpenIntent::None, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+        assert_eq!(
+            app.session.recent_files,
+            vec![
+                comparable_document_path(&alpha),
+                comparable_document_path(&beta),
+            ]
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.session.clear_recent();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::new())];
+        app.active_tab = 0;
+        app.restore_session_on_startup(&StartupOpenIntent::None, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.session.recent_files.is_empty());
+    });
+}
+
 #[test]
 fn cli_open_intent_disables_session_restore() {
     assert!(should_restore_session(&StartupOpenIntent::None));

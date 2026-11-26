@@ -2670,12 +2670,10 @@ impl MarkionApp {
     ) {
         let mut opened_any = false;
         let mut replaced_initial = false;
-        let mut restored_paths = Vec::new();
         for path in open_files {
             match self.open_restored_snapshot_path(path.clone(), &mut replaced_initial, cx) {
                 Ok(()) => {
                     opened_any = true;
-                    restored_paths.push(path);
                 }
                 Err(err) => {
                     tracing::warn!(path = ?path, error = %err, "session restore skipped file");
@@ -2702,9 +2700,6 @@ impl MarkionApp {
             self.update_workspace_root_from_document(cx);
         }
 
-        for path in &restored_paths {
-            self.session.touch_recent(comparable_document_path(path));
-        }
         self.sync_and_persist_session();
     }
 
