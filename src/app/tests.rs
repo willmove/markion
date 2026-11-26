@@ -23986,6 +23986,7 @@ fn close_other_tabs_cleans_silently_keeps_dirty_behind_dialog(cx: &mut TestAppCo
     app.update(cx, |app, _| {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.active_tab().document.text(), "A");
+        assert!(app.status.is_empty(), "discard must clear pending status");
     });
 }
 

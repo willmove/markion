@@ -706,6 +706,7 @@ impl MarkionApp {
             let _ = this.update(cx, |app, cx| {
                 if discard {
                     app.remove_tabs_by_identity(&dirty_targets, cx);
+                    app.status = "".into();
                     app.settle_after_batch_close(cx);
                 } else {
                     app.status = t(app.language, Msg::StatusCanceled).into();
