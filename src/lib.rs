@@ -2586,8 +2586,19 @@ impl MarkdownDocument {
             selected.trim_matches('\n')
         };
         let suffix = if separate_suffix { "\n" } else { "" };
-        let replacement = format!("```\n{inner}\n```{suffix}");
-        let inner_start = range.start + "```\n".len();
+        let longest = inner
+            .lines()
+            .map(|line| {
+                line.trim_start_matches([' ', '\t'])
+                    .bytes()
+                    .take_while(|byte| *byte == b'`')
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
+        let fence = "`".repeat(3.max(longest + 1));
+        let replacement = format!("{fence}\n{inner}\n{fence}{suffix}");
+        let inner_start = range.start + fence.len() + 1;
         let inner_end = inner_start + inner.len();
         self.apply_current_range(MutationOrigin::MarkdownFormat, range, &replacement);
         inner_start..inner_end
@@ -8603,6 +8614,29 @@ mod tests {
                 PreviewBlock::Heading { level: 1, text, .. } if text.text == "After"
             )));
         }
+    }
+
+    #[test]
+    fn issue_75_code_fence_uses_delimiter_longer_than_selected_lines() {
+        for source in [
+            "Example:\n```md\nfirst\n```\nEnd example.",
+            "Example:\n````md\nfirst\n````\nEnd example.",
+        ] {
+            let mut doc = MarkdownDocument::from_text(source);
+            doc.apply_markdown_format(0..source.len(), MarkdownFormat::CodeFence);
+            let blocks = doc.preview_blocks();
+            assert_eq!(blocks.len(), 1, "{:?}", doc.text());
+            match &blocks[0] {
+                PreviewBlock::CodeBlock { code, .. } => {
+                    assert_eq!(code, source);
+                }
+                other => panic!("expected one code block, got {other:?}"),
+            }
+        }
+
+        let mut control = MarkdownDocument::from_text("literal `` line");
+        control.apply_markdown_format(0..control.text().len(), MarkdownFormat::CodeFence);
+        assert_eq!(control.text(), "```\nliteral `` line\n```");
     }
 
     #[test]
