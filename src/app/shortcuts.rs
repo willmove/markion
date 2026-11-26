@@ -270,11 +270,30 @@ impl MarkionApp {
         }
     }
 
-    /// Restore a single action to its default binding.
+    /// Restore a single action to its default binding. Overrides occupying
+    /// that default return to their own defaults so the reset cannot collide.
     pub(super) fn reset_shortcut(&mut self, action_id: &str, cx: &mut Context<Self>) {
         let capture_was_active = self.shortcut_capture.take().is_some();
-        if self.shortcut_overrides.remove(action_id).is_none() && !capture_was_active {
+        if !self.shortcut_overrides.contains_key(action_id) && !capture_was_active {
             return;
+        }
+        let platform = ShortcutPlatform::current();
+        let default_binding = shortcut_by_id(action_id).and_then(|shortcut| shortcut.binding);
+        let conflicts = default_binding.map(|default| {
+            menu_shortcuts::ALL
+                .iter()
+                .filter(|shortcut| shortcut.id != action_id)
+                .filter_map(|shortcut| {
+                    shortcut
+                        .effective_binding(&self.shortcut_overrides)
+                        .filter(|binding| bindings_equivalent(binding, default, platform))
+                        .map(|_| shortcut.id.to_string())
+                })
+                .collect::<Vec<_>>()
+        });
+        self.shortcut_overrides.remove(action_id);
+        for action in conflicts.unwrap_or_default() {
+            self.shortcut_overrides.remove(&action);
         }
         self.persist_preferences();
         self.rebind_keys(cx);

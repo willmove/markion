@@ -4739,6 +4739,33 @@ fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn issue_86_shortcut_reset_clears_default_key_conflicts(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let preferences_path = dir.path().join("config.toml");
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.preferences_path = preferences_path.clone();
+        app.language = Language::En;
+        app.shortcut_overrides.clear();
+        app.shortcut_overrides
+            .insert("bold".into(), "ctrl-alt-b".into());
+        app.shortcut_overrides
+            .insert("italic".into(), "ctrl-b".into());
+        app.rebind_keys(cx);
+        assert_eq!(
+            app.shortcut_assignment_error("bold", "ctrl-b"),
+            Some(ShortcutCaptureError::Conflict("Italic".into()))
+        );
+        app.reset_shortcut("bold", cx);
+        assert!(app.shortcut_overrides.is_empty());
+        assert_eq!(app.shortcut_assignment_error("bold", "ctrl-b"), None);
+        assert_eq!(app.shortcut_assignment_error("italic", "ctrl-i"), None);
+    });
+    let saved = load_app_preferences(&preferences_path).unwrap();
+    assert!(saved.shortcut_overrides.is_empty());
+}
+
+#[gpui::test]
 fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
