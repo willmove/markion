@@ -7212,7 +7212,7 @@ fn visual_math_editor(
         block.id,
         payload,
         forced,
-        true,
+        false,
         false,
         presentation.into_any_element(),
         payload_editor,
