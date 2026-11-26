@@ -1954,8 +1954,8 @@ impl MarkdownDocument {
         }
 
         let mut transformed = self.text.clone();
-        let mut removed_before_start = 0usize;
-        let mut removed_before_end = 0usize;
+        let mut start_delta = 0isize;
+        let mut end_delta = 0isize;
         let mut removed_total = 0usize;
         for line_start in line_starts.iter().copied() {
             let adjusted_line_start = line_start - removed_total;
@@ -1965,12 +1965,18 @@ impl MarkdownDocument {
             }
 
             transformed.replace_range(adjusted_line_start..adjusted_line_start + remove_len, "");
-            if line_start < range.start {
-                removed_before_start += remove_len;
-            }
-            if line_start < range.end {
-                removed_before_end += remove_len;
-            }
+            adjust_offset_for_line_marker_removal(
+                range.start,
+                line_start,
+                remove_len,
+                &mut start_delta,
+            );
+            adjust_offset_for_line_marker_removal(
+                range.end,
+                line_start,
+                remove_len,
+                &mut end_delta,
+            );
             removed_total += remove_len;
         }
 
@@ -1978,8 +1984,7 @@ impl MarkdownDocument {
             self.apply_transformed_text(MutationOrigin::MarkdownFormat, transformed);
         }
 
-        range.start.saturating_sub(removed_before_start)
-            ..range.end.saturating_sub(removed_before_end)
+        offset_with_delta(range.start, start_delta)..offset_with_delta(range.end, end_delta)
     }
 
     pub fn apply_markdown_format(
@@ -8199,6 +8204,23 @@ mod tests {
         doc.outdent_lines(0..doc.text().len());
 
         assert_eq!(doc.text(), "two\nthree\nplain");
+    }
+
+    #[test]
+    fn issue_72_partial_indent_selection_endpoints_clamp_to_line_start() {
+        let source = "KEEP\n    alpha\n    beta\nTAIL";
+        let mut doc = MarkdownDocument::from_text(source);
+        let range = doc.outdent_lines(6..24);
+        assert_eq!(doc.text(), "KEEP\nalpha\nbeta\nTAIL");
+        assert_eq!(range, 5..16);
+        assert_eq!(&doc.text()[range.clone()], "alpha\nbeta\n");
+        doc.indent_lines(range);
+        assert_eq!(doc.text(), source);
+
+        let mut endpoint = MarkdownDocument::from_text("KEEP\n    alpha\nTAIL");
+        let range = endpoint.outdent_lines(6..7);
+        assert_eq!(endpoint.text(), "KEEP\nalpha\nTAIL");
+        assert_eq!(range, 5..5);
     }
 
     #[test]
