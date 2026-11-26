@@ -1383,20 +1383,30 @@ impl DocxRenderState {
         }
     }
 
-    /// Emits one run per `RichText` span, mapping inline styles to `w:rPr`
-    /// and links to `w:hyperlink` elements backed by external relationships.
+    /// Emits runs with inline `w:rPr` styling and groups each consecutive
+    /// linked label into one `w:hyperlink` backed by an external relationship.
     /// Falls back to the concatenated plain text when no spans were captured.
     fn rich_runs(&mut self, rich: &RichText) -> String {
         if rich.spans.is_empty() {
             return docx_plain_runs(&rich.text);
         }
         let mut runs = String::new();
+        let mut active_link: Option<(String, u32, String)> = None;
+        let flush_link = |runs: &mut String, active: &mut Option<(String, u32, String)>| {
+            if let Some((_, rid, content)) = active.take() {
+                runs.push_str(&format!(
+                    "<w:hyperlink r:id=\"rId{rid}\">{content}</w:hyperlink>"
+                ));
+            }
+        };
         for span in &rich.spans {
             if let Some(math) = &span.math {
+                flush_link(&mut runs, &mut active_link);
                 runs.push_str(&format!("<m:oMath>{}</m:oMath>", omml_inner(&math.latex)));
                 continue;
             }
             if let Some(image) = &span.image {
+                flush_link(&mut runs, &mut active_link);
                 if let Some(drawing) = self.embed_image(&image.alt, &image.url) {
                     runs.push_str(&drawing);
                 } else {
@@ -1412,25 +1422,33 @@ impl DocxRenderState {
             if span.text.is_empty() {
                 continue;
             }
-            if span.style.superscript
-                && let Some(id) = self.footnote_id(&span.text)
-            {
+            let footnote = span
+                .style
+                .superscript
+                .then(|| self.footnote_id(&span.text))
+                .flatten();
+            if let Some(id) = footnote {
+                flush_link(&mut runs, &mut active_link);
                 runs.push_str(&format!(
                     "<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr><w:footnoteReference w:id=\"{id}\"/></w:r>"
                 ));
                 continue;
             }
-            match span.link.as_deref().filter(|link| !link.is_empty()) {
-                Some(link) => {
+            if let Some(link) = span.link.as_deref().filter(|link| !link.is_empty()) {
+                if !active_link.as_ref().is_some_and(|(url, _, _)| url == link) {
+                    flush_link(&mut runs, &mut active_link);
                     let rid = self.link_rid(link);
-                    runs.push_str(&format!(
-                        "<w:hyperlink r:id=\"rId{rid}\">{}</w:hyperlink>",
-                        docx_run(&span.text, &span.style, true)
-                    ));
+                    active_link = Some((link.to_string(), rid, String::new()));
                 }
-                None => runs.push_str(&docx_run(&span.text, &span.style, false)),
+                if let Some((_, _, content)) = active_link.as_mut() {
+                    content.push_str(&docx_run(&span.text, &span.style, true));
+                }
+            } else {
+                flush_link(&mut runs, &mut active_link);
+                runs.push_str(&docx_run(&span.text, &span.style, false));
             }
         }
+        flush_link(&mut runs, &mut active_link);
         if runs.is_empty() {
             runs.push_str(&docx_plain_runs(""));
         }
@@ -2817,6 +2835,45 @@ mod tests {
         let rels = entry(&bytes, "word/_rels/document.xml.rels");
         assert!(rels.contains("Target=\"https://example.com/?a=1&amp;b=2\""));
         assert!(rels.contains("TargetMode=\"External\""));
+    }
+
+    #[test]
+    fn issue_78_styled_link_label_is_one_docx_hyperlink() {
+        let document = MarkdownDocument::from_text(
+            "Read [the *quick* guide](https://example.invalid/guide) today.",
+        );
+        let bytes = docx_parts(&document);
+        let xml = entry(&bytes, "word/document.xml");
+        assert_eq!(xml.matches("<w:hyperlink ").count(), 1, "{xml}");
+        let start = xml.find("<w:hyperlink ").unwrap();
+        let end = xml[start..].find("</w:hyperlink>").unwrap() + start;
+        let hyperlink = &xml[start..end];
+        assert!(hyperlink.matches("<w:r>").count() >= 3, "{hyperlink}");
+        assert!(hyperlink.contains("<w:i/>"));
+
+        let imported = markion_docx_import::import_docx(
+            &bytes,
+            markion_docx_import::ImportLimits::default(),
+            markion_docx_import::CancellationToken::default(),
+        )
+        .unwrap()
+        .render_markdown(|_| None)
+        .unwrap();
+        let links = pulldown_cmark::Parser::new(&imported)
+            .filter(|event| {
+                matches!(
+                    event,
+                    pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link { .. })
+                )
+            })
+            .count();
+        assert_eq!(links, 1, "{imported}");
+
+        let distinct = MarkdownDocument::from_text(
+            "[one](https://example.invalid/guide) and [two](https://example.invalid/guide)",
+        );
+        let xml = entry(&docx_parts(&distinct), "word/document.xml");
+        assert_eq!(xml.matches("<w:hyperlink ").count(), 2, "{xml}");
     }
 
     #[test]
