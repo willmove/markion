@@ -11,7 +11,7 @@ use std::{collections::HashSet, ops::Range};
 use pulldown_cmark::{BlockQuoteKind, CowStr, Event, HeadingLevel, Options, Parser, Tag};
 
 use crate::ImagePresentation;
-use crate::escape::escape_html_attribute;
+use crate::escape::{decode_basic_html_entities, escape_html_attribute};
 use crate::model::{
     Heading, HtmlImageDescriptor, HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan,
     InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage,
@@ -2723,10 +2723,11 @@ fn render_extended_segment_html(
         ExtendedInlineSegment::Emoji(emoji) => output.push_str(emoji),
         ExtendedInlineSegment::AutoLink(url) if !autolink => output.push_str(url),
         ExtendedInlineSegment::AutoLink(url) => {
-            let href = if url.starts_with("www.") {
-                format!("https://{url}")
+            let decoded = decode_basic_html_entities(url);
+            let href = if decoded.starts_with("www.") {
+                format!("https://{decoded}")
             } else {
-                url.clone()
+                decoded
             };
             output.push_str(&format!(
                 "<a href=\"{}\">{}</a>",

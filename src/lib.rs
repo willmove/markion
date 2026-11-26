@@ -10876,6 +10876,36 @@ Intro.
     }
 
     #[test]
+    fn issue_66_bare_link_query_parameters_survive_html_exports() {
+        for (url, href) in [
+            (
+                "https://example.test/meet?day=sat&room=4",
+                "https://example.test/meet?day=sat&amp;room=4",
+            ),
+            (
+                "www.example.test/tasks?status=open&sort=recent&limit=10",
+                "https://www.example.test/tasks?status=open&amp;sort=recent&amp;limit=10",
+            ),
+        ] {
+            let doc = MarkdownDocument::from_text(format!("See {url}"));
+            let expected = format!("<a href=\"{href}\">");
+            assert!(doc.render_html_fragment().contains(&expected));
+
+            let dir = tempfile::tempdir().unwrap();
+            for format in [ExportFormat::Html, ExportFormat::PlainHtml] {
+                let path = dir.path().join(match format {
+                    ExportFormat::Html => "styled.html",
+                    _ => "plain.html",
+                });
+                doc.export_to(&path, format).unwrap();
+                let html = fs::read_to_string(path).unwrap();
+                assert!(html.contains(&expected), "{html}");
+                assert!(!html.contains("amp;amp;"), "{html}");
+            }
+        }
+    }
+
+    #[test]
     fn inline_math_survives_extended_superscript_extension() {
         let doc = MarkdownDocument::from_text("Inline $a^2+b^2=c^2$ and x^2^ outside.");
         let html = doc.render_html_fragment();
