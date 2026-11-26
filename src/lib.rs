@@ -3794,11 +3794,13 @@ impl MarkdownDocument {
             if field_index > 0 {
                 return Some(fields[field_index - 1].source_range.clone());
             }
-            let boundary = block_index
-                .checked_sub(1)
-                .and_then(|previous| blocks.get(previous))
+            let boundary = blocks[..block_index]
+                .iter()
+                .rev()
+                .find(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
                 .map_or(fields[field_index].source_range.start, |block| {
-                    block.source_range.end
+                    let source = &self.text[block.source_range.clone()];
+                    block.source_range.start + source.trim_end_matches(['\r', '\n']).len()
                 });
             Some(boundary..boundary)
         }
@@ -11824,6 +11826,43 @@ Intro.
             doc.visual_editor_tab_target(&last.source_range, true),
             Some(after.source_range.start..after.source_range.start)
         );
+    }
+
+    #[test]
+    fn issue_76_first_cell_shift_tab_targets_previous_block_content_end() {
+        for (source, expected_offset, expected_start) in [
+            (
+                "# Before\n| A | B |\n| --- | --- |\n| x | y |",
+                8,
+                "# BeforeNote\n",
+            ),
+            (
+                "Before\n\n| A | B |\n| --- | --- |\n| x | y |",
+                6,
+                "BeforeNote\n\n",
+            ),
+        ] {
+            let mut doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let table = blocks
+                .iter()
+                .find(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
+                .unwrap();
+            let first = table.editor.as_ref().unwrap().fields()[0]
+                .source_range
+                .clone();
+            let target = doc
+                .visual_editor_tab_target(&first, false)
+                .expect("previous block handoff");
+            assert_eq!(target, expected_offset..expected_offset);
+            doc.replace_range(target, "Note");
+            assert!(doc.text().starts_with(expected_start), "{}", doc.text());
+            assert!(
+                doc.preview_blocks()
+                    .iter()
+                    .any(|block| matches!(block, PreviewBlock::Table { .. }))
+            );
+        }
     }
 
     // ── Diagram rendering ──
