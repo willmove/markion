@@ -1047,10 +1047,12 @@ impl MarkionApp {
                 };
                 // Refuse renaming any open dirty document; activating it makes
                 // the save-first status target the affected tab.
-                let needs_save = self
-                    .tabs
-                    .iter()
-                    .position(|tab| tab.path() == Some(target.as_path()) && tab.is_dirty());
+                let needs_save = self.tabs.iter().position(|tab| {
+                    tab.is_dirty()
+                        && tab.path().is_some_and(|path| {
+                            remap_path_after_move(path, &target, &target).is_some()
+                        })
+                });
                 if let Some(index) = needs_save {
                     self.switch_active_tab(index, cx);
                     self.status = t(self.language, Msg::StatusSaveBeforeRename).into();
@@ -1385,15 +1387,7 @@ impl MarkionApp {
         new_path: &Path,
         cx: &mut Context<Self>,
     ) {
-        let matching: Vec<usize> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tab)| (tab.path() == Some(old_path)).then_some(i))
-            .collect();
-        for index in matching {
-            self.repoint_tab_to_path(index, new_path, cx);
-        }
+        self.remap_tabs_after_move(old_path, new_path, cx);
     }
 
     fn repoint_tab_to_path(&mut self, index: usize, new_path: &Path, cx: &mut Context<Self>) {

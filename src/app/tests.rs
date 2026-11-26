@@ -23840,6 +23840,97 @@ fn issue_57_background_dirty_tab_refuses_file_tree_rename(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn issue_61_folder_rename_remaps_descendants_and_protects_dirty(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let plans = root.join("Plans");
+    let daily = plans.join("daily.md");
+    let nested = plans.join("sub/index.md");
+    let outside = root.join("outside.md");
+    fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    fs::write(&daily, "saved line").unwrap();
+    fs::write(&nested, "nested note").unwrap();
+    fs::write(&outside, "other note").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&daily).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&nested).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&outside).unwrap()),
+        ];
+        app.active_tab = 2;
+        app.workspace_root = root.clone();
+        app.session_path = root.join("session.toml");
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::Directory(plans.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            app.pending_name_input.as_mut().unwrap().buffer = "Archive".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+
+    let archive = root.join("Archive");
+    let moved_daily = archive.join("daily.md");
+    let moved_nested = archive.join("sub/index.md");
+    app.update(cx, |app, _| {
+        assert!(!plans.exists());
+        assert_eq!(app.tabs[0].path(), Some(moved_daily.as_path()));
+        assert_eq!(app.tabs[1].path(), Some(moved_nested.as_path()));
+        assert_eq!(app.tabs[2].path(), Some(outside.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "saved line");
+        assert_eq!(app.tabs[1].document.text(), "nested note");
+        let end = app.tabs[0].document.text().len();
+        app.tabs[0].document.insert(end, " + draft");
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+        assert_eq!(
+            fs::read_to_string(&moved_daily).unwrap(),
+            "saved line + draft"
+        );
+        assert!(!plans.exists());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "other note");
+
+        app.active_tab = 0;
+        app.push_undo_snapshot();
+        let end = app.active_tab().document.text().len();
+        app.active_tab_mut().document.insert(end, " unsaved");
+        app.active_tab = 2;
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::Directory(archive.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::Rename, window, cx);
+            app.pending_name_input.as_mut().unwrap().buffer = "Other".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, t(app.language, Msg::StatusSaveBeforeRename));
+        assert_eq!(app.active_tab, 0);
+        assert!(archive.exists());
+        assert!(!root.join("Other").exists());
+        assert_eq!(app.tabs[0].path(), Some(moved_daily.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "saved line + draft unsaved");
+        assert!(app.tabs[0].is_dirty());
+        assert_eq!(app.tabs[0].undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
 fn tab_context_copy_path_reports_status_and_skips_untitled(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.md");
