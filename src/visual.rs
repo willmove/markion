@@ -1051,8 +1051,12 @@ fn quote_prefix_on_line(
     while bytes.get(cursor) == Some(&b'>') {
         depth += 1;
         cursor += 1;
-        if matches!(bytes.get(cursor), Some(b' ' | b'\t')) {
+        let after_marker = cursor;
+        while matches!(bytes.get(cursor), Some(b' ' | b'\t')) {
             cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'>') {
+            cursor = after_marker + usize::from(cursor > after_marker);
         }
     }
     (depth > 0).then_some((line_start..line_start + cursor, depth))

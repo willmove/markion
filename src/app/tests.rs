@@ -10950,6 +10950,42 @@ fn visual_edit_task_checkbox_click_toggles_and_undoes(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn issue_69_nested_quote_checkboxes_accept_extra_marker_spacing(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for ending in ["\n", "\r\n"] {
+        let source = ["Away", "", ">  > - [ ] Send", ">  > - [X] File"].join(ending);
+        let (send, file) = app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            let blocks = app.active_tab().document.visual_blocks_shared();
+            let find = |needle: &str| {
+                blocks
+                    .iter()
+                    .position(|block| {
+                        matches!(block.kind, VisualBlockKind::ListItem { .. })
+                            && source[block.source_range.clone()].contains(needle)
+                    })
+                    .unwrap()
+            };
+            (find("Send"), find("File"))
+        });
+        app.update(cx, |app, cx| {
+            app.toggle_visual_task_checkbox(send, cx);
+            app.toggle_visual_task_checkbox(file, cx);
+            assert_eq!(
+                app.active_tab().document.text(),
+                source
+                    .replacen("[ ] Send", "[x] Send", 1)
+                    .replacen("[X] File", "[ ] File", 1)
+            );
+            assert_eq!(app.active_tab().undo_stack.len(), 2);
+        });
+    }
+}
+
+#[gpui::test]
 fn visual_edit_revealed_task_prefix_click_does_not_toggle(cx: &mut TestAppContext) {
     let source = "- [ ] task";
     let (app, cx) = cx.add_window_view(|_, cx| {
