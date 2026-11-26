@@ -25376,6 +25376,39 @@ fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_state
     app.update(cx, |app, _| assert!(!app.replace_visible));
 }
 
+#[gpui::test]
+fn issue_91_file_tree_summary_counts_only_visible_files(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("EmptyShelf")).unwrap();
+    fs::create_dir_all(root.join("Notes")).unwrap();
+    fs::write(root.join("start.md"), "start").unwrap();
+    fs::write(root.join("Notes/a.md"), "a").unwrap();
+    fs::write(root.join("Notes/b.md"), "b").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.to_path_buf();
+        app.file_tree = Some(FileTree::scan(root).unwrap());
+        app.collapsed_tree_paths = HashSet::from([root.join("Notes")]);
+        app
+    });
+
+    app.update(cx, |app, _| {
+        app.file_tree_query = "emptyshelf".into();
+        assert_eq!(app.file_tree_summary(), "0 file matches");
+        app.file_tree_query.clear();
+        assert_eq!(app.file_tree_summary(), "1 files visible");
+
+        app.file_tree_query = "a.md".into();
+        assert_eq!(app.file_tree_summary(), "1 file matches");
+        app.file_tree_query.clear();
+        assert_eq!(app.file_tree_summary(), "1 files visible");
+        app.collapsed_tree_paths.clear();
+        assert_eq!(app.file_tree_summary(), "3 files visible");
+    });
+}
+
 #[test]
 fn file_tree_watch_event_relevance_skips_content_writes_and_hidden_noise() {
     use notify::event::{

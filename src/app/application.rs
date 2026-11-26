@@ -3352,7 +3352,18 @@ impl MarkionApp {
         let count = self
             .file_tree
             .as_ref()
-            .map(|tree| tree.filtered_entries_limited(&self.file_tree_query, 0).1)
+            .map(|tree| {
+                let (entries, _) = super::root_view::filtered_visible_file_tree_entries(
+                    tree,
+                    &self.file_tree_query,
+                    &self.collapsed_tree_paths,
+                    usize::MAX,
+                );
+                entries
+                    .iter()
+                    .filter(|entry| entry.kind == FileTreeEntryKind::File)
+                    .count()
+            })
             .unwrap_or(0);
         let msg = if self.file_tree_query.is_empty() {
             Msg::StatusFilesVisible
