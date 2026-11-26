@@ -284,15 +284,19 @@ impl CellSelection {
             html.push_str("<tr>");
             for col in columns.clone() {
                 let text = table.rows[row].get(col).map(String::as_str).unwrap_or("");
-                let fragment = MarkdownDocument::from_text(text);
+                // Keep table-cell text in an inline paragraph context rather
+                // than reinterpreting visible leading markers as block syntax.
+                let fragment = MarkdownDocument::from_text(format!("\u{2060}{text}"));
+                let plain = fragment.plain_text_preview();
                 line.push(
-                    fragment
-                        .plain_text_preview()
+                    plain
+                        .strip_prefix('\u{2060}')
+                        .unwrap_or(&plain)
                         .trim_end_matches('\n')
                         .to_string(),
                 );
                 html.push_str("<td>");
-                html.push_str(&fragment.render_html_fragment());
+                html.push_str(&fragment.render_html_fragment().replacen('\u{2060}', "", 1));
                 html.push_str("</td>");
             }
             plain.push(line.join("\t"));
@@ -630,6 +634,33 @@ mod tests {
         assert_eq!(table.rows[1][1], "😀");
         assert_eq!(table.alignments[1], crate::TableAlignment::Right);
         assert!(cells.clear(&doc).is_err());
+    }
+
+    #[test]
+    fn issue_88_table_copy_keeps_visible_block_marker_characters() {
+        let source = "| A | B |\n| --- | --- |\n| 1. Pack | # Label |\n| - Call | > Status |\n| **Bold** | *Italic* |";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let table = blocks
+            .iter()
+            .find(|block| matches!(block.kind, crate::VisualBlockKind::Table { .. }))
+            .unwrap();
+        let mut selection = CellSelection::new(&doc, table, (1, 0));
+        selection.head = (3, 1);
+        let clipboard = selection.clipboard(&doc).unwrap();
+        assert_eq!(
+            clipboard.plain,
+            "1. Pack\t# Label\n- Call\t> Status\nBold\tItalic"
+        );
+        assert!(clipboard.html.contains("1. Pack"));
+        assert!(clipboard.html.contains("# Label"));
+        assert!(clipboard.html.contains("- Call"));
+        assert!(clipboard.html.contains("&gt; Status"));
+        assert!(clipboard.html.contains("<strong>Bold</strong>"));
+        assert!(clipboard.html.contains("<em>Italic</em>"));
+        for unexpected in ["<ol>", "<ul>", "<h1>", "<blockquote>"] {
+            assert!(!clipboard.html.contains(unexpected), "{}", clipboard.html);
+        }
     }
 
     #[test]
