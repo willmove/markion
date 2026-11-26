@@ -231,7 +231,7 @@ impl PlatformTextSystem for DirectWriteTextSystem {
             Ok(*font_id)
         } else {
             let mut lock = RwLockUpgradableReadGuard::upgrade(lock);
-            let font_id = lock.select_font(font);
+            let font_id = lock.select_font(font)?;
             lock.font_selections.insert(font.clone(), font_id);
             Ok(font_id)
         }
@@ -457,86 +457,56 @@ impl DirectWriteState {
         }
     }
 
-    fn select_font(&mut self, target_font: &Font) -> FontId {
-        unsafe {
-            if target_font.family == ".SystemUIFont" {
-                let family = self.system_ui_font_name.clone();
-                self.find_font_id(
-                    family.as_ref(),
-                    target_font.weight,
-                    target_font.style,
-                    &target_font.features,
-                    target_font.fallbacks.as_ref(),
-                )
-                .unwrap()
-            } else {
-                let family = self.system_ui_font_name.clone();
-                self.find_font_id(
-                    font_name_with_fallbacks(target_font.family.as_ref(), family.as_ref()),
-                    target_font.weight,
-                    target_font.style,
-                    &target_font.features,
-                    target_font.fallbacks.as_ref(),
-                )
-                .unwrap_or_else(|| {
-                    #[cfg(any(test, feature = "test-support"))]
-                    {
-                        panic!("ERROR: {} font not found!", target_font.family);
-                    }
-                    #[cfg(not(any(test, feature = "test-support")))]
-                    {
-                        log::error!("{} not found, use {} instead.", target_font.family, family);
-                        self.get_font_id_from_font_collection(
-                            family.as_ref(),
-                            target_font.weight,
-                            target_font.style,
-                            &target_font.features,
-                            target_font.fallbacks.as_ref(),
-                            true,
-                        )
-                        .unwrap()
-                    }
-                })
+    fn select_font(&mut self, target: &Font) -> Result<FontId> {
+        let system_family = self.system_ui_font_name.clone();
+        let primary = font_name_with_fallbacks(target.family.as_ref(), &system_family);
+        let mut candidates = std::iter::once(primary)
+            .chain(target.fallbacks.iter().flat_map(|fallbacks| {
+                fallbacks
+                    .fallback_list()
+                    .iter()
+                    .map(|name| font_name_with_fallbacks(name, &system_family))
+            }))
+            .chain(std::iter::once(system_family.as_ref()))
+            .unique();
+        let font_id = candidates.find_map(|family| {
+            let font_id = unsafe { self.find_font_id(family, target) }?;
+            if family != primary {
+                log::debug!("{} not found, using {family}", target.family);
             }
-        }
+            Some(font_id)
+        });
+        font_id.with_context(|| format!("No Windows font could be loaded for {}", target.family))
     }
 
-    unsafe fn find_font_id(
-        &mut self,
-        family_name: &str,
-        weight: FontWeight,
-        style: FontStyle,
-        features: &FontFeatures,
-        fallbacks: Option<&FontFallbacks>,
-    ) -> Option<FontId> {
-        // try to find target font in custom font collection first
+    unsafe fn find_font_id(&mut self, family: &str, target: &Font) -> Option<FontId> {
         unsafe {
             self.get_font_id_from_font_collection(
-                family_name,
-                weight,
-                style,
-                features,
-                fallbacks,
+                family,
+                target.weight,
+                target.style,
+                &target.features,
+                target.fallbacks.as_ref(),
                 false,
             )
             .or_else(|| {
                 self.get_font_id_from_font_collection(
-                    family_name,
-                    weight,
-                    style,
-                    features,
-                    fallbacks,
+                    family,
+                    target.weight,
+                    target.style,
+                    &target.features,
+                    target.fallbacks.as_ref(),
                     true,
                 )
             })
             .or_else(|| {
                 self.update_system_font_collection();
                 self.get_font_id_from_font_collection(
-                    family_name,
-                    weight,
-                    style,
-                    features,
-                    fallbacks,
+                    family,
+                    target.weight,
+                    target.style,
+                    &target.features,
+                    target.fallbacks.as_ref(),
                     true,
                 )
             })
@@ -1480,7 +1450,10 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         {
             *id
         } else {
-            context.text_system.select_font(&font_struct)
+            context
+                .text_system
+                .select_font(&font_struct)
+                .map_err(|error| windows::core::Error::new(E_FAIL, error.to_string()))?
         };
 
         let glyph_ids = unsafe { std::slice::from_raw_parts(glyphrun.glyphIndices, glyph_count) };

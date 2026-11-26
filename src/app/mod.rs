@@ -2841,6 +2841,11 @@ enum PreviewTextRunId {
     Body,
     /// Text of the n-th nested child block inside a blockquote.
     QuoteChild(usize),
+    QuoteTableCell {
+        child: usize,
+        row: usize,
+        col: usize,
+    },
     CodeBody,
     CodeLine(usize),
     MathLatex,
@@ -2853,15 +2858,16 @@ enum PreviewTextRunId {
 
 impl PreviewTextRunId {
     /// Stable document order of runs within a single preview block.
-    fn rank(self) -> (u8, usize, usize) {
+    fn rank(self) -> (u8, usize, usize, usize) {
         match self {
-            Self::Body => (0, 0, 0),
-            Self::QuoteChild(i) => (0, 1 + i, 0),
-            Self::CodeBody => (1, 0, 0),
-            Self::CodeLine(i) => (2, i, 0),
-            Self::MathLatex => (3, 0, 0),
-            Self::HtmlText => (4, 0, 0),
-            Self::TableCell { row, col } => (5, row, col),
+            Self::Body => (0, 0, 0, 0),
+            Self::QuoteChild(i) => (0, 1 + i, 0, 0),
+            Self::QuoteTableCell { child, row, col } => (0, 1 + child, row, col),
+            Self::CodeBody => (1, 0, 0, 0),
+            Self::CodeLine(i) => (2, i, 0, 0),
+            Self::MathLatex => (3, 0, 0, 0),
+            Self::HtmlText => (4, 0, 0, 0),
+            Self::TableCell { row, col } => (5, row, col, 0),
         }
     }
 }

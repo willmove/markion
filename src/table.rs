@@ -2,9 +2,9 @@
 //!
 //! Pure algorithms over the raw document text — no `MarkdownDocument` state.
 
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
-use crate::model::{InlineSpan, PreviewBlock, RichText, TableAlignment};
+use crate::model::{InlineSpan, PreviewBlock, RichText, TableAlignment, VisualQuoteContext};
 use crate::text_util::clamp_to_char_boundary;
 
 #[derive(Default)]
@@ -46,6 +46,83 @@ pub(crate) struct TableCellSourceRange {
     pub row: usize,
     pub column: usize,
     pub source_range: Range<usize>,
+    pub authored: bool,
+}
+
+/// A pipe-table view with quote markers removed. Each projected line records
+/// where its retained bytes begin in canonical source.
+pub(crate) struct TableSource<'a> {
+    authored: Cow<'a, str>,
+    pub prefix_len: usize,
+    start: usize,
+    line_starts: Vec<(usize, usize)>,
+}
+
+impl<'a> TableSource<'a> {
+    pub fn new(
+        text: &'a str,
+        range: Range<usize>,
+        quote: Option<&VisualQuoteContext>,
+    ) -> Option<Self> {
+        let source = text.get(range.clone())?;
+        let mut line_starts = Vec::new();
+        let authored = if let Some(quote) = quote {
+            let mut projected = String::with_capacity(source.len());
+            let mut markers = quote.marker_ranges.iter().peekable();
+            let mut start = range.start;
+            for line in source.split_inclusive('\n') {
+                let end = start + line.len();
+                let content_start = match markers.peek() {
+                    Some(marker) if marker.start == start && marker.end <= end => {
+                        markers.next()?.end
+                    }
+                    Some(marker) if marker.start < end => return None,
+                    _ => start,
+                };
+                line_starts.push((projected.len(), content_start));
+                projected.push_str(text.get(content_start..end)?);
+                start = end;
+            }
+            if markers.peek().is_some() {
+                return None;
+            }
+            Cow::Owned(projected)
+        } else {
+            Cow::Borrowed(source)
+        };
+        Some(Self {
+            prefix_len: table_column_width_prefix_len(&authored),
+            authored,
+            start: range.start,
+            line_starts,
+        })
+    }
+
+    pub fn markdown(&self) -> &str {
+        &self.authored[self.prefix_len..]
+    }
+
+    pub fn source_range(&self, range: Range<usize>) -> Option<Range<usize>> {
+        self.markdown().get(range.clone())?;
+        let start = self.prefix_len + range.start;
+        let end = self.prefix_len + range.end;
+        if self.line_starts.is_empty() {
+            return Some(self.start + start..self.start + end);
+        }
+        let line = self
+            .line_starts
+            .partition_point(|&(offset, _)| offset <= start)
+            - 1;
+        if self
+            .line_starts
+            .get(line + 1)
+            .is_some_and(|&(offset, _)| end > offset)
+        {
+            return None;
+        }
+        let (projected, canonical) = self.line_starts[line];
+        Some(canonical + (start - projected)..canonical + (end - projected))
+    }
 }
 
 pub(crate) fn table_source_range(text: &str, block: &PreviewBlock) -> Option<Range<usize>> {
@@ -141,6 +218,7 @@ pub(crate) fn table_cell_source_ranges(source: &str) -> Option<Vec<TableCellSour
 
     let mut result = Vec::new();
     for (row, line_start, content_end, mut ranges) in body_rows {
+        let authored_columns = ranges.len();
         while ranges.len() < column_count {
             ranges.push(content_end..content_end);
         }
@@ -149,6 +227,7 @@ pub(crate) fn table_cell_source_ranges(source: &str) -> Option<Vec<TableCellSour
                 row,
                 column,
                 source_range: line_start + range.start..line_start + range.end,
+                authored: column < authored_columns,
             });
         }
     }

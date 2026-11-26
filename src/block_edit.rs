@@ -1170,10 +1170,6 @@ fn block_body(source: &str, block: &VisualBlock) -> Result<String, BlockEditErro
             .unwrap_or(payload)
             .to_string());
     }
-    if matches!(block.kind, VisualBlockKind::Table { .. }) {
-        return Ok(authored.to_string());
-    }
-
     let mut ranges = Vec::new();
     if let Some(prefix) = &block.block_prefix {
         ranges.push(prefix.source_range.clone());

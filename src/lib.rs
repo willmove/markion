@@ -320,11 +320,11 @@ use table::{
     TableDraft, adjust_column_percents_for_delete, adjust_column_percents_for_insert,
     format_markdown_table, format_table_column_width_comment, formatted_table_cell_range,
     leading_table_column_width_comment_range, normalize_column_percents, parse_markdown_table,
-    parse_table_column_width_comment, permute_column_percents, selection_is_within_one_table_cell,
-    table_cell_source_ranges, table_position_at, table_preview_source_range, table_source_range,
+    permute_column_percents, selection_is_within_one_table_cell, table_cell_source_ranges,
+    table_position_at, table_preview_source_range, table_source_range,
 };
 pub use table::{
-    authored_table_column_percents, percents_from_flex_weights,
+    authored_table_column_percents, parse_table_column_width_comment, percents_from_flex_weights,
     redistribute_adjacent_column_percents, table_column_flex_weights,
     table_column_flex_weights_with_authored, table_column_width_prefix_len,
 };
@@ -1988,15 +1988,15 @@ impl MarkdownDocument {
         format: MarkdownFormat,
     ) -> std::ops::Range<usize> {
         let range = clamp_range_to_char_boundaries(&self.text, range);
+        let inline_ok = matches!(
+            format,
+            MarkdownFormat::Bold
+                | MarkdownFormat::Italic
+                | MarkdownFormat::InlineCode
+                | MarkdownFormat::Strikethrough
+                | MarkdownFormat::Link
+        );
         if let Some(table_range) = self.table_range_at(range.start) {
-            let inline_ok = matches!(
-                format,
-                MarkdownFormat::Bold
-                    | MarkdownFormat::Italic
-                    | MarkdownFormat::InlineCode
-                    | MarkdownFormat::Strikethrough
-                    | MarkdownFormat::Link
-            );
             let start = table_range.start;
             if !inline_ok
                 || !selection_is_within_one_table_cell(
@@ -2006,6 +2006,18 @@ impl MarkdownDocument {
             {
                 return range;
             }
+        } else if self.text.contains('|')
+            && self.preview_blocks_shared().iter().any(|block| {
+                matches!(block, PreviewBlock::BlockQuote { children, .. }
+                    if children.iter().any(|child| matches!(child, PreviewBlock::Table { source_range, .. }
+                        if source_range.start <= range.start && range.start <= source_range.end)))
+            })
+            && (!inline_ok
+                || !self.visual_editor_field_at(&range).is_some_and(|field| {
+                    matches!(field.kind, VisualEditorFieldKind::TableCell { .. })
+                }))
+        {
+            return range;
         }
         match format {
             MarkdownFormat::Bold => self.wrap_inline(range, "**", "**", "bold"),
@@ -3052,6 +3064,12 @@ impl MarkdownDocument {
                                 output.push_str(&render_latex_rich_text(&text));
                                 output.push('\n');
                             }
+                            PreviewBlock::Table {
+                                rows, alignments, ..
+                            } => {
+                                output.push_str(&render_latex_table(&rows, &alignments));
+                                output.push('\n');
+                            }
                             other => {
                                 let child_text = other.plain_text();
                                 if !child_text.is_empty() {
@@ -3457,30 +3475,28 @@ impl MarkdownDocument {
             replacement,
         );
         if let VisualEditorFieldKind::TableCell { row, column } = field.kind {
-            let block_source = self.text.get(block.source_range.clone())?;
-            let prefix_len = table_column_width_prefix_len(block_source);
-            let table_source = &block_source[prefix_len..];
-            let authored_cells = table_cell_source_ranges(table_source)?;
-            let authored_cell = authored_cells
-                .iter()
+            let source = table::TableSource::new(
+                &self.text,
+                block.source_range.clone(),
+                block.quote_context.as_ref(),
+            )?;
+            let table_source = source.markdown();
+            let authored_cell = table_cell_source_ranges(table_source)?
+                .into_iter()
                 .find(|cell| cell.row == row && cell.column == column)?;
-            let authored_range =
-                block.source_range.start + prefix_len + authored_cell.source_range.start
-                    ..block.source_range.start + prefix_len + authored_cell.source_range.end;
-            if authored_range != field.source_range {
+            if source.source_range(authored_cell.source_range)? != field.source_range {
                 return None;
             }
             let mut table = parse_markdown_table(table_source)?;
             if table.rows.get(row)?.get(column)? != &self.text[field.source_range.clone()] {
                 return None;
             }
-            let line = table_source
-                .lines()
-                .nth(if row == 0 { 0 } else { row + 1 })?;
-            if column >= table::markdown_table_cell_ranges(line).len() {
+            if !authored_cell.authored {
                 if block.quote_context.is_some() || block.list_depth > 0 {
                     return None;
                 }
+                let block_source = self.text.get(block.source_range.clone())?;
+                let prefix_len = source.prefix_len;
                 // A parser-padded missing cell has no authored delimiter to
                 // patch. Materialize that row through the proven table path.
                 let relative =
@@ -4221,7 +4237,12 @@ impl MarkdownDocument {
                         if let Some(item) = list_item.as_mut() {
                             item.record_nested_block_start(table_range.start);
                         }
-                        blocks.push(PreviewBlock::Table {
+                        let children = if quote_depth > 0 {
+                            &mut quote_children
+                        } else {
+                            &mut blocks
+                        };
+                        children.push(PreviewBlock::Table {
                             rows: table.rows,
                             alignments: table.alignments,
                             source_range: table_range,
@@ -4553,7 +4574,7 @@ impl MarkdownDocument {
         // export, and sync scroll alike. For documents without nesting the
         // stream is already ordered, so this is a no-op there.
         blocks.sort_by_key(|block| block.source_range().start);
-        absorb_table_column_width_comments(text, &mut blocks);
+        absorb_table_column_width_comments(text, &mut blocks, false);
         absorb_table_of_contents(&mut blocks);
         uniquify_heading_anchors(&mut headings);
 
@@ -5278,12 +5299,12 @@ fn emit_finished_paragraph(
     );
 }
 
-fn absorb_table_column_width_comments(text: &str, blocks: &mut Vec<PreviewBlock>) {
+fn absorb_table_column_width_comments(text: &str, blocks: &mut Vec<PreviewBlock>, quoted: bool) {
     let mut index = 0;
     while index < blocks.len() {
         if matches!(&blocks[index], PreviewBlock::BlockQuote { .. }) {
             if let PreviewBlock::BlockQuote { children, .. } = &mut blocks[index] {
-                absorb_table_column_width_comments(text, children);
+                absorb_table_column_width_comments(text, children, true);
             }
             index += 1;
             continue;
@@ -5302,8 +5323,10 @@ fn absorb_table_column_width_comments(text: &str, blocks: &mut Vec<PreviewBlock>
                         list_depth: table_depth,
                         ..
                     }) if list_depth == table_depth
+                        && (!quoted || quote_depth_before(text, source_range.start)
+                            == quote_depth_before(text, table_range.start))
                         && text.get(source_range.end..table_range.start).is_some_and(|gap|
-                            gap.bytes().all(|byte| byte.is_ascii_whitespace()))
+                            gap.bytes().all(|byte| byte.is_ascii_whitespace() || quoted && byte == b'>'))
                 ) =>
             {
                 Some(source_range.start)
@@ -5319,6 +5342,12 @@ fn absorb_table_column_width_comments(text: &str, blocks: &mut Vec<PreviewBlock>
         }
         index += 1;
     }
+}
+
+fn quote_depth_before(text: &str, start: usize) -> usize {
+    let prefix = &text[..start];
+    let line = prefix.rsplit_once('\n').map_or(prefix, |(_, line)| line);
+    line.bytes().filter(|byte| *byte == b'>').count()
 }
 
 /// True when consecutive `Event::Html` ranges should become one preview

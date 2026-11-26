@@ -222,6 +222,13 @@ pub(super) fn preview_run_plain_text(
         (PreviewBlock::BlockQuote { children, .. }, PreviewTextRunId::QuoteChild(index)) => {
             children.get(index).map(|child| child.plain_text())
         }
+        (
+            PreviewBlock::BlockQuote { children, .. },
+            PreviewTextRunId::QuoteTableCell { child, row, col },
+        ) => preview_run_plain_text(
+            children.get(child)?,
+            PreviewTextRunId::TableCell { row, col },
+        ),
         (PreviewBlock::CodeBlock { code, .. }, PreviewTextRunId::CodeBody) => Some(code.clone()),
         (PreviewBlock::CodeBlock { code, .. }, PreviewTextRunId::CodeLine(line_index)) => {
             code.lines().nth(line_index).map(|line| line.to_string())
@@ -249,12 +256,21 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         | PreviewBlock::FootnoteDefinition { .. }
         | PreviewBlock::DefinitionTerm { .. }
         | PreviewBlock::DefinitionDetail { .. } => vec![PreviewTextRunId::Body],
-        PreviewBlock::BlockQuote { children, .. } => children
-            .iter()
-            .enumerate()
-            .filter(|(_, child)| !child.plain_text().is_empty())
-            .map(|(index, _)| PreviewTextRunId::QuoteChild(index))
-            .collect(),
+        PreviewBlock::BlockQuote { children, .. } => {
+            let mut runs = Vec::new();
+            for (child, block) in children.iter().enumerate() {
+                match block {
+                    PreviewBlock::Table { rows, .. } => {
+                        runs.extend(preview_table_runs(rows, Some(child)))
+                    }
+                    _ if !block.plain_text().is_empty() => {
+                        runs.push(PreviewTextRunId::QuoteChild(child))
+                    }
+                    _ => {}
+                }
+            }
+            runs
+        }
         PreviewBlock::CodeBlock { .. } => vec![PreviewTextRunId::CodeBody],
         PreviewBlock::MathBlock { .. } => vec![PreviewTextRunId::MathLatex],
         PreviewBlock::Html { html, .. } => (!html_preview_plain_text(html).is_empty())
@@ -262,15 +278,25 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
             .into_iter()
             .collect(),
         PreviewBlock::Image { .. } => Vec::new(),
-        PreviewBlock::Table { rows, .. } => rows
-            .iter()
-            .enumerate()
-            .flat_map(|(row, cols)| {
-                (0..cols.len()).map(move |col| PreviewTextRunId::TableCell { row, col })
-            })
-            .collect(),
+        PreviewBlock::Table { rows, .. } => preview_table_runs(rows, None).collect(),
         PreviewBlock::Rule { .. } | PreviewBlock::TableOfContents { .. } => Vec::new(),
     }
+}
+
+fn preview_table_run(quote_child: Option<usize>, row: usize, col: usize) -> PreviewTextRunId {
+    match quote_child {
+        Some(child) => PreviewTextRunId::QuoteTableCell { child, row, col },
+        None => PreviewTextRunId::TableCell { row, col },
+    }
+}
+
+fn preview_table_runs(
+    rows: &[Vec<RichText>],
+    quote_child: Option<usize>,
+) -> impl Iterator<Item = PreviewTextRunId> + '_ {
+    rows.iter().enumerate().flat_map(move |(row, columns)| {
+        (0..columns.len()).map(move |col| preview_table_run(quote_child, row, col))
+    })
 }
 
 fn footnote_tooltip_text(app: &MarkionApp, label: &str) -> Option<SharedString> {
@@ -2373,13 +2399,15 @@ pub(super) fn rich_text_with_math_element(
 
     let full_selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
     let full_search_ranges = active_preview_search_ranges(app, block_index, run_id, &rich.text);
-    let table_prefix;
-    let id_prefix = if let PreviewTextRunId::TableCell { row, col } = run_id {
-        table_prefix = format!("{id_prefix}-{row}-{col}");
-        table_prefix.as_str()
-    } else {
-        id_prefix
+    let table_prefix = match run_id {
+        PreviewTextRunId::TableCell { row, col } => Some(format!("{id_prefix}-{row}-{col}")),
+        PreviewTextRunId::QuoteTableCell { child, row, col } => {
+            Some(format!("{id_prefix}-{child}-{row}-{col}"))
+        }
+        _ => None,
     };
+    let fit_table_cell = table_prefix.is_some();
+    let id_prefix = table_prefix.as_deref().unwrap_or(id_prefix);
     let run_text = SharedString::from(rich.text.clone());
     let inline_metrics = Some((font_size, line_height));
     let mut lines = vec![Vec::new()];
@@ -2432,7 +2460,7 @@ pub(super) fn rich_text_with_math_element(
                         inline_metrics,
                         // A cell may be narrower than its formula; prose and
                         // display atoms keep their measured width.
-                        matches!(run_id, PreviewTextRunId::TableCell { .. }),
+                        fit_table_cell,
                         cx,
                     ),
                 ),
@@ -7584,6 +7612,9 @@ pub(super) struct VisualTableAxisTarget {
 /// Row count, column count, and a byte offset inside the pipe table of an
 /// editable Visual Edit table block.
 fn visual_table_shape(block: &VisualBlock) -> Option<(usize, usize, usize)> {
+    if block.quote_context.is_some() {
+        return None;
+    }
     let VisualBlockKind::Table { rows, .. } = &block.kind else {
         return None;
     };
@@ -7825,8 +7856,9 @@ pub(super) fn visual_table_view(
                 && drag.document_version == app.active_tab().document.version()
         });
     let authored = overlay.map(|drag| drag.live_percents.clone()).or_else(|| {
-        text.get(block.source_range.clone())
-            .and_then(|source| authored_table_column_percents(source, column_count))
+        text.get(block.source_range.clone()).and_then(|source| {
+            table_authored_percents(source, column_count, block.quote_context.is_some())
+        })
     });
     let column_weights = preview_table_column_weights(rows, &typography, authored.as_deref());
     let block_id = block.id;
@@ -7836,9 +7868,8 @@ pub(super) fn visual_table_view(
         _ => None,
     };
     let row_count = rows.len();
-    let axis_target = |axis| {
-        VisualTableAxisTarget::for_block(document_version, block, axis).filter(|_| cells.is_some())
-    };
+    let structural_controls = cells.is_some() && block.quote_context.is_none();
+    let axis_target = |axis| VisualTableAxisTarget::for_block(document_version, block, axis);
     let hovered_cell = app
         .active_tab()
         .hovered_visual_table_cell
@@ -7881,7 +7912,7 @@ pub(super) fn visual_table_view(
                 .when(!is_last_row, |style| {
                     style.border_b_1().border_color(palette.control_border)
                 })
-                .when(cells.is_some() && row_index >= 1, |row| {
+                .when(structural_controls && row_index >= 1, |row| {
                     row.drag_over::<DraggedTableRow>(move |style, dragged, _, _| {
                         if visual_table_drop_edit(dragged.target, block_id, row_drop).is_some() {
                             style.bg(palette.table_drop_target_bg)
@@ -8084,7 +8115,7 @@ pub(super) fn visual_table_view(
                             ))
                         })
                         .when(
-                            cells.is_some() && !is_last_cell && column_count >= 2,
+                            structural_controls && !is_last_cell && column_count >= 2,
                             |cell_view| {
                                 let handle = DraggedTableColumnHandle {
                                     block_id,
@@ -9203,6 +9234,117 @@ fn markdown_image_presentation_view(
     }
 }
 
+fn table_authored_percents(source: &str, columns: usize, quoted: bool) -> Option<Vec<u8>> {
+    if !quoted {
+        return authored_table_column_percents(source, columns);
+    }
+    // The parsed table range can include an absorbed width comment.
+    let comment = source.lines().next()?.trim_start_matches([' ', '\t', '>']);
+    let percents = markion::parse_table_column_width_comment(comment)?;
+    (percents.len() == columns).then_some(percents)
+}
+
+fn preview_table_grid(
+    app: &MarkionApp,
+    rows: &[Vec<RichText>],
+    source_range: &Range<usize>,
+    block_index: usize,
+    quote_child: Option<usize>,
+    display_scale: f32,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    // Split Preview and Read mode share a read-only grid.
+    let typography = app.typography_metrics();
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let authored = app
+        .active_tab()
+        .document
+        .text()
+        .get(source_range.clone())
+        .and_then(|source| table_authored_percents(source, column_count, quote_child.is_some()));
+    let column_weights = preview_table_column_weights(rows, &typography, authored.as_deref());
+    let palette = app.palette();
+    div()
+        .debug_selector(move || match quote_child {
+            Some(child) => format!("preview-quote-table-{block_index}-{child}"),
+            None => format!("preview-table-{block_index}"),
+        })
+        .mb_3()
+        .border_1()
+        .border_color(palette.control_border)
+        .rounded_md()
+        .overflow_hidden()
+        .children(rows.iter().enumerate().map(|(row_index, row)| {
+            let background = table_cell_background(palette, row_index == 0);
+            let is_last_row = row_index + 1 == rows.len();
+            div()
+                .flex()
+                .bg(background)
+                .when(!is_last_row, |style| {
+                    style.border_b_1().border_color(palette.control_border)
+                })
+                .children(row.iter().enumerate().map(|(cell_index, cell)| {
+                    let is_last_cell = cell_index + 1 == row.len();
+                    let run_id = preview_table_run(quote_child, row_index, cell_index);
+                    let cell_id = match quote_child {
+                        Some(child) => ElementId::from(SharedString::from(format!(
+                            "preview-quote-table-cell-{block_index}-{child}-{row_index}-{cell_index}"
+                        ))),
+                        None => ElementId::from((
+                            "preview-table-cell",
+                            ((block_index as u64) << 32)
+                                | (((row_index as u64) & 0xffff) << 16)
+                                | ((cell_index as u64) & 0xffff),
+                        )),
+                    };
+                    let font_size = typography.table_font_size;
+                    let line_height = typography.text_line_height(font_size);
+                    let content = if cell.spans.iter().any(|span| span.image.is_some() || span.math.is_some()) {
+                        rich_text_with_math_element(
+                            app,
+                            "preview-table-cell",
+                            cell,
+                            block_index,
+                            run_id,
+                            display_scale,
+                            font_size,
+                            line_height,
+                            document_dir,
+                            cx,
+                        )
+                    } else {
+                        rich_text_element(
+                            app,
+                            cell_id,
+                            cell,
+                            block_index,
+                            run_id,
+                            (font_size, line_height),
+                            cx,
+                        )
+                    };
+                    preview_table_cell_flex(
+                        column_weights.get(cell_index).copied().unwrap_or(1.0),
+                    )
+                    .p_2()
+                    .when(!is_last_cell, |style| {
+                        style.border_r_1().border_color(palette.control_border)
+                    })
+                    .text_size(px(font_size))
+                    .debug_selector(move || match quote_child {
+                        Some(child) => format!(
+                            "preview-quote-table-{block_index}-{child}-cell-{row_index}-{cell_index}"
+                        ),
+                        None => format!(
+                            "preview-table-cell-bounds-{block_index}-{row_index}-{cell_index}"
+                        ),
+                    })
+                    .child(content)
+                }))
+        }))
+}
+
 pub(super) fn preview_block_view(
     app: &MarkionApp,
     block: &PreviewBlock,
@@ -9349,6 +9491,22 @@ pub(super) fn preview_block_view(
         } => {
             let mut container = div();
             for (child_index, child) in children.iter().enumerate() {
+                if let PreviewBlock::Table {
+                    rows, source_range, ..
+                } = child
+                {
+                    container = container.child(preview_table_grid(
+                        app,
+                        rows,
+                        source_range,
+                        block_index,
+                        Some(child_index),
+                        display_scale,
+                        document_dir,
+                        cx,
+                    ));
+                    continue;
+                }
                 if let PreviewBlock::Paragraph { text, .. } = child {
                     if !text.is_empty() || text.spans.iter().any(|span| span.image.is_some()) {
                         container = container.child(rich_text_with_math_element(
@@ -9740,95 +9898,16 @@ pub(super) fn preview_block_view(
             ))),
         PreviewBlock::Table {
             rows, source_range, ..
-        } => {
-            // Split Preview and Read mode share this branch. Table mutation
-            // belongs in Visual Edit or the source commands, so the preview
-            // grid intentionally has no editing header or callbacks.
-            let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
-            let authored = app
-                .active_tab()
-                .document
-                .text()
-                .get(source_range.clone())
-                .and_then(|source| authored_table_column_percents(source, column_count));
-            let column_weights =
-                preview_table_column_weights(rows, &typography, authored.as_deref());
-            let palette = app.palette();
-            div()
-                .debug_selector(move || format!("preview-table-{block_index}"))
-                .mb_3()
-                .border_1()
-                .border_color(palette.control_border)
-                .rounded_md()
-                .overflow_hidden()
-                .children(rows.iter().enumerate().map(|(row_index, row)| {
-                    let background = table_cell_background(palette, row_index == 0);
-                    let is_last_row = row_index + 1 == rows.len();
-                    div()
-                        .flex()
-                        .bg(background)
-                        .when(!is_last_row, |style| {
-                            style.border_b_1().border_color(palette.control_border)
-                        })
-                        .children(row.iter().enumerate().map(|(cell_index, cell)| {
-                            let is_last_cell = cell_index + 1 == row.len();
-                            let run_id = PreviewTextRunId::TableCell {
-                                row: row_index,
-                                col: cell_index,
-                            };
-                            let font_size = typography.table_font_size;
-                            let line_height = typography.text_line_height(font_size);
-                            preview_table_cell_flex(
-                                column_weights.get(cell_index).copied().unwrap_or(1.0),
-                            )
-                            .p_2()
-                            .when(!is_last_cell, |style| {
-                                style.border_r_1().border_color(palette.control_border)
-                            })
-                            .text_size(px(font_size))
-                            .debug_selector(move || {
-                                format!("preview-table-cell-bounds-{block_index}-{row_index}-{cell_index}")
-                            })
-                            // Images and formulas need the mixed layout;
-                            // every other cell keeps one shaped text run.
-                            .child(
-                                if cell
-                                    .spans
-                                    .iter()
-                                    .any(|span| span.image.is_some() || span.math.is_some())
-                                {
-                                    rich_text_with_math_element(
-                                        app,
-                                        "preview-table-cell",
-                                        cell,
-                                        block_index,
-                                        run_id,
-                                        display_scale,
-                                        font_size,
-                                        line_height,
-                                        document_dir,
-                                        cx,
-                                    )
-                                } else {
-                                    rich_text_element(
-                                        app,
-                                        ElementId::from((
-                                            "preview-table-cell",
-                                            ((block_index as u64) << 32)
-                                                | (((row_index as u64) & 0xffff) << 16)
-                                                | ((cell_index as u64) & 0xffff),
-                                        )),
-                                        cell,
-                                        block_index,
-                                        run_id,
-                                        (font_size, line_height),
-                                        cx,
-                                    )
-                                },
-                            )
-                        }))
-                }))
-        }
+        } => preview_table_grid(
+            app,
+            rows,
+            source_range,
+            block_index,
+            None,
+            display_scale,
+            document_dir,
+            cx,
+        ),
     };
     // A block nested inside list item(s) inlines under its owning item's
     // content column instead of escaping the list at document indent.

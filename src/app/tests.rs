@@ -2314,6 +2314,68 @@ fn preview_table_cells_remain_selectable_without_editing_toolbar() {
 }
 
 #[test]
+fn quoted_table_preview_cell_runs_follow_child_order() {
+    let document = MarkdownDocument::from_text(
+        "> Before\n>\n> | A | B |\n> | --- | --- |\n> | Left | Right |\n>\n> After\n",
+    );
+    let blocks = document.preview_blocks_shared();
+    let [quote @ PreviewBlock::BlockQuote { children, .. }] = blocks.as_slice() else {
+        panic!("expected one quote, got {blocks:?}");
+    };
+    assert!(matches!(
+        children.as_slice(),
+        [
+            PreviewBlock::Paragraph { .. },
+            PreviewBlock::Table { .. },
+            PreviewBlock::Paragraph { .. }
+        ]
+    ));
+    let runs = preview_block_runs(quote);
+    let text: Vec<_> = runs
+        .iter()
+        .copied()
+        .map(|run| preview_run_plain_text(quote, run).unwrap())
+        .collect();
+    assert_eq!(text, ["Before", "A", "B", "Left", "Right", "After"]);
+    assert!(runs.windows(2).all(|pair| pair[0].rank() < pair[1].rank()));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_missing_code_font_uses_available_families() {
+    // Keep assertions outside the native callback, which cannot unwind.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    gpui::Application::new().run(move |cx| {
+        let text = cx.text_system();
+        let missing = "Markion deliberately missing test font 2dc6a9b0";
+        let mut requested = gpui::font(missing);
+        requested.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![
+            format!("{missing} candidate"),
+            "Consolas".into(),
+            "Courier New".into(),
+        ]));
+        let measure = |font| {
+            let id = text.resolve_font(&font);
+            ['i', 'W'].map(|ch| text.advance(id, px(17.), ch).map(|size| size.width).ok())
+        };
+        let actual = [
+            measure(requested),
+            measure(gpui::font("Consolas")),
+            measure(gpui::font(missing)),
+            measure(gpui::font(".SystemUIFont")),
+        ];
+        let _ = sender.send(actual);
+        cx.quit();
+    });
+    let [code, consolas, missing, system] = receiver.try_recv().unwrap();
+    assert!(code.iter().all(Option::is_some));
+    assert_eq!(code[0], code[1], "use a monospace family");
+    assert_eq!(code, consolas, "use the first installed candidate");
+    assert!(system.iter().all(Option::is_some));
+    assert_eq!(missing, system, "use the system UI family as a last resort");
+}
+
+#[test]
 fn preview_blockquote_exposes_child_list_items_as_selectable_runs() {
     let quoted_item = |text: &str, index: u64| PreviewBlock::ListItem {
         level: 1,
@@ -7048,6 +7110,78 @@ fn visual_table_vertical_arrows_preserve_columns_and_empty_rows(cx: &mut TestApp
                 &app.active_tab().document.visual_blocks_shared()
             ))
         });
+    }
+}
+
+#[gpui::test]
+fn visual_quoted_table_grip_keeps_cells_editable_and_undo_atomic(cx: &mut TestAppContext) {
+    let source = "| 温度 | Hot |\r\n| :--- | ---: |\r\n| 色 | Red |\r\n\r\nAfter";
+    let quoted = "> | 温度 | Hot |\r\n> | :--- | ---: |\r\n> | 色 | Red |\r\n\r\nAfter";
+    let (app, cx) = visual_table_handle_app(source, cx);
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let original_selection = app.update(cx, |app, _| app.active_tab().selected_range.clone());
+    let command = cx.debug_bounds("visual-block-transform-10").unwrap();
+    cx.simulate_click(command.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), quoted);
+        assert_eq!(tab.undo_stack.len(), 1);
+        let blocks = tab.document.visual_blocks_shared();
+        assert!(blocks[0].quote_context.is_some());
+        assert!(matches!(
+            blocks[0].editor,
+            Some(VisualBlockEditor::Table { .. })
+        ));
+        assert!(blocks[0].source_island.is_none());
+    });
+
+    let cell = cx.debug_bounds("visual-table-cell-0-1-1").unwrap();
+    cx.simulate_click(cell.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_visual_table_caret_in_cell(&app, cx, 1, 1);
+    let caret = app.update(cx, |app, _| app.active_tab().cursor_offset());
+    cx.simulate_input("新");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let mut edited = quoted.to_owned();
+        edited.insert_str(caret, "新");
+        assert_eq!(app.active_tab().document.text(), edited);
+        assert_eq!(app.active_tab().undo_stack.len(), 2);
+    });
+
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), quoted)
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.selected_range, original_selection);
+        assert!(tab.undo_stack.is_empty());
+    });
+    assert!(cx.debug_bounds("visual-table-cell-0-1-1").is_some());
+}
+
+#[gpui::test]
+fn quoted_table_preview_paints_in_read_and_split_modes(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app("> | A | B |\n> | --- | --- |\n> | Left | Right |", cx);
+    for mode in [ViewMode::Read, ViewMode::Split] {
+        app.update(cx, |app, cx| {
+            app.view_mode = mode;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("preview-quote-table-0-0-cell-1-1")
+                .is_some()
+        );
     }
 }
 

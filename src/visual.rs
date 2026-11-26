@@ -14,7 +14,7 @@ use crate::model::{
     VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
-use crate::table::{table_cell_source_ranges, table_column_width_prefix_len};
+use crate::table::{TableSource, table_cell_source_ranges};
 use crate::text_util::char_run_range;
 
 /// Collects the document's link reference definition lines so that per-block
@@ -1054,6 +1054,15 @@ fn quote_prefix_on_line(
         if matches!(bytes.get(cursor), Some(b' ' | b'\t')) {
             cursor += 1;
         }
+        // Up to three spaces can indent the next nested quote marker.
+        let indentation = bytes[cursor..]
+            .iter()
+            .take(3)
+            .take_while(|byte| **byte == b' ')
+            .count();
+        if bytes.get(cursor + indentation) == Some(&b'>') {
+            cursor += indentation;
+        }
     }
     (depth > 0).then_some((line_start..line_start + cursor, depth))
 }
@@ -1492,7 +1501,7 @@ fn visual_block_from_preview(
         synthesize_quote_softbreak_runs(text, &source_range, &mut editable_runs);
     }
     let marker_ranges = marker_ranges(source_range.clone(), &editable_runs);
-    let editor = visual_block_editor(text, block, source_range.clone());
+    let editor = visual_block_editor(text, block, source_range.clone(), quote_context.as_ref());
     if editor.is_some() {
         source_island = None;
     }
@@ -1532,6 +1541,7 @@ fn visual_block_editor(
     text: &str,
     block: &PreviewBlock,
     source_range: Range<usize>,
+    quote: Option<&VisualQuoteContext>,
 ) -> Option<VisualBlockEditor> {
     match block {
         PreviewBlock::CodeBlock {
@@ -1607,53 +1617,49 @@ fn visual_block_editor(
             if rows.is_empty() {
                 return None;
             }
-            let source = text.get(source_range.clone())?;
-            let markdown_start = table_column_width_prefix_len(source);
-            let markdown = source.get(markdown_start..)?;
+            let source = TableSource::new(text, source_range, quote)?;
+            let markdown = source.markdown();
             let cell_ranges = table_cell_source_ranges(markdown)?;
             let hard_breaks: Vec<_> =
                 pulldown_cmark::Parser::new_ext(markdown, visual_markdown_options())
                     .into_offset_iter()
                     .filter_map(|(event, range)| {
-                        matches!(event, Event::Html(_) | Event::InlineHtml(_))
-                            .then(|| parse_inline_html_style_tag(&markdown[range.clone()]))
-                            .flatten()
-                            .filter(|tag| *tag == InlineHtmlStyleTag::LineBreak)
-                            .map(|_| {
-                                source_range.start + markdown_start + range.start
-                                    ..source_range.start + markdown_start + range.end
-                            })
-                    })
-                    .collect();
-            Some(VisualBlockEditor::Table {
-                cells: cell_ranges
-                    .into_iter()
-                    .map(|cell| {
-                        let source_range =
-                            source_range.start + markdown_start + cell.source_range.start
-                                ..source_range.start + markdown_start + cell.source_range.end;
-                        VisualTableCell {
-                            row: cell.row,
-                            column: cell.column,
-                            hard_breaks: hard_breaks
-                                .iter()
-                                .filter(|range| {
-                                    range.start >= source_range.start
-                                        && range.end <= source_range.end
-                                })
-                                .cloned()
-                                .collect(),
-                            field: VisualEditorField {
-                                kind: VisualEditorFieldKind::TableCell {
-                                    row: cell.row,
-                                    column: cell.column,
-                                },
-                                source_range,
-                            },
+                        if matches!(event, Event::Html(_) | Event::InlineHtml(_))
+                            && parse_inline_html_style_tag(markdown.get(range.clone())?)
+                                == Some(InlineHtmlStyleTag::LineBreak)
+                        {
+                            source.source_range(range)
+                        } else {
+                            None
                         }
                     })
-                    .collect(),
-            })
+                    .collect();
+            let cells = cell_ranges
+                .into_iter()
+                .filter(|cell| quote.is_none() || cell.authored)
+                .map(|cell| {
+                    let source_range = source.source_range(cell.source_range)?;
+                    Some(VisualTableCell {
+                        row: cell.row,
+                        column: cell.column,
+                        hard_breaks: hard_breaks
+                            .iter()
+                            .filter(|range| {
+                                range.start >= source_range.start && range.end <= source_range.end
+                            })
+                            .cloned()
+                            .collect(),
+                        field: VisualEditorField {
+                            kind: VisualEditorFieldKind::TableCell {
+                                row: cell.row,
+                                column: cell.column,
+                            },
+                            source_range,
+                        },
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(VisualBlockEditor::Table { cells })
         }
         PreviewBlock::Image { identity, .. } => {
             // Conservative whole-span proof: one complete single-line image
@@ -6819,6 +6825,52 @@ mod tests {
         let cached = doc.visual_blocks_shared();
         let cached_again = doc.visual_blocks_shared();
         assert!(Arc::ptr_eq(&cached, &cached_again));
+    }
+
+    #[test]
+    fn quoted_table_cell_offsets_preserve_crlf_widths_and_inline_breaks() {
+        let source = concat!(
+            "> Intro\r\n>\r\n",
+            "> <!-- markion-cols:35,65 -->\r\n",
+            "> | 温度 | Hot |\r\n",
+            "> | :--- | ---: |\r\n",
+            "> | 红<br>色 | Red |\r\n>\r\n> After"
+        );
+        let document = MarkdownDocument::from_text(source);
+        let blocks = document.visual_blocks_shared();
+        let table = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+            .expect("quoted table visual row");
+        assert!(source[table.source_range.clone()].starts_with("> <!-- markion-cols:35,65 -->"));
+        assert!(table.quote_context.is_some());
+        let Some(VisualBlockEditor::Table { cells }) = &table.editor else {
+            panic!("expected exact quoted cells");
+        };
+        let cell = cells
+            .iter()
+            .find(|cell| (cell.row, cell.column) == (1, 0))
+            .unwrap();
+        let field = cell.field.source_range.clone();
+        assert_eq!(&source[field.clone()], "红<br>色");
+        assert_eq!(cell.hard_breaks.len(), 1);
+        assert_eq!(&source[cell.hard_breaks[0].clone()], "<br>");
+        let edit = document.direct_visual_block_edit(field, "替换|").unwrap();
+        let mut result = source.to_string();
+        result.replace_range(edit.range, &edit.replacement);
+        assert_eq!(result, source.replace("红<br>色", "替换\\|"));
+    }
+
+    #[test]
+    fn quoted_table_cell_format_handles_spaced_nested_markers() {
+        let source = ">  > | A | B |\n>  > | --- | --- |\n>  > | Left | Right |";
+        let mut document = MarkdownDocument::from_text(source);
+        let left = source.find("Left").unwrap();
+        let right_end = source.len() - " |".len();
+        document.apply_markdown_format(left..right_end, crate::MarkdownFormat::Bold);
+        assert_eq!(document.text(), source);
+        document.apply_markdown_format(left..left + "Left".len(), crate::MarkdownFormat::Bold);
+        assert_eq!(document.text(), source.replace("Left", "**Left**"));
     }
 
     #[test]

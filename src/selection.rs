@@ -246,11 +246,14 @@ impl CellSelection {
         if !matches!(block.editor, Some(VisualBlockEditor::Table { .. })) {
             return Err(BlockEditError::Unsupported);
         }
-        let authored = &document.text()[block.source_range.clone()];
-        let table = crate::table::parse_markdown_table(
-            &authored[crate::table_column_width_prefix_len(authored)..],
+        let source = crate::table::TableSource::new(
+            document.text(),
+            block.source_range.clone(),
+            block.quote_context.as_ref(),
         )
         .ok_or(BlockEditError::Ambiguous)?;
+        let table = crate::table::parse_markdown_table(source.markdown())
+            .ok_or(BlockEditError::Ambiguous)?;
         if [self.anchor, self.head]
             .iter()
             .any(|&(row, col)| row >= table.rows.len() || col >= table.column_count())
@@ -378,14 +381,20 @@ impl CellSelection {
             return Err(BlockEditError::Unsupported);
         };
         let mut edits = Vec::new();
-        let authored = &document.text()[self.target.source_range.clone()];
-        let markdown = &authored[crate::table_column_width_prefix_len(authored)..];
+        let source = crate::table::TableSource::new(
+            document.text(),
+            block.source_range.clone(),
+            block.quote_context.as_ref(),
+        )
+        .ok_or(BlockEditError::Ambiguous)?;
+        let authored_cells = crate::table::table_cell_source_ranges(source.markdown())
+            .ok_or(BlockEditError::Ambiguous)?;
         for (row, column, replacement) in updates {
-            let line = markdown
-                .lines()
-                .nth(if *row == 0 { 0 } else { row + 1 })
+            let authored = authored_cells
+                .iter()
+                .find(|cell| cell.row == *row && cell.column == *column)
                 .ok_or(BlockEditError::Ambiguous)?;
-            if *column >= crate::table::markdown_table_cell_ranges(line).len() {
+            if !authored.authored {
                 if replacement.is_empty() {
                     continue;
                 }

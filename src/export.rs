@@ -1635,6 +1635,7 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
                             text,
                         );
                     }
+                    PreviewBlock::Table { .. } => render_docx_block(state, child),
                     other => {
                         state.end_list_group();
                         let child_text = other.plain_text();
@@ -1884,6 +1885,7 @@ fn render_docx_alert(
             } => {
                 render_docx_list_item(state, None, *level, *ordered, *checked, text);
             }
+            PreviewBlock::Table { .. } => render_docx_block(state, child),
             other => {
                 state.end_list_group();
                 let child_text = other.plain_text();
