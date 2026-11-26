@@ -133,6 +133,17 @@ pub(crate) fn is_local_reference(reference: &str) -> bool {
         || lower.starts_with("//"))
 }
 
+/// Encodes a filesystem reference as a local Markdown URL while preserving
+/// path separators. Each segment is decoded exactly once by the resolver.
+pub fn encode_local_reference_url(reference: &str) -> String {
+    reference
+        .replace('\\', "/")
+        .split('/')
+        .map(|segment| utf8_percent_encode(segment, RESOURCE_URL_ENCODE).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Resolves an authored local reference against the document directory.
 /// Absolute references (a leading separator or a Windows drive prefix)
 /// resolve to themselves; percent-encoding and backslashes are decoded
