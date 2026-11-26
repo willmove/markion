@@ -4502,7 +4502,19 @@ impl MarkdownDocument {
                         } else {
                             ("", content.as_ref())
                         };
-                    for (fragment, extended) in [(literal, false), (rest, true)] {
+                    let guarded_literal;
+                    let literal_fragment = if !literal.is_empty()
+                        && image.is_none()
+                        && code.is_none()
+                        && matches!(literal, "=" | "^" | "~" | ":")
+                        && !text.contains(parse::ESCAPED_EXT_GUARD)
+                    {
+                        guarded_literal = format!("{}{literal}", parse::ESCAPED_EXT_GUARD);
+                        guarded_literal.as_str()
+                    } else {
+                        literal
+                    };
+                    for (fragment, extended) in [(literal_fragment, false), (rest, true)] {
                         if !fragment.is_empty() {
                             push_preview_rich(
                                 &mut heading,

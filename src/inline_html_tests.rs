@@ -220,3 +220,33 @@ fn inline_html_nested_colors_and_literal_forms() {
         assert!(rich_blocks(&blocks)[0].text.contains("<span>字</span>"));
     }
 }
+
+#[test]
+fn inline_html_css_tolerance_weights_oblique_named_colors_and_bg() {
+    let source = r#"<span style="font-weight:600">w600</span> <span style="font-weight:800">w800</span> <span style="font-weight:bolder">wbolder</span> <span style="font-style:oblique">ob</span> <span style="color:red">red</span> <span style="color:rgba(10, 20, 30, 0.5)">rgba</span> <span style="background-color:yellow">bg</span> <span style="font-weight:bold; font-size:18px">mixed</span> <font color="blue">fblue</font>"#;
+    let parts = html_preview_parts(&format!("<p>{source}</p>"));
+    let HtmlPreviewPart::Text { text, .. } = &parts[0] else {
+        panic!("expected text part");
+    };
+    let find = |needle: &str| {
+        text.spans
+            .iter()
+            .find(|span| span.text == needle)
+            .unwrap_or_else(|| panic!("missing span {needle:?} in {:?}", text.spans))
+    };
+    assert!(find("w600").style.bold);
+    assert!(find("w800").style.bold);
+    assert!(find("wbolder").style.bold);
+    assert!(find("ob").style.italic);
+    assert_eq!(find("red").style.color, Some(0xff0000));
+    assert_eq!(find("rgba").style.color, Some(0x0a141e));
+    assert!(find("bg").style.highlight);
+    assert!(find("mixed").style.bold);
+    assert_eq!(find("fblue").style.color, Some(0x0000ff));
+
+    // Unsafe / layout CSS properties remain rejected.
+    assert!(parse_html_inline_element("<span style='position:fixed'>").is_none());
+    assert!(parse_html_inline_element("<span style='color:var(--x)'>").is_none());
+    assert!(parse_html_inline_element("<span style='background-color:url(x)'>").is_none());
+    assert!(parse_html_inline_element("<span style='font-size:expression(1)'>").is_none());
+}

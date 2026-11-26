@@ -584,8 +584,9 @@ use crate::emoji::{emoji_for_shortcode, emoji_tokens_in};
 use crate::parse::{
     ExtendedInlineKind, HtmlInlineElement, InlineHtmlStyleKind, InlineHtmlStyleTag,
     coalesced_offset_events, compose_inline_style, extended_inline_matches,
-    inline_html_tag_names_match, parse_html_inline_element, parse_inline_html_image,
-    parse_inline_html_style_tag, visual_markdown_options,
+    find_extended_closing_delimiter, inline_html_tag_names_match, is_backslash_escaped,
+    is_valid_short_inline_extent, parse_html_inline_element, parse_inline_html_image,
+    parse_inline_html_style_tag, scan_extended_delimiter_candidates, visual_markdown_options,
 };
 
 #[derive(Clone)]
@@ -2663,8 +2664,266 @@ fn inline_runs(
             });
         }
     }
+    apply_extended_inline_runs(text, &mut runs, &mut candidates);
     let reveal_groups = build_reveal_groups(text, &block_range, &mut runs, candidates);
     (runs, reveal_groups, contains_non_image_html)
+}
+
+fn run_allows_extended_delimiter(text: &str, run: &VisualInlineRun) -> bool {
+    !run.style.code
+        && !run.conservative_fallback
+        && run.math.is_none()
+        && run.html_image.is_none()
+        && run.source_range == run.content_range
+        && text.get(run.source_range.clone()) == Some(run.visible_text.as_ref())
+}
+
+fn apply_extended_kind_to_style(style: &mut InlineStyle, kind: ExtendedInlineKind) {
+    match kind {
+        ExtendedInlineKind::Highlight => style.highlight = true,
+        ExtendedInlineKind::Superscript => style.superscript = true,
+        ExtendedInlineKind::Subscript => style.subscript = true,
+    }
+}
+
+/// Resolves extended inline delimiters (`==highlight==`, `^sup^`, `~sub~`)
+/// left-to-right across a block's runs, handling both same-run pairs and
+/// cross-run pairs wrapping standard Markdown syntax (`==**bold**==`,
+/// `==\`code\`==`, `H~**2**~O`), leaving stripped delimiter bytes as hidden
+/// markers inside exact reveal groups.
+fn apply_extended_inline_runs(
+    text: &str,
+    runs: &mut Vec<VisualInlineRun>,
+    candidates: &mut Vec<RevealCandidate>,
+) {
+    let mut i = 0usize;
+    while i < runs.len() {
+        if !run_allows_extended_delimiter(text, &runs[i]) {
+            i += 1;
+            continue;
+        }
+        let open_candidates = scan_extended_delimiter_candidates(&runs[i].visible_text);
+        let mut matched = None;
+        'cand: for (open_offset, kind, delim) in open_candidates {
+            let open_src = runs[i].source_range.start + open_offset;
+            if is_backslash_escaped(text, open_src) {
+                continue;
+            }
+            let after_open = open_offset + delim.len();
+            // 1. Check for a closing delimiter later inside the same run (stopping at `\n`).
+            let same_run_tail = &runs[i].visible_text[after_open..];
+            let same_run_line_tail = same_run_tail
+                .find('\n')
+                .map_or(same_run_tail, |nl| &same_run_tail[..nl]);
+            if let Some(rel_close) = find_extended_closing_delimiter(same_run_line_tail, kind) {
+                let close_offset = after_open + rel_close;
+                let close_src = runs[i].source_range.start + close_offset;
+                if !is_backslash_escaped(text, close_src) {
+                    let close_src_end = close_src + delim.len();
+                    let inner_visible = &runs[i].visible_text[after_open..close_offset];
+                    let valid = match kind {
+                        ExtendedInlineKind::Highlight => !inner_visible.trim().is_empty(),
+                        ExtendedInlineKind::Superscript | ExtendedInlineKind::Subscript => {
+                            is_valid_short_inline_extent(inner_visible)
+                        }
+                    };
+                    if valid
+                        && text.get(open_src..close_src_end).is_some_and(|slice| {
+                            extended_inline_matches(slice)
+                                .iter()
+                                .any(|item| item.kind == kind && item.source_range == (0..slice.len()))
+                        })
+                    {
+                        matched = Some((
+                            open_offset,
+                            i,
+                            close_offset,
+                            kind,
+                            delim.len(),
+                            open_src..close_src_end,
+                        ));
+                        break 'cand;
+                    }
+                }
+            }
+
+            // 2. Otherwise search subsequent runs on the same line.
+            if runs[i].visible_text[after_open..].contains('\n') {
+                continue;
+            }
+            for j in (i + 1)..runs.len() {
+                if j > i + 1 && runs[j - 1].visible_text.contains('\n') {
+                    break;
+                }
+                if !run_allows_extended_delimiter(text, &runs[j]) {
+                    continue;
+                }
+                let run_j_line = runs[j]
+                    .visible_text
+                    .find('\n')
+                    .map_or(runs[j].visible_text.as_ref(), |nl| {
+                        &runs[j].visible_text[..nl]
+                    });
+                let Some(close_offset) = find_extended_closing_delimiter(run_j_line, kind) else {
+                    continue;
+                };
+                let close_src = runs[j].source_range.start + close_offset;
+                if is_backslash_escaped(text, close_src) {
+                    continue;
+                }
+                let close_src_end = close_src + delim.len();
+                let Some(slice) = text.get(open_src..close_src_end) else {
+                    continue;
+                };
+                let slice_exact = extended_inline_matches(slice)
+                    .iter()
+                    .any(|item| item.kind == kind && item.source_range == (0..slice.len()));
+                if !slice_exact {
+                    continue;
+                }
+                let mut inner_visible = String::new();
+                inner_visible.push_str(&runs[i].visible_text[after_open..]);
+                for mid in &runs[(i + 1)..j] {
+                    inner_visible.push_str(&mid.visible_text);
+                }
+                inner_visible.push_str(&runs[j].visible_text[..close_offset]);
+                let valid = match kind {
+                    ExtendedInlineKind::Highlight => {
+                        !inner_visible.trim().is_empty() && !inner_visible.contains('\n')
+                    }
+                    ExtendedInlineKind::Superscript | ExtendedInlineKind::Subscript => {
+                        is_valid_short_inline_extent(&inner_visible)
+                    }
+                };
+                if valid {
+                    matched = Some((
+                        open_offset,
+                        j,
+                        close_offset,
+                        kind,
+                        delim.len(),
+                        open_src..close_src_end,
+                    ));
+                    break 'cand;
+                }
+            }
+        }
+        let Some((open_offset, j, close_offset, kind, delim_len, full_source_range)) = matched
+        else {
+            i += 1;
+            continue;
+        };
+
+        candidates.push(RevealCandidate {
+            kind: match kind {
+                ExtendedInlineKind::Highlight => VisualRevealKind::Highlight,
+                ExtendedInlineKind::Superscript => VisualRevealKind::Superscript,
+                ExtendedInlineKind::Subscript => VisualRevealKind::Subscript,
+            },
+            source_range: full_source_range,
+            link_target_range: None,
+        });
+
+        let mut next = Vec::with_capacity(runs.len() + 2);
+        next.extend(runs[..i].iter().cloned());
+
+        let resume_index;
+        if j == i {
+            let run = &runs[i];
+            let prefix = &run.visible_text[..open_offset];
+            let inner = &run.visible_text[open_offset + delim_len..close_offset];
+            let suffix = &run.visible_text[close_offset + delim_len..];
+            if !prefix.is_empty() {
+                let prefix_range = run.source_range.start..run.source_range.start + open_offset;
+                next.push(VisualInlineRun {
+                    visible_text: prefix.to_string().into(),
+                    source_range: prefix_range.clone(),
+                    content_range: prefix_range,
+                    ..run.clone()
+                });
+            }
+            resume_index = next.len();
+            if !inner.is_empty() {
+                let inner_range = run.source_range.start + open_offset + delim_len
+                    ..run.source_range.start + close_offset;
+                let mut styled = run.clone();
+                styled.visible_text = inner.to_string().into();
+                styled.source_range = inner_range.clone();
+                styled.content_range = inner_range;
+                apply_extended_kind_to_style(&mut styled.style, kind);
+                next.push(styled);
+            }
+            if !suffix.is_empty() {
+                let suffix_range =
+                    run.source_range.start + close_offset + delim_len..run.source_range.end;
+                next.push(VisualInlineRun {
+                    visible_text: suffix.to_string().into(),
+                    source_range: suffix_range.clone(),
+                    content_range: suffix_range,
+                    ..run.clone()
+                });
+            }
+        } else {
+            let open_run = &runs[i];
+            let open_prefix = &open_run.visible_text[..open_offset];
+            let open_inner = &open_run.visible_text[open_offset + delim_len..];
+            if !open_prefix.is_empty() {
+                let prefix_range =
+                    open_run.source_range.start..open_run.source_range.start + open_offset;
+                next.push(VisualInlineRun {
+                    visible_text: open_prefix.to_string().into(),
+                    source_range: prefix_range.clone(),
+                    content_range: prefix_range,
+                    ..open_run.clone()
+                });
+            }
+            resume_index = next.len();
+            if !open_inner.is_empty() {
+                let inner_start = open_run.source_range.start + open_offset + delim_len;
+                let inner_range = inner_start..open_run.source_range.end;
+                let mut styled = open_run.clone();
+                styled.visible_text = open_inner.to_string().into();
+                styled.source_range = inner_range.clone();
+                styled.content_range = inner_range;
+                apply_extended_kind_to_style(&mut styled.style, kind);
+                next.push(styled);
+            }
+
+            for mid in &runs[(i + 1)..j] {
+                let mut styled = mid.clone();
+                apply_extended_kind_to_style(&mut styled.style, kind);
+                next.push(styled);
+            }
+
+            let close_run = &runs[j];
+            let close_inner = &close_run.visible_text[..close_offset];
+            let close_suffix = &close_run.visible_text[close_offset + delim_len..];
+            if !close_inner.is_empty() {
+                let inner_range =
+                    close_run.source_range.start..close_run.source_range.start + close_offset;
+                let mut styled = close_run.clone();
+                styled.visible_text = close_inner.to_string().into();
+                styled.source_range = inner_range.clone();
+                styled.content_range = inner_range;
+                apply_extended_kind_to_style(&mut styled.style, kind);
+                next.push(styled);
+            }
+            if !close_suffix.is_empty() {
+                let suffix_start = close_run.source_range.start + close_offset + delim_len;
+                let suffix_range = suffix_start..close_run.source_range.end;
+                next.push(VisualInlineRun {
+                    visible_text: close_suffix.to_string().into(),
+                    source_range: suffix_range.clone(),
+                    content_range: suffix_range,
+                    ..close_run.clone()
+                });
+            }
+        }
+
+        next.extend(runs[(j + 1)..].iter().cloned());
+        *runs = next;
+        i = resume_index;
+    }
 }
 
 fn push_text_runs(
@@ -2740,42 +2999,7 @@ fn push_decoded_text_runs(
     link_target_range: Option<Range<usize>>,
     navigation: Option<VisualNavigationTarget>,
 ) -> bool {
-    let extended = extended_inline_matches(event_source);
-    let conflicting = extended.iter().any(|item| {
-        spans.iter().any(|span| {
-            let overlaps = span.range.start < item.source_range.end
-                && item.source_range.start < span.range.end;
-            let inside_content = span.range.start >= item.content_range.start
-                && span.range.end <= item.content_range.end;
-            overlaps && !inside_content
-        })
-    });
-    if conflicting {
-        return false;
-    }
-
     let mut boundaries = vec![0, event_source.len()];
-    let mut marker_ranges = Vec::with_capacity(extended.len() * 2);
-    for item in &extended {
-        boundaries.extend([
-            item.source_range.start,
-            item.content_range.start,
-            item.content_range.end,
-            item.source_range.end,
-        ]);
-        marker_ranges.push(item.source_range.start..item.content_range.start);
-        marker_ranges.push(item.content_range.end..item.source_range.end);
-        candidates.push(RevealCandidate {
-            kind: match item.kind {
-                ExtendedInlineKind::Highlight => VisualRevealKind::Highlight,
-                ExtendedInlineKind::Superscript => VisualRevealKind::Superscript,
-                ExtendedInlineKind::Subscript => VisualRevealKind::Subscript,
-            },
-            source_range: event_range.start + item.source_range.start
-                ..event_range.start + item.source_range.end,
-            link_target_range: None,
-        });
-    }
     for span in spans {
         boundaries.extend([span.range.start, span.range.end]);
     }
@@ -2784,25 +3008,10 @@ fn push_decoded_text_runs(
 
     for pair in boundaries.windows(2) {
         let local_range = pair[0]..pair[1];
-        if local_range.is_empty()
-            || marker_ranges
-                .iter()
-                .any(|marker| marker.start <= local_range.start && marker.end >= local_range.end)
-        {
+        if local_range.is_empty() {
             continue;
         }
-        let mut style = base_style;
-        for item in &extended {
-            if item.content_range.start <= local_range.start
-                && item.content_range.end >= local_range.end
-            {
-                match item.kind {
-                    ExtendedInlineKind::Highlight => style.highlight = true,
-                    ExtendedInlineKind::Superscript => style.superscript = true,
-                    ExtendedInlineKind::Subscript => style.subscript = true,
-                }
-            }
-        }
+        let style = base_style;
         let span = spans.iter().find(|span| {
             span.range.start == local_range.start && span.range.end == local_range.end
         });
@@ -3285,9 +3494,8 @@ fn push_identity_text_runs(
     link_target_range: Option<Range<usize>>,
     navigation: Option<VisualNavigationTarget>,
 ) {
-    let extended = extended_inline_matches(event_source);
     let emojis = emoji_tokens_in(event_source);
-    if extended.is_empty() && emojis.is_empty() {
+    if emojis.is_empty() {
         push_run(
             runs,
             source,
@@ -3302,27 +3510,6 @@ fn push_identity_text_runs(
     }
 
     let mut boundaries = vec![0, event_source.len()];
-    let mut marker_ranges = Vec::with_capacity(extended.len() * 2);
-    for item in &extended {
-        boundaries.extend([
-            item.source_range.start,
-            item.content_range.start,
-            item.content_range.end,
-            item.source_range.end,
-        ]);
-        marker_ranges.push(item.source_range.start..item.content_range.start);
-        marker_ranges.push(item.content_range.end..item.source_range.end);
-        candidates.push(RevealCandidate {
-            kind: match item.kind {
-                ExtendedInlineKind::Highlight => VisualRevealKind::Highlight,
-                ExtendedInlineKind::Superscript => VisualRevealKind::Superscript,
-                ExtendedInlineKind::Subscript => VisualRevealKind::Subscript,
-            },
-            source_range: event_range.start + item.source_range.start
-                ..event_range.start + item.source_range.end,
-            link_target_range: None,
-        });
-    }
     for (token_range, glyph) in &emojis {
         boundaries.extend([token_range.start, token_range.end]);
         candidates.push(RevealCandidate {
@@ -3338,26 +3525,11 @@ fn push_identity_text_runs(
 
     for pair in boundaries.windows(2) {
         let local_range = pair[0]..pair[1];
-        if local_range.is_empty()
-            || marker_ranges
-                .iter()
-                .any(|marker| marker.start <= local_range.start && marker.end >= local_range.end)
-        {
+        if local_range.is_empty() {
             continue;
         }
 
-        let mut style = base_style;
-        for item in &extended {
-            if item.content_range.start <= local_range.start
-                && item.content_range.end >= local_range.end
-            {
-                match item.kind {
-                    ExtendedInlineKind::Highlight => style.highlight = true,
-                    ExtendedInlineKind::Superscript => style.superscript = true,
-                    ExtendedInlineKind::Subscript => style.subscript = true,
-                }
-            }
-        }
+        let style = base_style;
         if let Some((_, glyph)) = emojis
             .iter()
             .find(|(token, _)| token.start == local_range.start && token.end == local_range.end)
@@ -5524,16 +5696,25 @@ mod tests {
             .find(|run| run.visible_text == ".")
             .expect("escaped dot renders literally");
         assert!(!dot_run.conservative_fallback);
-        // Parser-level styling (strong/emphasis/links) applies across events,
-        // but slice-level extended markers cannot span the escape gap: the
-        // `==` pair loses its highlight styling, matching Split Preview's
-        // per-event extended parsing for the same source.
-        assert!(!dot_run.style.highlight);
+        // Cross-run extended markers now span the escape gap in both Split
+        // Preview and Visual Edit, so `==mark \. dot==` keeps highlight styling.
+        assert!(dot_run.style.highlight);
+        let preview = doc.preview_blocks();
+        let PreviewBlock::Paragraph { text: preview_rich, .. } = &preview[0] else {
+            panic!("expected preview paragraph");
+        };
+        assert!(
+            preview_rich
+                .spans
+                .iter()
+                .any(|span| span.text.contains("mark . dot") && span.style.highlight),
+            "preview spans should match Visual Edit highlight: {:?}",
+            preview_rich.spans
+        );
         let kinds: Vec<VisualRevealKind> =
             block.reveal_groups.iter().map(|group| group.kind).collect();
-        assert!(kinds.contains(&VisualRevealKind::Escape));
         assert!(kinds.contains(&VisualRevealKind::Strong));
-        assert!(!kinds.contains(&VisualRevealKind::Highlight));
+        assert!(kinds.contains(&VisualRevealKind::Highlight));
     }
 
     #[test]
@@ -9485,5 +9666,121 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                 tail.style
             );
         }
+    }
+
+    #[test]
+    fn extended_inline_delimiters_compose_around_standard_markdown_in_preview_and_visual() {
+        let source = "a ==**marked bold**== b ==`hl code`== c H~**2**~O d x^*2*^ e";
+        let doc = MarkdownDocument::from_text(source);
+        let preview = doc.preview_blocks();
+        let PreviewBlock::Paragraph { text: rich, .. } = &preview[0] else {
+            panic!("expected preview paragraph");
+        };
+        assert_eq!(rich.text, "a marked bold b hl code c H2O d x2 e");
+        assert!(
+            rich.spans
+                .iter()
+                .any(|s| s.text == "marked bold" && s.style.bold && s.style.highlight),
+            "preview spans: {:?}",
+            rich.spans
+        );
+        assert!(
+            rich.spans
+                .iter()
+                .any(|s| s.text == "hl code" && s.style.code && s.style.highlight),
+            "preview spans: {:?}",
+            rich.spans
+        );
+        assert!(
+            rich.spans
+                .iter()
+                .any(|s| s.text == "2" && s.style.bold && s.style.subscript),
+            "preview spans: {:?}",
+            rich.spans
+        );
+        assert!(
+            rich.spans
+                .iter()
+                .any(|s| s.text == "2" && s.style.italic && s.style.superscript),
+            "preview spans: {:?}",
+            rich.spans
+        );
+
+        let blocks = doc.visual_blocks();
+        let block = blocks
+            .iter()
+            .find(|b| matches!(b.kind, VisualBlockKind::Paragraph))
+            .expect("visual paragraph");
+        let unfocused = build_visual_projection(source, block, usize::MAX..usize::MAX, usize::MAX);
+        assert_eq!(unfocused.text, "a marked bold b hl code c H2O d x2 e");
+        assert!(
+            unfocused.spans.iter().any(|s| {
+                &unfocused.text[s.display_range.clone()] == "marked bold"
+                    && s.style.bold
+                    && s.style.highlight
+            }),
+            "visual spans: {:?}",
+            unfocused.spans
+        );
+        assert!(
+            unfocused.spans.iter().any(|s| {
+                &unfocused.text[s.display_range.clone()] == "hl code"
+                    && s.style.code
+                    && s.style.highlight
+            }),
+            "visual spans: {:?}",
+            unfocused.spans
+        );
+        assert!(
+            unfocused.spans.iter().any(|s| {
+                &unfocused.text[s.display_range.clone()] == "2" && s.style.bold && s.style.subscript
+            }),
+            "visual spans: {:?}",
+            unfocused.spans
+        );
+        assert!(
+            unfocused.spans.iter().any(|s| {
+                &unfocused.text[s.display_range.clone()] == "2"
+                    && s.style.italic
+                    && s.style.superscript
+            }),
+            "visual spans: {:?}",
+            unfocused.spans
+        );
+
+        // Focusing inside `==**marked bold**==` reveals the complete exact source range.
+        let cursor = source.find("marked bold").unwrap() + 2;
+        let focused = build_visual_projection(source, block, cursor..cursor, cursor);
+        assert!(
+            focused.text.contains("==**marked bold**=="),
+            "focused projection: {:?}",
+            focused.text
+        );
+
+        // Escaped delimiters stay literal in both Preview and Visual Edit.
+        let escaped = r"\==**bold**== and H\~**2**~O";
+        let escaped_doc = MarkdownDocument::from_text(escaped);
+        let PreviewBlock::Paragraph {
+            text: escaped_rich, ..
+        } = &escaped_doc.preview_blocks()[0]
+        else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(escaped_rich.text, "==bold== and H~2~O");
+        assert!(escaped_rich.spans.iter().all(|s| !s.style.highlight && !s.style.subscript));
+        let escaped_visual = escaped_doc.visual_blocks();
+        let escaped_proj = build_visual_projection(
+            escaped,
+            &escaped_visual[0],
+            usize::MAX..usize::MAX,
+            usize::MAX,
+        );
+        assert_eq!(escaped_proj.text, "==bold== and H~2~O");
+        assert!(
+            escaped_proj
+                .spans
+                .iter()
+                .all(|s| !s.style.highlight && !s.style.subscript)
+        );
     }
 }

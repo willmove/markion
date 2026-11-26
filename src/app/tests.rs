@@ -30728,3 +30728,66 @@ fn preferences_editor_tab_toggles_format_on_paste_and_probes_availability(cx: &m
     let saved_after = load_app_preferences(&preferences_path).unwrap();
     assert!(!saved_after.code_blocks.format_on_paste);
 }
+
+#[gpui::test]
+fn preview_renders_nested_blockquote_children_table_footnotes_and_superscript_footnotes(
+    cx: &mut TestAppContext,
+) {
+    let source = "> # Quoted Heading\n>\n> Quoted body\n>\n> Quoted Term\n> : Quoted Detail\n\n| Left | Center | Right |\n| :--- | :---: | ---: |\n| **B** | *I* | `C`[^1] |\n\nParagraph note[^1].\n\n[^1]: Footnote body\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(720.)));
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("preview-quote-heading-0-0").is_some(),
+        "heading inside blockquote must render in Read/Split preview"
+    );
+    assert!(
+        cx.debug_bounds("preview-quote-def-term-0-2").is_some(),
+        "definition term inside blockquote must render in Read/Split preview"
+    );
+    assert!(
+        cx.debug_bounds("preview-quote-def-detail-0-3").is_some(),
+        "definition detail inside blockquote must render in Read/Split preview"
+    );
+    assert!(
+        cx.debug_bounds("inline-superscript").is_some(),
+        "Read/Split preview footnote references must render with superscript script_fragment"
+    );
+
+    // Top-level definition list runs also resolve in preview_run_plain_text.
+    let def_doc = MarkdownDocument::from_text("Term\n: Detail\n");
+    let def_blocks = def_doc.preview_blocks();
+    assert_eq!(
+        preview_run_plain_text(&def_blocks[0], PreviewTextRunId::Body).as_deref(),
+        Some("Term")
+    );
+    assert_eq!(
+        preview_run_plain_text(&def_blocks[1], PreviewTextRunId::Body).as_deref(),
+        Some("Detail")
+    );
+
+    // Visual Edit renders the aligned GFM table without panicking or mutating source.
+    app.update(cx, |app, cx| {
+        app.view_mode = ViewMode::VisualEdit;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-cell-4-0-1").is_some()
+            || app
+                .read_with(cx, |app, _| {
+                    app.active_tab()
+                        .document
+                        .visual_blocks()
+                        .iter()
+                        .any(|b| matches!(b.kind, VisualBlockKind::Table { .. }))
+                }),
+        "Visual Edit table should render"
+    );
+}

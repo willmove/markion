@@ -222,7 +222,9 @@ pub(super) fn preview_run_plain_text(
             PreviewBlock::Heading { text, .. }
             | PreviewBlock::Paragraph { text, .. }
             | PreviewBlock::ListItem { text, .. }
-            | PreviewBlock::FootnoteDefinition { text, .. },
+            | PreviewBlock::FootnoteDefinition { text, .. }
+            | PreviewBlock::DefinitionTerm { text, .. }
+            | PreviewBlock::DefinitionDetail { text, .. },
             PreviewTextRunId::Body,
         ) => Some(text.text.clone()),
         (PreviewBlock::BlockQuote { children, .. }, PreviewTextRunId::QuoteChild(index)) => {
@@ -2551,13 +2553,19 @@ pub(super) fn rich_text_with_math_element(
             .with_search_ranges(search_ranges)
             .with_run_offset(span_range.start)
             .into_any_element();
-            prose.push_atom(with_footnote_tooltip(
+            prose.push_atom(script_fragment(
+                with_footnote_tooltip(
+                    app,
+                    span.footnote.as_deref(),
+                    child,
+                    ElementId::from(SharedString::from(format!(
+                        "{id_prefix}-footnote-{block_index}-{fragment_index}"
+                    ))),
+                ),
+                span.style,
+                (font_size, line_height),
                 app,
-                span.footnote.as_deref(),
-                child,
-                ElementId::from(SharedString::from(format!(
-                    "{id_prefix}-footnote-{block_index}-{fragment_index}"
-                ))),
+                cx,
             ));
             fragment_index += 1;
             continue;
@@ -5089,11 +5097,14 @@ fn visual_block_content_view(
                 )
                 .child(div().mt(px(5.)).h(px(1.)).bg(rgb(0xcbd5e1)))
         }
-        VisualBlockKind::Table { rows, .. } => div().child(visual_table_view(
+        VisualBlockKind::Table {
+            rows, alignments, ..
+        } => div().child(visual_table_view(
             app,
             block,
             block_index,
             rows,
+            alignments,
             display_scale,
             cx,
         )),
@@ -6426,11 +6437,20 @@ fn visual_field_owns_caret(
 /// baseline-aligned image atoms whose halves resolve to their authored source
 /// boundaries, while images, text, and pending or failed formulas keep the
 /// same wrapped rows.
+fn apply_table_cell_alignment<E: Styled>(el: E, alignment: TableAlignment) -> E {
+    match alignment {
+        TableAlignment::Center => el.text_center(),
+        TableAlignment::Right => el.text_right(),
+        TableAlignment::Left | TableAlignment::Default => el.text_left(),
+    }
+}
+
 fn visual_table_cell_element(
     app: &MarkionApp,
     block_index: usize,
     field: &VisualEditorField,
     rich: &RichText,
+    alignment: TableAlignment,
     element_id: ElementId,
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
@@ -6583,6 +6603,10 @@ fn visual_table_cell_element(
                 .flex()
                 .flex_wrap()
                 .items_end()
+                .when(alignment == TableAlignment::Center, |row| {
+                    row.justify_center()
+                })
+                .when(alignment == TableAlignment::Right, |row| row.justify_end())
                 .children(line)
         }))
         .into_any_element()
@@ -7856,6 +7880,7 @@ pub(super) fn visual_table_view(
     block: &VisualBlock,
     block_index: usize,
     rows: &[Vec<RichText>],
+    alignments: &[TableAlignment],
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
@@ -7964,20 +7989,33 @@ pub(super) fn visual_table_view(
                             .find(|cell| cell.row == row_index && cell.column == cell_index)
                             .map(|cell| &cell.field)
                     });
-                    preview_table_cell_flex(column_weights.get(cell_index).copied().unwrap_or(1.0))
+                    let col_alignment = alignments
+                        .get(cell_index)
+                        .copied()
+                        .unwrap_or(TableAlignment::Default);
+                    let cell_div = apply_table_cell_alignment(
+                        preview_table_cell_flex(
+                            column_weights.get(cell_index).copied().unwrap_or(1.0),
+                        )
                         .id(ElementId::from(("visual-table-cell-chrome", cell_key)))
                         .debug_selector(move || {
                             format!("visual-table-cell-{block_index}-{row_index}-{cell_index}")
                         })
                         .relative()
                         .p_2()
+                        .when(row_index == 0, |style| {
+                            style.font_weight(FontWeight::SEMIBOLD)
+                        })
                         .when(selected_cells.as_ref().is_some_and(|(rows, columns)|
                             rows.contains(&row_index) && columns.contains(&cell_index)),
                             |style| style.bg(palette.table_selected_bg))
                         .when(!is_last_cell, |style| {
                             style.border_r_1().border_color(palette.control_border)
                         })
-                        .text_size(px(typography.table_font_size))
+                        .text_size(px(typography.table_font_size)),
+                        col_alignment,
+                    );
+                    cell_div
                         .cursor(CursorStyle::IBeam)
                         .on_mouse_up(
                             MouseButton::Right,
@@ -8074,6 +8112,7 @@ pub(super) fn visual_table_view(
                                 block_index,
                                 field,
                                 cell,
+                                col_alignment,
                                 ElementId::from(("visual-table-cell", cell_key)),
                                 display_scale,
                                 cx,
@@ -8081,7 +8120,11 @@ pub(super) fn visual_table_view(
                         } else if cell
                             .spans
                             .iter()
-                            .any(|span| span.image.is_some() || span.math.is_some())
+                            .any(|span| {
+                                span.image.is_some()
+                                    || span.math.is_some()
+                                    || span.footnote.is_some()
+                            })
                         {
                             // A cell without a proven field stays read-only,
                             // but keeps the preview grid's mixed layout.
@@ -9268,6 +9311,7 @@ fn table_authored_percents(source: &str, columns: usize, quoted: bool) -> Option
 fn preview_table_grid(
     app: &MarkionApp,
     rows: &[Vec<RichText>],
+    alignments: &[TableAlignment],
     source_range: &Range<usize>,
     block_index: usize,
     quote_child: Option<usize>,
@@ -9321,7 +9365,15 @@ fn preview_table_grid(
                     };
                     let font_size = typography.table_font_size;
                     let line_height = typography.text_line_height(font_size);
-                    let content = if cell.spans.iter().any(|span| span.image.is_some() || span.math.is_some()) {
+                    let col_alignment = alignments
+                        .get(cell_index)
+                        .copied()
+                        .unwrap_or(TableAlignment::Default);
+                    // Images, formulas, and footnotes need the mixed layout;
+                    // every other cell keeps one shaped text run.
+                    let content = if cell.spans.iter().any(|span| {
+                        span.image.is_some() || span.math.is_some() || span.footnote.is_some()
+                    }) {
                         rich_text_with_math_element(
                             app,
                             "preview-table-cell",
@@ -9345,14 +9397,20 @@ fn preview_table_grid(
                             cx,
                         )
                     };
-                    preview_table_cell_flex(
-                        column_weights.get(cell_index).copied().unwrap_or(1.0),
+                    apply_table_cell_alignment(
+                        preview_table_cell_flex(
+                            column_weights.get(cell_index).copied().unwrap_or(1.0),
+                        )
+                        .p_2()
+                        .when(row_index == 0, |style| {
+                            style.font_weight(FontWeight::SEMIBOLD)
+                        })
+                        .when(!is_last_cell, |style| {
+                            style.border_r_1().border_color(palette.control_border)
+                        })
+                        .text_size(px(font_size)),
+                        col_alignment,
                     )
-                    .p_2()
-                    .when(!is_last_cell, |style| {
-                        style.border_r_1().border_color(palette.control_border)
-                    })
-                    .text_size(px(font_size))
                     .debug_selector(move || match quote_child {
                         Some(child) => format!(
                             "preview-quote-table-{block_index}-{child}-cell-{row_index}-{cell_index}"
@@ -9512,102 +9570,198 @@ pub(super) fn preview_block_view(
         } => {
             let mut container = div();
             for (child_index, child) in children.iter().enumerate() {
-                if let PreviewBlock::Table {
-                    rows, source_range, ..
-                } = child
-                {
-                    container = container.child(preview_table_grid(
-                        app,
+                match child {
+                    PreviewBlock::Table {
                         rows,
+                        alignments,
                         source_range,
-                        block_index,
-                        Some(child_index),
-                        display_scale,
-                        document_dir,
-                        cx,
-                    ));
-                    continue;
-                }
-                if let PreviewBlock::Paragraph { text, .. } = child {
-                    if !text.is_empty() || text.spans.iter().any(|span| span.image.is_some()) {
-                        container = container.child(rich_text_with_math_element(
+                        ..
+                    } => {
+                        container = container.child(preview_table_grid(
                             app,
-                            "preview-quote",
-                            text,
+                            rows,
+                            alignments,
+                            source_range,
                             block_index,
-                            PreviewTextRunId::QuoteChild(child_index),
+                            Some(child_index),
                             display_scale,
-                            typography.quote_font_size,
-                            typography.quote_line_height,
                             document_dir,
                             cx,
                         ));
                     }
-                    continue;
-                }
-                if let PreviewBlock::Html { html, images, .. } = child {
-                    container = container.child(html_preview_block_view(
-                        app,
-                        html,
-                        images,
-                        block_index,
-                        document_dir,
-                        cx,
-                    ));
-                    continue;
-                }
-                let PreviewBlock::ListItem {
-                    level,
-                    ordered,
-                    index,
-                    checked,
-                    text,
-                    ..
-                } = child
-                else {
-                    continue;
-                };
-                let marker = match checked {
-                    Some(true) => "☑".to_string(),
-                    Some(false) => "☐".to_string(),
-                    None if *ordered => format!("{}.", index.unwrap_or(1)),
-                    None => match level {
-                        1 => "•".to_string(),
-                        2 => "◦".to_string(),
-                        _ => "▪".to_string(),
-                    },
-                };
-                let marker_color = match checked {
-                    Some(true) => rgb(0x16a34a),
-                    _ => rgb(0x64748b),
-                };
-                container = container.child(
-                    div()
-                        .mt_1()
-                        .ml(px((*level as f32 - 1.).max(0.) * 18.))
-                        .flex()
-                        .items_start()
-                        .child(
+                    PreviewBlock::Paragraph { text, .. } => {
+                        if !text.is_empty() || text.spans.iter().any(|span| span.image.is_some()) {
+                            container = container.child(rich_text_with_math_element(
+                                app,
+                                "preview-quote",
+                                text,
+                                block_index,
+                                PreviewTextRunId::QuoteChild(child_index),
+                                display_scale,
+                                typography.quote_font_size,
+                                typography.quote_line_height,
+                                document_dir,
+                                cx,
+                            ));
+                        }
+                    }
+                    PreviewBlock::Heading { level, text, .. } => {
+                        let heading_size = typography.heading_font_size((*level).into());
+                        let heading_line_height = typography.text_line_height(heading_size);
+                        container = container.child(
                             div()
-                                .flex_none()
-                                .min_w(px(22.))
-                                .pr_1()
-                                .text_color(marker_color)
-                                .child(marker),
-                        )
-                        .child(div().flex_1().min_w_0().child(rich_text_with_math_element(
+                                .debug_selector(move || {
+                                    format!("preview-quote-heading-{block_index}-{child_index}")
+                                })
+                                .mt_1()
+                                .mb_1()
+                                .text_size(px(heading_size))
+                                .line_height(px(heading_line_height))
+                                .font_weight(FontWeight::BOLD)
+                                .child(rich_text_with_math_element(
+                                    app,
+                                    "preview-quote-heading",
+                                    text,
+                                    block_index,
+                                    PreviewTextRunId::QuoteChild(child_index),
+                                    display_scale,
+                                    heading_size,
+                                    heading_line_height,
+                                    document_dir,
+                                    cx,
+                                )),
+                        );
+                    }
+                    PreviewBlock::DefinitionTerm { text, .. } => {
+                        container = container.child(
+                            div()
+                                .debug_selector(move || {
+                                    format!("preview-quote-def-term-{block_index}-{child_index}")
+                                })
+                                .mt_1()
+                                .mb(px(DEFINITION_TERM_GAP))
+                                .font_weight(FontWeight::BOLD)
+                                .child(rich_text_with_math_element(
+                                    app,
+                                    "preview-quote-def-term",
+                                    text,
+                                    block_index,
+                                    PreviewTextRunId::QuoteChild(child_index),
+                                    display_scale,
+                                    typography.quote_font_size,
+                                    typography.quote_line_height,
+                                    document_dir,
+                                    cx,
+                                )),
+                        );
+                    }
+                    PreviewBlock::DefinitionDetail { text, .. } => {
+                        container = container.child(
+                            div()
+                                .debug_selector(move || {
+                                    format!("preview-quote-def-detail-{block_index}-{child_index}")
+                                })
+                                .mb_1()
+                                .pl(px(DEFINITION_DETAIL_INDENT))
+                                .child(rich_text_with_math_element(
+                                    app,
+                                    "preview-quote-def-detail",
+                                    text,
+                                    block_index,
+                                    PreviewTextRunId::QuoteChild(child_index),
+                                    display_scale,
+                                    typography.quote_font_size,
+                                    typography.quote_line_height,
+                                    document_dir,
+                                    cx,
+                                )),
+                        );
+                    }
+                    PreviewBlock::Image {
+                        url,
+                        identity,
+                        presentation,
+                        source_range,
+                        ..
+                    } => {
+                        container = container.child(div().my_2().child(
+                            markdown_image_presentation_view(
+                                app,
+                                url,
+                                identity,
+                                document_dir,
+                                *presentation,
+                                source_range.start,
+                            ),
+                        ));
+                    }
+                    PreviewBlock::Rule { .. } => {
+                        container = container.child(div().my_2().h(px(1.)).bg(rgb(0xcbd5e1)));
+                    }
+                    PreviewBlock::Html { html, images, .. } => {
+                        container = container.child(html_preview_block_view(
                             app,
-                            "preview-quote-list-item",
-                            text,
+                            html,
+                            images,
                             block_index,
-                            PreviewTextRunId::QuoteChild(child_index),
-                            display_scale,
-                            typography.quote_font_size,
-                            typography.quote_line_height,
                             document_dir,
                             cx,
-                        ))),
-                );
+                        ));
+                    }
+                    PreviewBlock::ListItem {
+                        level,
+                        ordered,
+                        index,
+                        checked,
+                        text,
+                        ..
+                    } => {
+                        let marker = match checked {
+                            Some(true) => "☑".to_string(),
+                            Some(false) => "☐".to_string(),
+                            None if *ordered => format!("{}.", index.unwrap_or(1)),
+                            None => match level {
+                                1 => "•".to_string(),
+                                2 => "◦".to_string(),
+                                _ => "▪".to_string(),
+                            },
+                        };
+                        let marker_color = match checked {
+                            Some(true) => rgb(0x16a34a),
+                            _ => rgb(0x64748b),
+                        };
+                        container = container.child(
+                            div()
+                                .mt_1()
+                                .ml(px((*level as f32 - 1.).max(0.) * 18.))
+                                .flex()
+                                .items_start()
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .min_w(px(22.))
+                                        .pr_1()
+                                        .text_color(marker_color)
+                                        .child(marker),
+                                )
+                                .child(div().flex_1().min_w_0().child(
+                                    rich_text_with_math_element(
+                                        app,
+                                        "preview-quote-list-item",
+                                        text,
+                                        block_index,
+                                        PreviewTextRunId::QuoteChild(child_index),
+                                        display_scale,
+                                        typography.quote_font_size,
+                                        typography.quote_line_height,
+                                        document_dir,
+                                        cx,
+                                    ),
+                                )),
+                        );
+                    }
+                    _ => {}
+                }
             }
             let quote = div()
                 .mb_3()
@@ -9918,10 +10072,14 @@ pub(super) fn preview_block_view(
                 cx,
             ))),
         PreviewBlock::Table {
-            rows, source_range, ..
+            rows,
+            alignments,
+            source_range,
+            ..
         } => preview_table_grid(
             app,
             rows,
+            alignments,
             source_range,
             block_index,
             None,

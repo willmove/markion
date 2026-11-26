@@ -381,7 +381,7 @@ pub(crate) fn push_preview_rich(
     }
     if let Some(table) = table.as_mut() {
         if parse_extended {
-            append_extended_text(&mut table.current_cell, text, style, link);
+            append_emoji_and_autolinks(&mut table.current_cell, text, style, link);
         } else {
             append_leaf_span(&mut table.current_cell, text, style, link);
         }
@@ -401,7 +401,7 @@ pub(crate) fn push_preview_rich(
     };
 
     if parse_extended {
-        append_extended_text(spans, text, style, link);
+        append_emoji_and_autolinks(spans, text, style, link);
     } else {
         append_leaf_span(spans, text, style, link);
     }
@@ -632,84 +632,99 @@ pub(crate) fn collect_rich_image_urls(rich: &RichText, out: &mut Vec<String>) {
     }
 }
 
-/// Parses extended inline syntax (`==highlight==`, `^sup^`, `~sub~`, emoji
-/// shortcodes, bare autolinks) inside one text run and appends styled spans.
-pub(crate) fn append_extended_text(
+/// Expands `:emoji:` shortcodes and bare autolinks inside one text fragment
+/// while leaving `==`, `^`, and `~` intact for the line-level left-to-right
+/// extended-delimiter pass in [`finish_rich_text`].
+fn append_emoji_and_autolinks(
     spans: &mut Vec<InlineSpan>,
     text: &str,
     style: InlineStyle,
     link: Option<&str>,
 ) {
-    for segment in parse_extended_inline_segments(text) {
-        append_extended_segment(spans, &segment, style, link);
-    }
-}
-
-fn append_extended_segment(
-    spans: &mut Vec<InlineSpan>,
-    segment: &ExtendedInlineSegment,
-    style: InlineStyle,
-    link: Option<&str>,
-) {
-    match segment {
-        ExtendedInlineSegment::Text(text) => append_span(spans, text, style, link),
-        ExtendedInlineSegment::Emoji(emoji) => append_span(spans, emoji, style, link),
-        ExtendedInlineSegment::AutoLink(url) => {
+    let mut index = 0usize;
+    let mut plain_start = 0usize;
+    while index < text.len() {
+        let rest = &text[index..];
+        if let Some(after_guard) = rest.strip_prefix(ESCAPED_EXT_GUARD) {
+            index += ESCAPED_EXT_GUARD.len_utf8();
+            if let Some(ch) = after_guard.chars().next() {
+                index += ch.len_utf8();
+            }
+            continue;
+        }
+        if let Some(stripped) = rest.strip_prefix(':')
+            && let Some(end) = stripped.find(':')
+        {
+            let shortcode = &stripped[..end];
+            if let Some(emoji) = crate::emoji::emoji_for_shortcode(shortcode) {
+                if plain_start < index {
+                    append_span(spans, &text[plain_start..index], style, link);
+                }
+                append_span(spans, emoji, style, link);
+                index += end + 2;
+                plain_start = index;
+                continue;
+            }
+        }
+        if let Some((url, consumed)) = consume_autolink(rest) {
+            if plain_start < index {
+                append_span(spans, &text[plain_start..index], style, link);
+            }
             let href = if url.starts_with("www.") {
                 format!("https://{url}")
             } else {
-                url.clone()
+                url.to_string()
             };
             append_span(spans, url, style, link.or(Some(&href)));
+            index += consumed;
+            plain_start = index;
+            continue;
         }
-        ExtendedInlineSegment::Highlight(children) => {
-            let mut style = style;
-            style.highlight = true;
-            for child in children {
-                append_extended_segment(spans, child, style, link);
-            }
-        }
-        ExtendedInlineSegment::Superscript(children) => {
-            let mut style = style;
-            style.superscript = true;
-            for child in children {
-                append_extended_segment(spans, child, style, link);
-            }
-        }
-        ExtendedInlineSegment::Subscript(children) => {
-            let mut style = style;
-            style.subscript = true;
-            for child in children {
-                append_extended_segment(spans, child, style, link);
-            }
-        }
+        let ch = rest.chars().next().expect("non-empty rest");
+        index += ch.len_utf8();
+    }
+    if plain_start < text.len() {
+        append_span(spans, &text[plain_start..], style, link);
     }
 }
 
-/// Normalizes structural whitespace and merges equal-style spans, while
-/// preserving every authored break, including leading/trailing empty lines.
+/// Normalizes structural whitespace, resolves extended inline delimiters
+/// (`==highlight==`, `^sup^`, `~sub~`) left-to-right across each line, and
+/// merges equal-style spans while preserving every authored break.
 pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
+    finish_rich_text_inner(spans, true)
+}
+
+/// Same normalization as [`finish_rich_text`] without Markdown extended-inline
+/// delimiter parsing (for raw HTML blocks and HTML table cells).
+fn finish_html_rich_text(spans: Vec<InlineSpan>) -> RichText {
+    finish_rich_text_inner(spans, false)
+}
+
+fn finish_rich_text_inner(spans: Vec<InlineSpan>, parse_extended: bool) -> RichText {
     if !spans.iter().any(|span| span.hard_break) {
-        return finish_soft_rich_text(spans);
+        return finish_soft_rich_text(spans, parse_extended);
     }
     let mut merged = Vec::new();
     let mut pending = Vec::new();
     for span in spans {
         if span.hard_break {
-            merged.extend(finish_soft_rich_text(std::mem::take(&mut pending)).into_spans());
+            merged.extend(
+                finish_soft_rich_text(std::mem::take(&mut pending), parse_extended).into_spans(),
+            );
             merged.push(span);
         } else {
             pending.push(span);
         }
     }
-    merged.extend(finish_soft_rich_text(pending).into_spans());
+    merged.extend(finish_soft_rich_text(pending, parse_extended).into_spans());
     RichText::new(
         merged.iter().map(|span| span.text.as_str()).collect(),
         merged,
     )
 }
 
-fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
+fn finish_soft_rich_text(spans: Vec<InlineSpan>, parse_extended: bool) -> RichText {
     let mut lines: Vec<Vec<InlineSpan>> = vec![Vec::new()];
     for span in spans {
         if span.image.is_some() {
@@ -769,6 +784,20 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
         if line.is_empty() {
             continue;
         }
+        let mut line = if parse_extended {
+            apply_extended_delimiters_line(line)
+        } else {
+            line
+        };
+        for span in &mut line {
+            if span.text.contains(ESCAPED_EXT_GUARD) {
+                span.text = span.text.replace(ESCAPED_EXT_GUARD, "");
+            }
+        }
+        line.retain(|span| !span.text.is_empty() || span.image.is_some());
+        if line.is_empty() {
+            continue;
+        }
         if emitted_line {
             append_span(&mut merged, "\n", InlineStyle::default(), None);
         }
@@ -784,6 +813,247 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
 
     let text = merged.iter().map(|span| span.text.as_str()).collect();
     RichText::new(text, merged)
+}
+
+fn span_allows_extended_delimiter(span: &InlineSpan) -> bool {
+    !span.style.code
+        && !span.hard_break
+        && span.math.is_none()
+        && span.image.is_none()
+        && span.footnote.is_none()
+}
+
+fn apply_extended_kind(style: &mut InlineStyle, kind: ExtendedInlineKind) {
+    match kind {
+        ExtendedInlineKind::Highlight => style.highlight = true,
+        ExtendedInlineKind::Superscript => style.superscript = true,
+        ExtendedInlineKind::Subscript => style.subscript = true,
+    }
+}
+
+fn extended_delimiter_str(kind: ExtendedInlineKind) -> &'static str {
+    match kind {
+        ExtendedInlineKind::Highlight => "==",
+        ExtendedInlineKind::Superscript => "^",
+        ExtendedInlineKind::Subscript => "~",
+    }
+}
+
+/// Internal marker protecting a backslash-escaped `=`, `^`, or `~` from
+/// cross-span extended-inline pairing until `finish_soft_rich_text` strips it.
+pub(crate) const ESCAPED_EXT_GUARD: char = '\u{0002}';
+
+/// Scans `text` for candidate extended-inline delimiter positions (`==`, `^`,
+/// or single `~` excluding `~~`), skipping characters preceded by
+/// [`ESCAPED_EXT_GUARD`].
+pub(crate) fn scan_extended_delimiter_candidates(
+    text: &str,
+) -> Vec<(usize, ExtendedInlineKind, &'static str)> {
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < text.len() {
+        let rest = &text[index..];
+        if let Some(after_guard) = rest.strip_prefix(ESCAPED_EXT_GUARD) {
+            index += ESCAPED_EXT_GUARD.len_utf8();
+            if let Some(escaped) = after_guard.chars().next() {
+                index += escaped.len_utf8();
+            }
+            continue;
+        }
+        if rest.starts_with("~~") {
+            index += 2;
+            continue;
+        }
+        if rest.starts_with("==") {
+            out.push((index, ExtendedInlineKind::Highlight, "=="));
+            index += 2;
+            continue;
+        }
+        if rest.starts_with('^') {
+            out.push((index, ExtendedInlineKind::Superscript, "^"));
+            index += 1;
+            continue;
+        }
+        if rest.starts_with('~') {
+            out.push((index, ExtendedInlineKind::Subscript, "~"));
+            index += 1;
+            continue;
+        }
+        let ch = rest.chars().next().expect("non-empty rest");
+        index += ch.len_utf8();
+    }
+    out
+}
+
+/// Finds the first matching closing delimiter for `kind` in `text`, skipping
+/// `~~` when searching for single `~` and skipping characters preceded by
+/// [`ESCAPED_EXT_GUARD`].
+pub(crate) fn find_extended_closing_delimiter(
+    text: &str,
+    kind: ExtendedInlineKind,
+) -> Option<usize> {
+    let delim = extended_delimiter_str(kind);
+    let mut index = 0usize;
+    while index < text.len() {
+        let rest = &text[index..];
+        if let Some(after_guard) = rest.strip_prefix(ESCAPED_EXT_GUARD) {
+            index += ESCAPED_EXT_GUARD.len_utf8();
+            if let Some(escaped) = after_guard.chars().next() {
+                index += escaped.len_utf8();
+            }
+            continue;
+        }
+        if kind == ExtendedInlineKind::Subscript && rest.starts_with("~~") {
+            index += 2;
+            continue;
+        }
+        if rest.starts_with(delim) {
+            return Some(index);
+        }
+        let ch = rest.chars().next().expect("non-empty rest");
+        index += ch.len_utf8();
+    }
+    None
+}
+
+/// Resolves extended inline delimiters (`==highlight==`, `^sup^`, `~sub~`)
+/// left-to-right across a single line's spans, handling both same-span pairs
+/// (`==marked==`, `**==bold marked==**`, `==a ^2^==`) and cross-span pairs
+/// wrapping standard Markdown syntax (`==**bold**==`, `==\`code\`==`, `H~**2**~O`).
+fn apply_extended_delimiters_line(mut line: Vec<InlineSpan>) -> Vec<InlineSpan> {
+    let mut i = 0usize;
+    while i < line.len() {
+        if !span_allows_extended_delimiter(&line[i]) {
+            i += 1;
+            continue;
+        }
+        let candidates = scan_extended_delimiter_candidates(&line[i].text);
+        let mut matched = None;
+        'cand: for (open_offset, kind, delim) in candidates {
+            let after_open = open_offset + delim.len();
+            // 1. Check for a closing delimiter later inside the same span.
+            if let Some(rel_close) =
+                find_extended_closing_delimiter(&line[i].text[after_open..], kind)
+            {
+                let close_offset = after_open + rel_close;
+                let inner = &line[i].text[after_open..close_offset];
+                let valid = match kind {
+                    ExtendedInlineKind::Highlight => !inner.trim().is_empty(),
+                    ExtendedInlineKind::Superscript | ExtendedInlineKind::Subscript => {
+                        is_valid_short_inline_extent(inner)
+                    }
+                };
+                if valid {
+                    matched = Some((open_offset, i, close_offset, kind, delim.len()));
+                    break 'cand;
+                }
+            }
+            // 2. Otherwise search subsequent spans on the same line.
+            for j in (i + 1)..line.len() {
+                if !span_allows_extended_delimiter(&line[j]) {
+                    continue;
+                }
+                let Some(close_offset) = find_extended_closing_delimiter(&line[j].text, kind)
+                else {
+                    continue;
+                };
+                let mut inner = String::new();
+                inner.push_str(&line[i].text[after_open..]);
+                for mid in &line[(i + 1)..j] {
+                    inner.push_str(&mid.text);
+                }
+                inner.push_str(&line[j].text[..close_offset]);
+                let valid = match kind {
+                    ExtendedInlineKind::Highlight => !inner.trim().is_empty(),
+                    ExtendedInlineKind::Superscript | ExtendedInlineKind::Subscript => {
+                        is_valid_short_inline_extent(&inner)
+                    }
+                };
+                if valid {
+                    matched = Some((open_offset, j, close_offset, kind, delim.len()));
+                    break 'cand;
+                }
+            }
+        }
+        let Some((open_offset, j, close_offset, kind, delim_len)) = matched else {
+            i += 1;
+            continue;
+        };
+
+        let mut next = Vec::with_capacity(line.len() + 2);
+        next.extend(line[..i].iter().cloned());
+
+        let resume_index;
+        if j == i {
+            let span = &line[i];
+            let prefix = &span.text[..open_offset];
+            let inner = &span.text[open_offset + delim_len..close_offset];
+            let suffix = &span.text[close_offset + delim_len..];
+            if !prefix.is_empty() {
+                next.push(InlineSpan {
+                    text: prefix.to_string(),
+                    ..span.clone()
+                });
+            }
+            resume_index = next.len();
+            if !inner.is_empty() {
+                let mut styled = span.clone();
+                styled.text = inner.to_string();
+                apply_extended_kind(&mut styled.style, kind);
+                next.push(styled);
+            }
+            if !suffix.is_empty() {
+                next.push(InlineSpan {
+                    text: suffix.to_string(),
+                    ..span.clone()
+                });
+            }
+        } else {
+            let open_span = &line[i];
+            let open_prefix = &open_span.text[..open_offset];
+            let open_inner = &open_span.text[open_offset + delim_len..];
+            if !open_prefix.is_empty() {
+                next.push(InlineSpan {
+                    text: open_prefix.to_string(),
+                    ..open_span.clone()
+                });
+            }
+            resume_index = next.len();
+            if !open_inner.is_empty() {
+                let mut styled = open_span.clone();
+                styled.text = open_inner.to_string();
+                apply_extended_kind(&mut styled.style, kind);
+                next.push(styled);
+            }
+
+            for mid in &line[(i + 1)..j] {
+                let mut styled = mid.clone();
+                apply_extended_kind(&mut styled.style, kind);
+                next.push(styled);
+            }
+
+            let close_span = &line[j];
+            let close_inner = &close_span.text[..close_offset];
+            let close_suffix = &close_span.text[close_offset + delim_len..];
+            if !close_inner.is_empty() {
+                let mut styled = close_span.clone();
+                styled.text = close_inner.to_string();
+                apply_extended_kind(&mut styled.style, kind);
+                next.push(styled);
+            }
+            if !close_suffix.is_empty() {
+                next.push(InlineSpan {
+                    text: close_suffix.to_string(),
+                    ..close_span.clone()
+                });
+            }
+        }
+
+        next.extend(line[(j + 1)..].iter().cloned());
+        line = next;
+        i = resume_index;
+    }
+    line
 }
 
 /// Parses a titled alert marker line (`[!NOTE] Title`): one of the five GFM
@@ -1357,21 +1627,48 @@ pub(crate) fn parse_html_inline_element(source: &str) -> Option<HtmlInlineElemen
                 for declaration in value.split(';').filter(|decl| !decl.trim().is_empty()) {
                     let (property, value) = declaration.split_once(':')?;
                     let value = value.trim();
+                    let lower_value = value.to_ascii_lowercase();
+                    if lower_value.contains("url(")
+                        || lower_value.contains("var(")
+                        || lower_value.contains("expression")
+                    {
+                        return None;
+                    }
                     match property.trim().to_ascii_lowercase().as_str() {
                         "color" => style.color = Some(parse_css_color(value)?),
-                        "font-weight" if value.eq_ignore_ascii_case("bold") || value == "700" => {
-                            style.bold = true
+                        "background-color" | "background" => {
+                            let _ = parse_css_color(value)?;
+                            style.highlight = true;
                         }
-                        "font-style" if value.eq_ignore_ascii_case("italic") => style.italic = true,
-                        "text-decoration" => {
+                        "font-weight" => match lower_value.as_str() {
+                            "bold" | "bolder" => style.bold = true,
+                            "normal" | "lighter" => {}
+                            _ => match lower_value.parse::<u16>() {
+                                Ok(600..=900) => style.bold = true,
+                                Ok(100..=599) => {}
+                                _ => return None,
+                            },
+                        },
+                        "font-style" => match lower_value.as_str() {
+                            "italic" | "oblique" => style.italic = true,
+                            "normal" => {}
+                            _ => return None,
+                        },
+                        "text-decoration" | "text-decoration-line" => {
                             for token in value.split_whitespace() {
                                 match token.to_ascii_lowercase().as_str() {
                                     "underline" => style.underline = true,
                                     "line-through" => style.strikethrough = true,
+                                    "none" => {}
                                     _ => return None,
                                 }
                             }
                         }
+                        // Harmless typography declarations may co-occur with
+                        // supported inline formatting (e.g. `font-weight:bold;
+                        // font-size:18px`) without discarding the formatting.
+                        "font-size" | "font-family" | "line-height" | "letter-spacing"
+                        | "white-space" => {}
                         _ => return None,
                     }
                 }
@@ -1771,7 +2068,7 @@ impl<'a> HtmlTableParser<'a> {
         let colspan = self.pending_colspan.max(1);
         let rowspan = self.pending_rowspan.max(1);
         let is_header = self.pending_is_header;
-        let content = finish_rich_text(std::mem::take(&mut self.current_cell_spans));
+        let content = finish_html_rich_text(std::mem::take(&mut self.current_cell_spans));
         let image = self.pending_image.take();
         self.place_cell(HtmlTableCell {
             content,
@@ -2367,7 +2664,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
             let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
             RichText::new(joined, spans)
         } else {
-            finish_rich_text(spans)
+            finish_html_rich_text(spans)
         };
         if self.text_list_marker.is_none() {
             self.text_list_marker = self.list_marker;
@@ -2535,7 +2832,52 @@ fn parse_css_color(value: &str) -> Option<u32> {
         }
         return Some((u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue));
     }
-    None
+    if let Some(inner) = lower
+        .strip_prefix("rgba(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let mut parts = inner.split(',').map(str::trim);
+        let red = parts.next()?.parse::<u8>().ok()?;
+        let green = parts.next()?.parse::<u8>().ok()?;
+        let blue = parts.next()?.parse::<u8>().ok()?;
+        let alpha = parts.next()?.parse::<f32>().ok()?;
+        if parts.next().is_some() || !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return None;
+        }
+        return Some((u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue));
+    }
+    match lower.as_str() {
+        "black" => Some(0x000000),
+        "white" => Some(0xffffff),
+        "red" => Some(0xff0000),
+        "green" => Some(0x008000),
+        "blue" => Some(0x0000ff),
+        "yellow" => Some(0xffff00),
+        "orange" => Some(0xffa500),
+        "purple" => Some(0x800080),
+        "pink" => Some(0xffc0cb),
+        "gray" | "grey" => Some(0x808080),
+        "silver" => Some(0xc0c0c0),
+        "maroon" => Some(0x800000),
+        "olive" => Some(0x808000),
+        "lime" => Some(0x00ff00),
+        "aqua" | "cyan" => Some(0x00ffff),
+        "teal" => Some(0x008080),
+        "navy" => Some(0x000080),
+        "fuchsia" | "magenta" => Some(0xff00ff),
+        "brown" => Some(0xa52a2a),
+        "gold" => Some(0xffd700),
+        "coral" => Some(0xff7f50),
+        "crimson" => Some(0xdc143c),
+        "indigo" => Some(0x4b0082),
+        "violet" => Some(0xee82ee),
+        "darkred" => Some(0x8b0000),
+        "darkgreen" => Some(0x006400),
+        "darkblue" => Some(0x00008b),
+        "darkgray" | "darkgrey" => Some(0xa9a9a9),
+        "lightgray" | "lightgrey" => Some(0xd3d3d3),
+        _ => None,
+    }
 }
 
 fn parse_hex_color(hex: &str) -> Option<u32> {
@@ -2863,7 +3205,7 @@ fn unescaped_delimiter(text: &str, delimiter: &str) -> Option<usize> {
         .find(|&index| !is_backslash_escaped(text, index))
 }
 
-fn is_backslash_escaped(source: &str, offset: usize) -> bool {
+pub(crate) fn is_backslash_escaped(source: &str, offset: usize) -> bool {
     source.as_bytes()[..offset]
         .iter()
         .rev()
@@ -2921,7 +3263,7 @@ fn push_extended_text(segments: &mut Vec<ExtendedInlineSegment>, text: &str) {
     }
 }
 
-fn is_valid_short_inline_extent(text: &str) -> bool {
+pub(crate) fn is_valid_short_inline_extent(text: &str) -> bool {
     !text.trim().is_empty() && !text.contains('\n') && text.chars().count() <= 80
 }
 
@@ -3433,7 +3775,7 @@ mod inline_html_style_tag_tests {
             "<widget>",
             "</widget>",
             "<u/>",
-            "<u style=\"color:red\">",
+            "<u style=\"position:fixed\">",
             "<span onclick=\"x\">",
             "<em onclick>",
             "<em/>",
