@@ -1,6 +1,8 @@
 #![cfg(target_os = "linux")]
 
-use gpui::{Application, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, SharedString, px};
+use gpui::{
+    Application, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, SharedString, px,
+};
 use markion::{DEFAULT_CODE_FONT_FAMILY, SYSTEM_UI_FONT_FAMILY};
 
 #[test]
@@ -36,16 +38,28 @@ fn linux_system_ui_and_code_font_fallbacks_preserve_styles() {
             FontStyle::Italic,
         ));
 
-        assert_ne!(regular, bold, ".SystemUIFont must resolve a distinct bold FontId");
-        assert_ne!(regular, italic, ".SystemUIFont must resolve a distinct italic FontId");
-        assert_ne!(bold, bold_italic, ".SystemUIFont must resolve a distinct bold-italic FontId");
+        assert_ne!(
+            regular, bold,
+            ".SystemUIFont must resolve a distinct bold FontId"
+        );
+        assert_ne!(
+            regular, italic,
+            ".SystemUIFont must resolve a distinct italic FontId"
+        );
+        assert_ne!(
+            bold, bold_italic,
+            ".SystemUIFont must resolve a distinct bold-italic FontId"
+        );
 
         // Normal-only fonts (such as CJK faces or DejaVu Sans without an italic cut)
         // must still produce a distinct synthetic-italic FontId so upright and slanted
         // glyphs do not alias in the glyph atlas.
         let available = ts.all_font_names();
         for normal_only_candidate in ["Noto Sans CJK SC", "Source Han Sans SC", "DejaVu Sans"] {
-            if available.iter().any(|installed| installed == normal_only_candidate) {
+            if available
+                .iter()
+                .any(|installed| installed == normal_only_candidate)
+            {
                 let upright = ts.resolve_font(&make(
                     normal_only_candidate,
                     FontWeight::NORMAL,

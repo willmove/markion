@@ -2733,9 +2733,9 @@ fn apply_extended_inline_runs(
                     };
                     if valid
                         && text.get(open_src..close_src_end).is_some_and(|slice| {
-                            extended_inline_matches(slice)
-                                .iter()
-                                .any(|item| item.kind == kind && item.source_range == (0..slice.len()))
+                            extended_inline_matches(slice).iter().any(|item| {
+                                item.kind == kind && item.source_range == (0..slice.len())
+                            })
                         })
                     {
                         matched = Some((
@@ -5704,7 +5704,10 @@ mod tests {
         // Preview and Visual Edit, so `==mark \. dot==` keeps highlight styling.
         assert!(dot_run.style.highlight);
         let preview = doc.preview_blocks();
-        let PreviewBlock::Paragraph { text: preview_rich, .. } = &preview[0] else {
+        let PreviewBlock::Paragraph {
+            text: preview_rich, ..
+        } = &preview[0]
+        else {
             panic!("expected preview paragraph");
         };
         assert!(
@@ -9657,7 +9660,8 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                 .iter()
                 .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
                 .expect("paragraph block");
-            let projection = build_visual_projection(source, block, usize::MAX..usize::MAX, usize::MAX);
+            let projection =
+                build_visual_projection(source, block, usize::MAX..usize::MAX, usize::MAX);
             assert_eq!(projection.text, "outer inner tail", "for {source}");
             let tail = projection
                 .spans
@@ -9771,7 +9775,12 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             panic!("expected paragraph");
         };
         assert_eq!(escaped_rich.text, "==bold== and H~2~O");
-        assert!(escaped_rich.spans.iter().all(|s| !s.style.highlight && !s.style.subscript));
+        assert!(
+            escaped_rich
+                .spans
+                .iter()
+                .all(|s| !s.style.highlight && !s.style.subscript)
+        );
         let escaped_visual = escaped_doc.visual_blocks();
         let escaped_proj = build_visual_projection(
             escaped,

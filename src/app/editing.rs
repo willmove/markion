@@ -696,7 +696,13 @@ impl MarkionApp {
         selected_text: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        self.open_palette_insertion_editor_with_target(source_range, command, selected_text, None, cx);
+        self.open_palette_insertion_editor_with_target(
+            source_range,
+            command,
+            selected_text,
+            None,
+            cx,
+        );
     }
 
     fn open_palette_insertion_editor_with_target(

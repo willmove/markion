@@ -2666,8 +2666,7 @@ fn inline_math_baseline_margin_lifts_shallow_formulas_to_text_baseline() {
 
     // Tight lines where ascent + descent > line_height mirror paint_line's
     // unclamped half-leading: (20 - 18.56 + 4.61) / 2 - 1.0 = 2.025.
-    let tight =
-        inline_math_baseline_margin_from_metrics(px(20.0), px(18.56), px(-4.61), px(1.0));
+    let tight = inline_math_baseline_margin_from_metrics(px(20.0), px(18.56), px(-4.61), px(1.0));
     assert!((f32::from(tight) - 2.025).abs() < 0.01);
 
     // Deep formulas may need a negative margin so descent hangs below the line.
@@ -2695,8 +2694,8 @@ fn inline_math_baseline_aligns_with_gpui_text_baseline_in_read_and_visual_edit(
         });
         cx.run_until_parked();
 
-        let (expected_margin, expected_baseline_from_bottom, math_descent, line_height) =
-            cx.update(|window, cx| {
+        let (expected_margin, expected_baseline_from_bottom, math_descent, line_height) = cx
+            .update(|window, cx| {
                 let display_scale = window.scale_factor();
                 app.update(cx, |app, cx| {
                     let typography = app.typography_metrics();
@@ -7386,12 +7385,16 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
             assert!(menu.from_grip);
             assert!(menu.submenu.is_none());
             assert!(!menu.offers(BlockMenuItem::AddBelow));
-            assert!(!menu.offers(BlockMenuItem::Insert(SlashPaletteCommand::Block(
-                SlashCommand::Divider
-            ))));
-            assert!(!menu.offers(BlockMenuItem::Insert(SlashPaletteCommand::Block(
-                SlashCommand::Table
-            ))));
+            assert!(
+                !menu.offers(BlockMenuItem::Insert(SlashPaletteCommand::Block(
+                    SlashCommand::Divider
+                )))
+            );
+            assert!(
+                !menu.offers(BlockMenuItem::Insert(SlashPaletteCommand::Block(
+                    SlashCommand::Table
+                )))
+            );
             assert_eq!(
                 menu.root_items(),
                 [
@@ -7526,7 +7529,8 @@ fn visual_table_grip_equalize_column_widths_persists_undoes_and_gates_targets(
     cx: &mut TestAppContext,
 ) {
     // 1. Top-level 3-column table without prior markion-cols comment.
-    const THREE_COL: &str = "| A | B | C |\n| --- | --- | --- |\n| 1 | long description | 3 |\n\nAfter";
+    const THREE_COL: &str =
+        "| A | B | C |\n| --- | --- | --- |\n| 1 | long description | 3 |\n\nAfter";
     let (app, cx) = visual_table_handle_app(THREE_COL, cx);
     let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
     cx.simulate_click(grip.center(), Modifiers::none());
@@ -7575,7 +7579,8 @@ fn visual_table_grip_equalize_column_widths_persists_undoes_and_gates_targets(
     });
 
     // 2. Existing unequal comment with CRLF is replaced atomically and stale targets are rejected.
-    const UNEQUAL_CRLF: &str = "<!-- markion-cols:20,80 -->\r\n| A | B |\r\n| --- | --- |\r\n| 1 | 2 |";
+    const UNEQUAL_CRLF: &str =
+        "<!-- markion-cols:20,80 -->\r\n| A | B |\r\n| --- | --- |\r\n| 1 | 2 |";
     let (app, cx) = visual_table_handle_app(UNEQUAL_CRLF, cx);
     app.update_in(cx, |app, window, cx| {
         let doc = &app.active_tab().document;
@@ -7587,7 +7592,10 @@ fn visual_table_grip_equalize_column_widths_persists_undoes_and_gates_targets(
         assert!(app.block_menu.is_none());
         assert_eq!(app.active_tab().document.text(), UNEQUAL_CRLF);
         assert!(app.active_tab().undo_stack.is_empty());
-        assert!(Arc::ptr_eq(&cache, &app.active_tab().document.visual_blocks_shared()));
+        assert!(Arc::ptr_eq(
+            &cache,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
     });
     let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
     cx.simulate_click(grip.center(), Modifiers::none());
@@ -7619,7 +7627,11 @@ fn visual_table_grip_equalize_column_widths_persists_undoes_and_gates_targets(
         cx.run_until_parked();
         app.read_with(cx, |app, _| {
             let menu = app.block_menu.as_ref().unwrap();
-            assert!(!menu.root_items().contains(&BlockMenuItem::EqualizeTableColumns));
+            assert!(
+                !menu
+                    .root_items()
+                    .contains(&BlockMenuItem::EqualizeTableColumns)
+            );
         });
         assert!(cx.debug_bounds("visual-table-equalize-columns").is_none());
     }
@@ -7653,18 +7665,29 @@ fn visual_table_grip_insert_below_link_formula_and_image_defer_until_confirm(
     // --- Link ---
     open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Link));
     let (version, cache, selection) = app.read_with(cx, |app, _| {
-        assert!(app.link_editor.as_ref().is_some_and(|e| e.kind == LinkEditorKind::Link && e.block_below.is_some()));
+        assert!(
+            app.link_editor
+                .as_ref()
+                .is_some_and(|e| e.kind == LinkEditorKind::Link && e.block_below.is_some())
+        );
         let tab = app.active_tab();
         assert_eq!(tab.document.text(), SOURCE);
         assert!(tab.undo_stack.is_empty());
-        (tab.document.version(), tab.document.visual_blocks_shared(), tab.selected_range.clone())
+        (
+            tab.document.version(),
+            tab.document.visual_blocks_shared(),
+            tab.selected_range.clone(),
+        )
     });
     app.update(cx, |app, cx| app.cancel_link_editor(cx));
     app.read_with(cx, |app, _| {
         assert!(app.link_editor.is_none());
         assert_eq!(app.active_tab().document.text(), SOURCE);
         assert_eq!(app.active_tab().document.version(), version);
-        assert!(Arc::ptr_eq(&cache, &app.active_tab().document.visual_blocks_shared()));
+        assert!(Arc::ptr_eq(
+            &cache,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
     });
     open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Link));
     app.update_in(cx, |app, window, cx| {
@@ -7691,11 +7714,18 @@ fn visual_table_grip_insert_below_link_formula_and_image_defer_until_confirm(
     // --- Formula ---
     open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Formula));
     app.read_with(cx, |app, _| {
-        assert!(app.token_editor.as_ref().is_some_and(|e| e.kind == TokenEditorKind::MathPayload && e.block_below.is_some()));
+        assert!(
+            app.token_editor
+                .as_ref()
+                .is_some_and(|e| e.kind == TokenEditorKind::MathPayload && e.block_below.is_some())
+        );
         assert_eq!(app.active_tab().document.text(), SOURCE);
     });
     app.update(cx, |app, cx| app.cancel_token_editor(cx));
-    assert_eq!(app.read_with(cx, |app, _| app.active_tab().document.text().to_string()), SOURCE);
+    assert_eq!(
+        app.read_with(cx, |app, _| app.active_tab().document.text().to_string()),
+        SOURCE
+    );
     open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Formula));
     app.update(cx, |app, cx| {
         app.token_editor.as_mut().unwrap().draft = "E = mc^2".into();
@@ -7719,11 +7749,18 @@ fn visual_table_grip_insert_below_link_formula_and_image_defer_until_confirm(
     // --- Image ---
     open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Image));
     app.read_with(cx, |app, _| {
-        assert!(app.link_editor.as_ref().is_some_and(|e| e.kind == LinkEditorKind::Image && e.block_below.is_some()));
+        assert!(
+            app.link_editor
+                .as_ref()
+                .is_some_and(|e| e.kind == LinkEditorKind::Image && e.block_below.is_some())
+        );
         assert_eq!(app.active_tab().document.text(), SOURCE);
     });
     app.update(cx, |app, cx| app.cancel_link_editor(cx));
-    assert_eq!(app.read_with(cx, |app, _| app.active_tab().document.text().to_string()), SOURCE);
+    assert_eq!(
+        app.read_with(cx, |app, _| app.active_tab().document.text().to_string()),
+        SOURCE
+    );
     open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Image));
     app.update_in(cx, |app, window, cx| {
         app.link_editor.as_mut().unwrap().label = "Chart".into();
@@ -31241,14 +31278,13 @@ fn preview_renders_nested_blockquote_children_table_footnotes_and_superscript_fo
     cx.run_until_parked();
     assert!(
         cx.debug_bounds("visual-table-cell-4-0-1").is_some()
-            || app
-                .read_with(cx, |app, _| {
-                    app.active_tab()
-                        .document
-                        .visual_blocks()
-                        .iter()
-                        .any(|b| matches!(b.kind, VisualBlockKind::Table { .. }))
-                }),
+            || app.read_with(cx, |app, _| {
+                app.active_tab()
+                    .document
+                    .visual_blocks()
+                    .iter()
+                    .any(|b| matches!(b.kind, VisualBlockKind::Table { .. }))
+            }),
         "Visual Edit table should render"
     );
 }

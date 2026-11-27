@@ -9744,16 +9744,15 @@ pub(super) fn preview_block_view(
                         source_range,
                         ..
                     } => {
-                        container = container.child(div().my_2().child(
-                            markdown_image_presentation_view(
+                        container =
+                            container.child(div().my_2().child(markdown_image_presentation_view(
                                 app,
                                 url,
                                 identity,
                                 document_dir,
                                 *presentation,
                                 source_range.start,
-                            ),
-                        ));
+                            )));
                     }
                     PreviewBlock::Rule { .. } => {
                         container = container.child(div().my_2().h(px(1.)).bg(rgb(0xcbd5e1)));
