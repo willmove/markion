@@ -775,15 +775,20 @@ pub fn duplicate_block(
     blocks: &[VisualBlock],
     target: &BlockTarget,
 ) -> Result<BlockEdit, BlockEditError> {
-    let (index, _) = validate_block_target(current_version, blocks, target)?;
+    let (index, block) = validate_block_target(current_version, blocks, target)?;
     if !block_can_reorder_at(blocks, index) {
         return Err(BlockEditError::Unsupported);
     }
     let unit = source_unit(source, blocks, index)?;
     let authored = source.get(unit.clone()).ok_or(BlockEditError::Ambiguous)?;
+    // A list item outside a quote is separated from its copy by its own marker,
+    // so the copy keeps the item's boundary instead of a blank line that would
+    // loosen the list.
+    let sibling_bounded =
+        block.quote_context.is_none() && matches!(block.kind, VisualBlockKind::ListItem { .. });
     let separator = match trailing_line_endings(authored) {
-        "" => preferred_line_ending(source).repeat(2),
-        "\n" | "\r" | "\r\n" => preferred_line_ending(source).to_string(),
+        "" => preferred_line_ending(source).repeat(if sibling_bounded { 1 } else { 2 }),
+        "\n" | "\r" | "\r\n" if !sibling_bounded => preferred_line_ending(source).to_string(),
         _ => String::new(),
     };
     let replacement = format!("{authored}{separator}{authored}");
@@ -2220,6 +2225,51 @@ mod tests {
         let duplicate =
             duplicate_block(two_blocks.text(), two_blocks.version(), &blocks, &last).unwrap();
         assert_eq!(duplicate.replacement, "two\n\ntwo");
+    }
+
+    #[test]
+    fn duplicate_tight_list_item_keeps_the_sibling_boundary() {
+        for (source, nth, expected) in [
+            ("- a\n- b\n", 0, "- a\n- a\n- b\n"),
+            ("- a\n- b\n", 1, "- a\n- b\n- b\n"),
+            ("- a\n- b", 1, "- a\n- b\n- b"),
+            ("- a\r\n- b\r\n", 0, "- a\r\n- a\r\n- b\r\n"),
+            ("- a\n- b\n\nAfter\n", 0, "- a\n- a\n- b\n\nAfter\n"),
+            (
+                "- a\n  - x\n  - y\n- b\n",
+                1,
+                "- a\n  - x\n  - x\n  - y\n- b\n",
+            ),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let item = blocks
+                .iter()
+                .filter(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+                .nth(nth)
+                .unwrap();
+            let target = BlockTarget::from_block(doc.version(), item);
+            let edit = duplicate_block(doc.text(), doc.version(), &blocks, &target).unwrap();
+            let mut duplicated = source.to_string();
+            duplicated.replace_range(edit.range, &edit.replacement);
+            assert_eq!(duplicated, expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn duplicate_single_newline_paragraph_before_another_block_stays_independent() {
+        let source = "Review notes.\n# Agenda\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let paragraph = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .unwrap();
+        let target = BlockTarget::from_block(doc.version(), paragraph);
+        let edit = duplicate_block(doc.text(), doc.version(), &blocks, &target).unwrap();
+        let mut duplicated = source.to_string();
+        duplicated.replace_range(edit.range, &edit.replacement);
+        assert_eq!(duplicated, "Review notes.\n\nReview notes.\n# Agenda\n");
     }
 
     #[test]
