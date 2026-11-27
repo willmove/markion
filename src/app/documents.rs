@@ -200,6 +200,9 @@ impl MarkionApp {
     /// Cancel. Closing the last tab leaves a fresh untitled document so the
     /// window stays open.
     pub(super) fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.active_tab_mut().document_tab_mut() {
+            tab.document.refresh_dirty_against_known_disk();
+        }
         if !self.active_tab().requires_discard_confirmation() {
             self.close_tab_confirmed(cx);
             return;
@@ -1016,6 +1019,15 @@ impl MarkionApp {
             });
         })
         .detach();
+    }
+
+    pub(super) fn export_markdown(
+        &mut self,
+        _: &ExportMarkdown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_with_prompt(ExportFormat::Markdown, window, cx);
     }
 
     pub(super) fn export_html(

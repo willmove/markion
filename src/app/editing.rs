@@ -2428,16 +2428,51 @@ impl MarkionApp {
                         .any(|block| block.id == moving.block_id)
                 })
         {
+            let moving_len = selection
+                .indices(&self.active_tab().document, &blocks)
+                .ok()
+                .filter(|_| selection.anchor != selection.head)
+                .and_then(|_| {
+                    selection
+                        .range(&self.active_tab().document)
+                        .ok()
+                        .map(|range| range.len())
+                });
             match selection.move_to(
                 &self.active_tab().document,
                 &destination,
                 placement == BlockPlacement::After,
             ) {
-                Ok(edit) => self.apply_exact_block_edit(
-                    edit,
-                    p1_t(self.language, P1Msg::BlockMoved).into(),
-                    cx,
-                ),
+                Ok(edit) => {
+                    let previous_version = self.active_tab().document.version();
+                    self.apply_exact_block_edit(
+                        edit,
+                        p1_t(self.language, P1Msg::BlockMoved).into(),
+                        cx,
+                    );
+                    if self.active_tab().document.version() != previous_version {
+                        if let Some(moving_len) = moving_len {
+                            let start = self.active_tab().selected_range.start;
+                            self.active_tab_mut().selected_range = start..start + moving_len;
+                        }
+                        let selected_range = self.active_tab().selected_range.clone();
+                        let blocks = self.active_tab().document.visual_blocks_shared();
+                        let mut moved = blocks.iter().filter(|block| {
+                            selected_range.start <= block.source_range.start
+                                && block.source_range.end <= selected_range.end
+                        });
+                        if let Some(first) = moved.next() {
+                            let last = moved.last().unwrap_or(first);
+                            let selection = markion::selection::BlockSelection::new(
+                                &self.active_tab().document,
+                                first.id,
+                                last.id,
+                            );
+                            self.active_tab_mut().structured_selection =
+                                Some(markion::selection::SelectionState::Blocks(selection));
+                        }
+                    }
+                }
                 Err(error) => self.report_block_edit_error(error, cx),
             }
             return;
@@ -2864,7 +2899,7 @@ impl MarkionApp {
         cx.notify();
     }
 
-    fn commit_visual_image_resize_drag(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn commit_visual_image_resize_drag(&mut self, cx: &mut Context<Self>) {
         let Some(drag) = self.active_tab_mut().visual_image_resize_drag.take() else {
             return;
         };
@@ -2983,6 +3018,11 @@ impl MarkionApp {
 
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         tracing::debug!(target: "markion::editing", op = "undo", "undo invoked");
+        if self.pending_name_input.is_some() {
+            self.status = t(self.language, Msg::StatusNothingToUndo).into();
+            cx.notify();
+            return;
+        }
         if let Some(message) = self.active_git_lock_message() {
             self.status = message.into();
             cx.notify();
@@ -3000,6 +3040,11 @@ impl MarkionApp {
 
     pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
         tracing::debug!(target: "markion::editing", op = "redo", "redo invoked");
+        if self.pending_name_input.is_some() {
+            self.status = t(self.language, Msg::StatusNothingToRedo).into();
+            cx.notify();
+            return;
+        }
         if let Some(message) = self.active_git_lock_message() {
             self.status = message.into();
             cx.notify();
@@ -5232,7 +5277,10 @@ impl MarkionApp {
                     .as_ref()
                     .and_then(|sel| preview_selection_markdown(sel, &blocks, &document))
                 {
-                    let html = MarkdownDocument::from_text(&md).render_html_fragment();
+                    let html = self
+                        .active_tab()
+                        .document
+                        .render_html_fragment_from_selection(&md);
                     cx.write_to_clipboard(ClipboardItem::new_string(html));
                     self.status = t(self.language, Msg::StatusCopiedPreviewHtml).into();
                 } else {
@@ -5824,15 +5872,20 @@ impl MarkionApp {
         } else {
             1
         };
+        if visual {
+            self.move_visual_page_lines(
+                if forward {
+                    VisualNavigationDirection::Down
+                } else {
+                    VisualNavigationDirection::Up
+                },
+                count,
+                extend,
+                cx,
+            );
+            return;
+        }
         for _ in 0..count {
-            let direction = if forward {
-                VisualNavigationDirection::Down
-            } else {
-                VisualNavigationDirection::Up
-            };
-            if visual && self.move_visual_vertical(direction, extend, cx) {
-                continue;
-            }
             let cursor = self.cursor_offset();
             let target = if forward {
                 self.active_tab().document.next_line_offset(cursor)
@@ -5843,6 +5896,37 @@ impl MarkionApp {
                 self.select_to(target, cx);
             } else {
                 self.move_to(target, cx);
+            }
+        }
+        if !self.typewriter_mode {
+            self.scroll_editor_to_offset(self.cursor_offset());
+        }
+    }
+
+    fn move_visual_page_lines(
+        &mut self,
+        direction: VisualNavigationDirection,
+        count: usize,
+        extend: bool,
+        cx: &mut Context<Self>,
+    ) {
+        for step in 0..count {
+            if !self.move_visual_vertical(direction, extend, cx) {
+                let cursor = self.cursor_offset();
+                let target = if direction == VisualNavigationDirection::Down {
+                    self.active_tab().document.next_line_offset(cursor)
+                } else {
+                    self.active_tab().document.previous_line_offset(cursor)
+                };
+                if extend {
+                    self.select_to(target, cx);
+                } else {
+                    self.move_to(target, cx);
+                }
+            }
+            if let Some(pending) = self.active_tab_mut().pending_visual_navigation.as_mut() {
+                pending.page_lines_remaining = count - step - 1;
+                break;
             }
         }
     }
@@ -5894,8 +5978,29 @@ impl MarkionApp {
             }
             _ => {}
         }
-        if self.search_visible && self.search_control_focus.is_some() {
-            self.find_next(&FindNext, _window, cx);
+        if self.search_visible
+            && let Some(control) = self.search_control_focus
+        {
+            match control {
+                SearchOverlayControl::FindField | SearchOverlayControl::ReplaceField => {
+                    self.find_next(&FindNext, _window, cx);
+                }
+                SearchOverlayControl::Previous => self.find_previous(&FindPrevious, _window, cx),
+                SearchOverlayControl::Next => self.find_next(&FindNext, _window, cx),
+                SearchOverlayControl::MatchCase => {
+                    self.toggle_find_case_sensitive(&ToggleFindCaseSensitive, _window, cx);
+                }
+                SearchOverlayControl::Regex => {
+                    self.toggle_find_regex(&ToggleFindRegex, _window, cx);
+                }
+                SearchOverlayControl::ReplaceCurrent => {
+                    self.replace_current_match(&ReplaceCurrentMatch, _window, cx);
+                }
+                SearchOverlayControl::ReplaceAll => {
+                    self.replace_all_matches(&ReplaceAllMatches, _window, cx);
+                }
+                SearchOverlayControl::Close => self.close_search_overlay(cx),
+            }
             return;
         }
         if self.confirm_visual_block_menu(_window, cx) {
@@ -6613,6 +6718,20 @@ impl MarkionApp {
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.pending_name_input.as_ref().and_then(|pending| {
+            let range = pending.selection();
+            (!range.is_empty()).then(|| pending.buffer[range].to_string())
+        }) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.status = t(self.language, Msg::StatusCopiedSelection).into();
+            cx.notify();
+            return;
+        }
+        if self.pending_name_input.is_some() {
+            self.status = t(self.language, Msg::StatusNothingToCopy).into();
+            cx.notify();
+            return;
+        }
         if let Some(text) = self
             .focused_search_field()
             .and_then(SearchFieldState::selected_text)
@@ -6657,6 +6776,21 @@ impl MarkionApp {
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.pending_name_input.as_ref().and_then(|pending| {
+            let range = pending.selection();
+            (!range.is_empty()).then(|| pending.buffer[range].to_string())
+        }) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.pop_name_text(cx);
+            self.status = t(self.language, Msg::StatusCutSelection).into();
+            cx.notify();
+            return;
+        }
+        if self.pending_name_input.is_some() {
+            self.status = t(self.language, Msg::StatusNothingToCut).into();
+            cx.notify();
+            return;
+        }
         if self.read_only_document_action() {
             self.status = t(self.language, Msg::StatusNothingToCut).into();
             cx.notify();
@@ -7288,6 +7422,7 @@ impl MarkionApp {
             direction,
             extend_selection,
             preferred_x,
+            page_lines_remaining: 0,
         })
     }
 
@@ -7383,6 +7518,14 @@ impl MarkionApp {
             return;
         };
         self.apply_resolved_visual_navigation(pending, resolved, cx);
+        if pending.page_lines_remaining > 0 {
+            self.move_visual_page_lines(
+                pending.direction,
+                pending.page_lines_remaining,
+                pending.extend_selection,
+                cx,
+            );
+        }
     }
 
     pub(super) fn queue_pending_visual_navigation_completion(

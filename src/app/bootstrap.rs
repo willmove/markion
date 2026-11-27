@@ -203,6 +203,7 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
         Menu {
             name: t(language, Msg::MenuExport).into(),
             items: vec![
+                MenuItem::action(t(language, Msg::ItemExportMarkdown), ExportMarkdown),
                 MenuItem::action(t(language, Msg::ItemExportHtml), ExportHtml),
                 MenuItem::action(t(language, Msg::ItemExportPlainHtml), ExportPlainHtml),
                 MenuItem::action(t(language, Msg::ItemExportPdf), ExportPdf),

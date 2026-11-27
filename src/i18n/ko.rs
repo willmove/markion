@@ -112,6 +112,7 @@ pub(super) fn t(msg: Msg) -> &'static str {
         Msg::ItemAddTableColumn => "표 열 추가",
         Msg::ItemDeleteTableColumn => "표 열 삭제",
 
+        Msg::ItemExportMarkdown => "Markdown 남보 내기",
         Msg::ItemExportHtml => "HTML 내보내기",
         Msg::ItemExportPlainHtml => "일반 HTML 내보내기",
         Msg::ItemExportPdf => "PDF 내보내기",

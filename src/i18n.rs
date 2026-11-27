@@ -1292,6 +1292,7 @@ pub enum Msg {
     ItemDeleteTableColumn,
 
     // --- Export menu items ---
+    ItemExportMarkdown,
     ItemExportHtml,
     ItemExportPlainHtml,
     ItemExportPdf,
@@ -4667,6 +4668,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemAddTableColumn => "Add Table Column",
         Msg::ItemDeleteTableColumn => "Delete Table Column",
 
+        Msg::ItemExportMarkdown => "Export Markdown",
         Msg::ItemExportHtml => "Export HTML",
         Msg::ItemExportPlainHtml => "Export Plain HTML",
         Msg::ItemExportPdf => "Export PDF",
@@ -5378,6 +5380,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemAddTableColumn => "列を追加",
         Msg::ItemDeleteTableColumn => "列を削除",
 
+        Msg::ItemExportMarkdown => "Markdown出力",
         Msg::ItemExportHtml => "HTML出力",
         Msg::ItemExportPlainHtml => "プレーンHTML出力",
         Msg::ItemExportPdf => "PDF出力",
@@ -6083,6 +6086,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemMoveRowDown => "Déplacer la ligne vers le bas",
         Msg::ItemAddTableColumn => "Ajouter une colonne",
         Msg::ItemDeleteTableColumn => "Supprimer la colonne",
+        Msg::ItemExportMarkdown => "Exporter en Markdown",
         Msg::ItemExportHtml => "Exporter en HTML",
         Msg::ItemExportPlainHtml => "Exporter en HTML simple",
         Msg::ItemExportPdf => "Exporter en PDF",
@@ -6824,6 +6828,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemMoveRowDown => "Zeile nach unten",
         Msg::ItemAddTableColumn => "Spalte hinzufügen",
         Msg::ItemDeleteTableColumn => "Spalte löschen",
+        Msg::ItemExportMarkdown => "Markdown exportieren",
         Msg::ItemExportHtml => "HTML exportieren",
         Msg::ItemExportPlainHtml => "Einfaches HTML exportieren",
         Msg::ItemExportPdf => "PDF exportieren",
@@ -7547,6 +7552,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemMoveRowDown => "Mover fila abajo",
         Msg::ItemAddTableColumn => "Agregar columna",
         Msg::ItemDeleteTableColumn => "Eliminar columna",
+        Msg::ItemExportMarkdown => "Exportar Markdown",
         Msg::ItemExportHtml => "Exportar HTML",
         Msg::ItemExportPlainHtml => "Exportar HTML simple",
         Msg::ItemExportPdf => "Exportar PDF",
@@ -8263,6 +8269,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemAddTableColumn => "添加表格列",
         Msg::ItemDeleteTableColumn => "删除表格列",
 
+        Msg::ItemExportMarkdown => "导出 Markdown",
         Msg::ItemExportHtml => "导出 HTML",
         Msg::ItemExportPlainHtml => "导出纯 HTML",
         Msg::ItemExportPdf => "导出 PDF",
@@ -8937,6 +8944,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemAddTableColumn => "新增表格欄",
         Msg::ItemDeleteTableColumn => "刪除表格欄",
 
+        Msg::ItemExportMarkdown => "匯出 Markdown",
         Msg::ItemExportHtml => "匯出 HTML",
         Msg::ItemExportPlainHtml => "匯出純 HTML",
         Msg::ItemExportPdf => "匯出 PDF",
@@ -10280,6 +10288,7 @@ mod tests {
             Msg::ItemMoveRowDown,
             Msg::ItemAddTableColumn,
             Msg::ItemDeleteTableColumn,
+            Msg::ItemExportMarkdown,
             Msg::ItemExportHtml,
             Msg::ItemExportPlainHtml,
             Msg::ItemExportPdf,

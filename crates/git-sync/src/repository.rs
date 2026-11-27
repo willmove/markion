@@ -129,6 +129,7 @@ pub struct HistoryEntry {
     pub authored_unix_seconds: i64,
     pub authored_iso: String,
     pub subject: String,
+    pub path: Option<PathBuf>,
 }
 
 impl GitRepository {
@@ -720,13 +721,54 @@ impl GitRepository {
                 "file history page exceeds limit".into(),
             ));
         }
-        output
+        let mut history = output
             .stdout
             .split(|byte| *byte == 0)
             .filter(|record| !record.is_empty())
             .map(parse_history_entry)
-            .skip(skip)
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut current_path = path.to_path_buf();
+        for entry in &mut history {
+            entry.path = Some(current_path.clone());
+            current_path = self
+                .path_before_commit(&entry.oid, &current_path)?
+                .unwrap_or(current_path);
+        }
+        Ok(history.into_iter().skip(skip).collect())
+    }
+
+    fn path_before_commit(
+        &self,
+        commit: &GitObjectId,
+        current_path: &Path,
+    ) -> Result<Option<PathBuf>, RepositoryError> {
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "show",
+                    "--format=",
+                    "--find-renames",
+                    "--name-status",
+                    "-z",
+                    commit.as_str(),
+                ])
+                .read_only(true),
+            CommandLimits::default(),
+        )?;
+        let fields = output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|field| !field.is_empty())
+            .collect::<Vec<_>>();
+        for pair in fields.windows(3) {
+            if pair[0].starts_with(b"R") && pair[2] == current_path.as_os_str().as_encoded_bytes() {
+                return std::str::from_utf8(pair[1])
+                    .map(PathBuf::from)
+                    .map(Some)
+                    .map_err(|_| RepositoryError::InvalidOutput("non-UTF-8 rename path".into()));
+            }
+        }
+        Ok(None)
     }
 
     pub fn commit_metadata(&self, commit: &GitObjectId) -> Result<HistoryEntry, RepositoryError> {
@@ -762,6 +804,21 @@ impl GitRepository {
         path: &Path,
         max_bytes: usize,
     ) -> Result<VersionComparison, RepositoryError> {
+        self.working_diff_between(commit, path, path, max_bytes)
+    }
+
+    pub fn working_diff_between(
+        &self,
+        commit: &GitObjectId,
+        historical_path: &Path,
+        current_path: &Path,
+        max_bytes: usize,
+    ) -> Result<VersionComparison, RepositoryError> {
+        let paths = if historical_path == current_path {
+            vec![historical_path.as_os_str()]
+        } else {
+            vec![historical_path.as_os_str(), current_path.as_os_str()]
+        };
         let binary_probe = self.run(
             GitCommand::new(&self.identity.worktree_root)
                 .args([
@@ -772,9 +829,10 @@ impl GitRepository {
                     "-z",
                     "--no-ext-diff",
                     "--no-textconv",
+                    "--find-renames",
                     commit.as_str(),
                 ])
-                .literal_paths([path.as_os_str()])
+                .literal_paths(paths.iter().copied())
                 .read_only(true),
             CommandLimits {
                 max_stdout_bytes: 64 * 1024,
@@ -794,9 +852,10 @@ impl GitRepository {
                     "diff",
                     "--no-ext-diff",
                     "--no-textconv",
+                    "--find-renames",
                     commit.as_str(),
                 ])
-                .literal_paths([path.as_os_str()])
+                .literal_paths(paths.iter().copied())
                 .read_only(true),
             CommandLimits {
                 max_stdout_bytes: max_bytes,
@@ -908,6 +967,7 @@ impl GitRepository {
                     "--first-parent",
                     "--no-ext-diff",
                     "--no-textconv",
+                    "--find-renames",
                     commit.as_str(),
                 ])
                 .literal_paths([path.as_os_str()])
@@ -1357,6 +1417,7 @@ fn parse_history_entry(record: &[u8]) -> Result<HistoryEntry, RepositoryError> {
             .map_err(|_| RepositoryError::InvalidOutput("invalid author time".into()))?,
         authored_iso: fields[5].to_owned(),
         subject: fields[6].to_owned(),
+        path: None,
     })
 }
 
@@ -1423,6 +1484,33 @@ mod tests {
             .unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].subject, "rename");
+        assert_eq!(
+            history[0].path.as_deref(),
+            Some(Path::new("renamed note.md"))
+        );
+        assert_eq!(history[1].path.as_deref(), Some(Path::new("notes.md")));
+        assert_eq!(history[2].path.as_deref(), Some(Path::new("notes.md")));
+        let original = repository
+            .commit_diff(&history[2].oid, history[2].path.as_deref().unwrap(), 4096)
+            .unwrap();
+        assert!(
+            String::from_utf8(original.bytes)
+                .unwrap()
+                .contains("+initial")
+        );
+        let unchanged = repository
+            .working_diff_between(
+                &history[2].oid,
+                Path::new("notes.md"),
+                Path::new("renamed note.md"),
+                4096,
+            )
+            .unwrap();
+        assert!(
+            !String::from_utf8(unchanged.content.bytes)
+                .unwrap()
+                .contains("+initial")
+        );
         assert_eq!(
             repository
                 .history_page_for_path(Path::new("renamed note.md"), 1, 1)

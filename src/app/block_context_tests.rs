@@ -2584,3 +2584,97 @@ fn compact_context_image_settings_keep_resource_policy_and_target(cx: &mut TestA
         assert_eq!(app.active_tab().selected_range, 1..1);
     });
 }
+
+#[gpui::test]
+fn second_image_resize_uses_the_dragged_image_bounds(cx: &mut TestAppContext) {
+    let source = "Before.\n\n![Neighbor](missing.png \"North {width=20 align=left}\")\n\n![Target](missing.png \"South {width=60 align=left}\")\n\nAfter.";
+    let target_offset = source.find("![Target]").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app.outline_visible = false;
+        app
+    });
+    cx.simulate_resize(size(px(1180.), px(800.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let target_content = cx
+        .debug_bounds(image_test_debug_selector(format!(
+            "visual-markdown-image-content-{target_offset}"
+        )))
+        .expect("target image");
+    cx.simulate_click(target_content.center(), Modifiers::none());
+    cx.run_until_parked();
+    let handle = cx
+        .debug_bounds(image_test_debug_selector(format!(
+            "visual-image-resize-handle-{target_offset}"
+        )))
+        .expect("selected target resize handle");
+    let mut destination = point(handle.center().x - px(4.), handle.center().y);
+    cx.simulate_mouse_move(handle.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_event(MouseMoveEvent {
+        position: destination,
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    cx.simulate_event(MouseMoveEvent {
+        position: destination,
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let drag = app.active_tab().visual_image_resize_drag.as_ref().unwrap();
+        let column = f32::from(drag.start_image_width) / 0.6;
+        destination = point(px(drag.start_x - column * 0.2), destination.y);
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: point(destination.x - px(1.), destination.y),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(cx.has_active_drag(), "resize drag should be active"));
+    app.update(cx, |app, _| {
+        let drag = app.active_tab().visual_image_resize_drag.as_ref().unwrap();
+        assert_eq!(
+            drag.live_percent, 40,
+            "start={} start_x={} live={}",
+            drag.start_image_width, drag.start_x, drag.live_percent
+        );
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.on_visual_image_resize_drag_drop(
+                &DraggedImageResizeHandle {
+                    offset: target_offset,
+                    document_version: app.active_tab().document.version(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let text = app.active_tab().document.text();
+        assert!(text.contains("North {width=20 align=left}"), "{text}");
+        assert!(text.contains("South {width=40 align=left}"), "{text}");
+        assert!(!text.contains("South {width=10 align=left}"), "{text}");
+    });
+}
+
+fn image_test_debug_selector(selector: String) -> &'static str {
+    Box::leak(selector.into_boxed_str())
+}

@@ -73,6 +73,7 @@ pub enum PlacedItem {
     /// Raster image, already decoded by krilla.
     Image {
         image: KrillaImage,
+        alt: String,
         x: f32,
         y: f32,
         w: f32,
@@ -81,6 +82,7 @@ pub enum PlacedItem {
     /// Vector image parsed by usvg (math SVG is path-only).
     Svg {
         tree: Box<usvg::Tree>,
+        alt: String,
         x: f32,
         y: f32,
         w: f32,
@@ -448,6 +450,7 @@ impl<'a> Layouter<'a> {
         for object in &line.objects {
             svgs.push(PlacedItem::Svg {
                 tree: object.tree.clone(),
+                alt: String::new(),
                 x: x + object.x,
                 y: baseline - object.ascent,
                 w: object.width,
@@ -1037,6 +1040,7 @@ impl<'a> Layouter<'a> {
         let item = match parsed {
             ParsedImage::Raster(image) => PlacedItem::Image {
                 image,
+                alt: alt.to_string(),
                 x: self.geom.left,
                 y: self.y,
                 w,
@@ -1044,6 +1048,7 @@ impl<'a> Layouter<'a> {
             },
             ParsedImage::Vector(tree) => PlacedItem::Svg {
                 tree,
+                alt: alt.to_string(),
                 x: self.geom.left,
                 y: self.y,
                 w,

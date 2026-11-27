@@ -84,6 +84,9 @@ impl Render for MarkionApp {
                 {
                     self.search_generation = None;
                     self.refresh_search_matches();
+                    if let Some(index) = self.current_search_index {
+                        self.select_search_match(index, cx);
+                    }
                 }
                 blocks
             };
@@ -357,6 +360,7 @@ impl Render for MarkionApp {
             .when(!active_is_image, |root| {
                 root.on_action(cx.listener(Self::save_document))
                     .on_action(cx.listener(Self::save_document_as))
+                    .on_action(cx.listener(Self::export_markdown))
                     .on_action(cx.listener(Self::export_html))
                     .on_action(cx.listener(Self::export_plain_html))
                     .on_action(cx.listener(Self::export_pdf))
@@ -5993,6 +5997,11 @@ pub(super) fn active_menu_dropdown(
             panel.child(image_action_unavailable_menu_row(language, palette))
         }
         AppMenu::Export => panel
+            .child(action_item!(
+                Msg::ItemExportMarkdown,
+                export_markdown,
+                ExportMarkdown
+            ))
             .child(action_item!(
                 Msg::ItemExportHtml,
                 export_html,

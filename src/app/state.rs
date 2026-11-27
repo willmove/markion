@@ -510,6 +510,7 @@ pub(super) struct PendingVisualNavigation {
     pub(super) direction: VisualNavigationDirection,
     pub(super) extend_selection: bool,
     pub(super) preferred_x: Pixels,
+    pub(super) page_lines_remaining: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -135,6 +135,7 @@ pub(super) struct GitUi {
         RepositoryIdentity,
         Option<GitObjectId>,
         Option<PathBuf>,
+        Option<PathBuf>,
         bool,
         bool,
     )>,
@@ -207,6 +208,7 @@ pub(super) struct GitInspection {
     pub limited: bool,
     pub copy: Option<Vec<u8>>,
     pub path: Option<PathBuf>,
+    pub historical_path: Option<PathBuf>,
     pub commit: Option<GitObjectId>,
     pub metadata: Option<HistoryEntry>,
     pub binary: bool,
@@ -935,10 +937,29 @@ impl MarkionApp {
         compare_current: bool,
         cx: &mut Context<Self>,
     ) {
+        self.inspect_git_with_historical(identity, commit, path, None, staged, compare_current, cx);
+    }
+
+    fn inspect_git_with_historical(
+        &mut self,
+        identity: RepositoryIdentity,
+        commit: Option<GitObjectId>,
+        path: Option<PathBuf>,
+        historical_path: Option<PathBuf>,
+        staged: bool,
+        compare_current: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.git_ui.inspection_generation = self.git_ui.inspection_generation.wrapping_add(1);
         if self.git_ui.inspection_loading {
-            self.git_ui.inspection_pending =
-                Some((identity, commit, path, staged, compare_current));
+            self.git_ui.inspection_pending = Some((
+                identity,
+                commit,
+                path,
+                historical_path,
+                staged,
+                compare_current,
+            ));
             return;
         }
         self.git_ui.inspection_loading = true;
@@ -985,14 +1006,23 @@ impl MarkionApp {
                     let content = match (&commit, &path) {
                         (Some(commit), Some(path)) if compare_current => {
                             let comparison = repository
-                                .working_diff_against(commit, path, PREVIEW_LIMIT)
+                                .working_diff_between(
+                                    commit,
+                                    historical_path.as_deref().unwrap_or(path),
+                                    path,
+                                    PREVIEW_LIMIT,
+                                )
                                 .map_err(|error| error.to_string())?;
                             binary = comparison.binary;
                             Some(comparison.content)
                         }
                         (Some(commit), Some(path)) => Some(
                             repository
-                                .commit_diff(commit, path, PREVIEW_LIMIT)
+                                .commit_diff(
+                                    commit,
+                                    historical_path.as_deref().unwrap_or(path),
+                                    PREVIEW_LIMIT,
+                                )
                                 .map_err(|error| error.to_string())?,
                         ),
                         (None, Some(path)) => Some(
@@ -1008,7 +1038,11 @@ impl MarkionApp {
                     };
                     let copy = match (&commit, &path) {
                         (Some(commit), Some(path)) => repository
-                            .historical_blob(commit, path, 2 * 1024 * 1024)
+                            .historical_blob(
+                                commit,
+                                historical_path.as_deref().unwrap_or(path),
+                                2 * 1024 * 1024,
+                            )
                             .ok()
                             .filter(|blob| !blob.truncated)
                             .map(|blob| blob.bytes),
@@ -1029,6 +1063,7 @@ impl MarkionApp {
                         limited,
                         copy,
                         path,
+                        historical_path,
                         commit,
                         metadata,
                         binary,
@@ -1040,10 +1075,18 @@ impl MarkionApp {
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.git_ui.inspection_loading = false;
-                if let Some((identity, commit, path, staged, compare_current)) =
+                if let Some((identity, commit, path, historical_path, staged, compare_current)) =
                     app.git_ui.inspection_pending.take()
                 {
-                    app.inspect_git(identity, commit, path, staged, compare_current, cx);
+                    app.inspect_git_with_historical(
+                        identity,
+                        commit,
+                        path,
+                        historical_path,
+                        staged,
+                        compare_current,
+                        cx,
+                    );
                     return;
                 }
                 if app.git_ui.inspection_generation != generation {
@@ -1912,6 +1955,7 @@ pub(super) fn panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl
             let path = (details.page == GitPage::FileHistory)
                 .then(|| details.history_path.clone())
                 .flatten();
+            let historical_path = commit.path.clone();
             history = history.child(button(
                 ("backup-sync-history", index),
                 format!(
@@ -1922,10 +1966,11 @@ pub(super) fn panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl
                 palette,
                 cx,
                 move |app, _, cx| {
-                    app.inspect_git(
+                    app.inspect_git_with_historical(
                         identity.clone(),
                         Some(oid.clone()),
                         path.clone(),
+                        historical_path.clone(),
                         false,
                         false,
                         cx,
@@ -3829,6 +3874,7 @@ pub(super) fn inspection_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
     let compare_identity = inspection.identity.clone();
     let compare_commit = inspection.commit.clone();
     let compare_path = inspection.path.clone();
+    let compare_historical_path = inspection.historical_path.clone();
     let restorable = inspection.copy.as_ref().is_some_and(|bytes| {
         !bytes.contains(&0)
             && std::str::from_utf8(bytes).is_ok()
@@ -3927,10 +3973,11 @@ pub(super) fn inspection_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                             palette,
                             cx,
                             move |app, _, cx| {
-                                app.inspect_git(
+                                app.inspect_git_with_historical(
                                     compare_identity.clone(),
                                     compare_commit.clone(),
                                     compare_path.clone(),
+                                    compare_historical_path.clone(),
                                     false,
                                     true,
                                     cx,

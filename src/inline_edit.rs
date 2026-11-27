@@ -231,7 +231,12 @@ fn serialize_target_impl(
     let title = compose_title(title, presentation);
     if let Some(title) = title.filter(|title| !title.is_empty()) {
         rendered.push_str(" \"");
-        rendered.push_str(&title.replace('\\', "\\\\").replace('"', "\\\""));
+        rendered.push_str(
+            &title
+                .replace('&', "&amp;")
+                .replace('\\', "\\\\")
+                .replace('"', "\\\""),
+        );
         rendered.push('"');
     }
     rendered.push(')');
@@ -649,6 +654,20 @@ mod tests {
             "..\\shared\\图片.png"
         );
         assert_eq!(unescape_markdown("a\\.b"), "a.b");
+    }
+
+    #[test]
+    fn image_titles_preserve_literal_entities_and_ampersands() {
+        for title in [
+            "Show &copy; in HTML",
+            "North & South",
+            "quote \" and \\ path",
+        ] {
+            let source = serialize_inline_image("Map", "old map.png", Some(title), None);
+            let target = inline_image_at(&source, 0).unwrap();
+            assert_eq!(target.title.as_deref(), Some(title), "{source}");
+            assert!(source.starts_with("![Map](<old map.png>"));
+        }
     }
 
     #[test]

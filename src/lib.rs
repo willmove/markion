@@ -212,8 +212,48 @@ pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
     destination_data_uri_fingerprint, elided_payload_token, format_byte_size,
     indented_code_display, indented_code_indent_unit, indented_code_line_indent,
-    task_checkbox_toggle, whitespace_collapses_separator, whitespace_visible_line_count,
+    task_checkbox_toggle, visual_word_selection_range, whitespace_collapses_separator,
+    whitespace_visible_line_count,
 };
+
+/// Parsed fenced-code text for Copy: trailing blank lines survive and the
+/// opening fence's leading-space margin is removed from every payload line.
+pub fn fenced_code_copy_text(text: &str, source_range: Range<usize>) -> Option<String> {
+    let (_, _, opening, closing) =
+        visual::fenced_payload_ranges(text, source_range.clone(), '`', '~', false)?;
+    let opening_line_start = text[..opening.start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let margin = text[opening_line_start..opening.start]
+        .bytes()
+        .take_while(|byte| *byte == b' ')
+        .count();
+    if opening_line_start + margin != opening.start {
+        return None;
+    }
+    let opening_end = text[opening.end..]
+        .find('\n')
+        .map(|index| opening.end + index + 1)
+        .unwrap_or(source_range.end);
+    let closing_line_start = if closing.is_empty() {
+        source_range.end
+    } else {
+        text[..closing.start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1)
+    };
+    let payload = text.get(opening_end..closing_line_start)?;
+    let mut code = String::with_capacity(payload.len());
+    for line in payload.split_inclusive('\n') {
+        let remove = line
+            .bytes()
+            .take(margin)
+            .take_while(|byte| *byte == b' ')
+            .count();
+        code.push_str(&line[remove..]);
+    }
+    Some(code)
+}
 
 /// A compiled find pattern shared by source-document and rendered-preview
 /// search. Compiling once keeps literal/regex, case sensitivity, Unicode and
@@ -867,6 +907,17 @@ impl OutlineHeadingDraft {
     }
 }
 
+pub(crate) fn markdown_body_and_offset(text: &str) -> (&str, usize) {
+    let bom_len = if text.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    split_front_matter(&text[bom_len..])
+        .map(|(_, body_start)| (&text[bom_len + body_start..], bom_len + body_start))
+        .unwrap_or((&text[bom_len..], bom_len))
+}
+
 impl MarkdownDocument {
     fn next_instance_id() -> DocumentInstanceId {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -1244,9 +1295,7 @@ impl MarkdownDocument {
     }
 
     fn body_text_and_offset(&self) -> (&str, usize) {
-        split_front_matter(&self.text)
-            .map(|(_, body_start)| (&self.text[body_start..], body_start))
-            .unwrap_or((&self.text, 0))
+        markdown_body_and_offset(&self.text)
     }
 
     /// Prepare an exact range edit against the current canonical source.
@@ -3204,6 +3253,30 @@ impl MarkdownDocument {
         output
     }
 
+    pub fn render_html_fragment_from_selection(&self, selection: &str) -> String {
+        let parser = Parser::new_ext(self.body_text(), markdown_options());
+        let mut spans = parser
+            .reference_definitions()
+            .iter()
+            .map(|(_, definition)| definition.span.clone())
+            .collect::<Vec<_>>();
+        spans.sort_by_key(|span| span.start);
+        spans.dedup();
+        let mut fragment = selection.to_string();
+        for span in spans {
+            let Some(definition) = self.body_text().get(span) else {
+                continue;
+            };
+            if !fragment.ends_with('\n') {
+                fragment.push('\n');
+            }
+            fragment.push('\n');
+            fragment.push_str(definition);
+            fragment.push('\n');
+        }
+        MarkdownDocument::from_text(fragment).render_html_fragment()
+    }
+
     pub fn render_html_document(&self) -> String {
         self.render_html_document_with_style(true)
     }
@@ -4082,9 +4155,7 @@ impl MarkdownDocument {
     }
 
     fn derive_preview_and_outline_inner(text: &str) -> (Vec<PreviewBlock>, Vec<Heading>) {
-        let (body, body_offset) = split_front_matter(text)
-            .map(|(_, body_start)| (&text[body_start..], body_start))
-            .unwrap_or((text, 0));
+        let (body, body_offset) = markdown_body_and_offset(text);
         let mut blocks = Vec::new();
         let mut headings: Vec<Heading> = Vec::new();
         let mut outline_current = None::<OutlineHeadingDraft>;
@@ -4853,6 +4924,8 @@ impl MarkdownDocument {
             }
         }
 
+        Self::recover_invalid_display_math(text, &mut blocks);
+
         // Blocks pushed at their End events arrive in event order, which for
         // container-nested constructs (a fenced code block inside a list item)
         // is the reverse of document order. A stable sort by source start
@@ -4865,6 +4938,39 @@ impl MarkdownDocument {
         uniquify_heading_anchors(&mut headings);
 
         (blocks, headings)
+    }
+
+    fn recover_invalid_display_math(text: &str, blocks: &mut [PreviewBlock]) {
+        for block in blocks {
+            if !matches!(block, PreviewBlock::Paragraph { .. }) {
+                continue;
+            }
+            let source_range = block.source_range().clone();
+            let Some(authored) = text.get(source_range.clone()) else {
+                continue;
+            };
+            let authored_without_tail = authored.trim_end_matches(['\r', '\n']);
+            let Some(payload) = authored_without_tail
+                .strip_prefix("$$\r\n")
+                .or_else(|| authored_without_tail.strip_prefix("$$\n"))
+            else {
+                continue;
+            };
+            let Some(latex) = payload
+                .strip_suffix("\r\n$$")
+                .or_else(|| payload.strip_suffix("\n$$"))
+            else {
+                continue;
+            };
+            *block = PreviewBlock::MathBlock {
+                latex: latex.to_string(),
+                authored: authored.to_string(),
+                delimiter: MathDelimiter::DisplayDollar,
+                error: validate_latex(latex).err(),
+                source_range,
+                list_depth: 0,
+            };
+        }
     }
 
     pub fn footnotes(&self) -> Vec<Footnote> {
@@ -8149,6 +8255,85 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_copy_preserves_blank_lines_and_removes_only_fence_margin() {
+        let trailing = "```text\none\n\n\n```";
+        let block = MarkdownDocument::from_text(trailing).preview_blocks()[0].clone();
+        assert_eq!(
+            fenced_code_copy_text(trailing, block.source_range().clone()).as_deref(),
+            Some("one\n\n\n")
+        );
+
+        let indented = "  ```text\n  one\n    two\n  three\n  ```";
+        let block = MarkdownDocument::from_text(indented).preview_blocks()[0].clone();
+        assert_eq!(
+            fenced_code_copy_text(indented, block.source_range().clone()).as_deref(),
+            Some("one\n  two\nthree\n")
+        );
+    }
+
+    #[test]
+    fn preview_preserves_nonbreaking_space_paragraphs_and_line_edges() {
+        let doc = MarkdownDocument::from_text("Before.\n\n&nbsp;\n\nAfter.");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(
+            &blocks[1],
+            PreviewBlock::Paragraph { text, .. } if text.text == "\u{a0}"
+        ));
+
+        let doc = MarkdownDocument::from_text("Office  \n&nbsp;&nbsp;Reception");
+        let PreviewBlock::Paragraph { text, .. } = &doc.preview_blocks()[0] else {
+            panic!("paragraph");
+        };
+        assert!(text.text.contains("\u{a0}\u{a0}Reception"));
+        assert!(doc.render_html_fragment().contains("\u{a0}\u{a0}Reception"));
+    }
+
+    #[test]
+    fn leading_utf8_bom_is_an_encoding_signature_not_markdown_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("signed.md");
+        fs::write(
+            &path,
+            "\u{feff}# Field notes\n\n## Route\n\nBody: ab\u{feff}cd",
+        )
+        .unwrap();
+        let mut document = MarkdownDocument::open(&path).unwrap();
+        assert!(matches!(
+            &document.preview_blocks()[0],
+            PreviewBlock::Heading { level: 1, text, .. } if text.text == "Field notes"
+        ));
+        assert_eq!(
+            document
+                .outline()
+                .iter()
+                .map(|heading| heading.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Field notes", "Route"]
+        );
+        assert!(
+            document
+                .visual_blocks()
+                .iter()
+                .any(|block| matches!(block.kind, VisualBlockKind::Heading { level: 1 }))
+        );
+        assert!(document.visual_blocks().iter().any(|block| {
+            matches!(block.kind, VisualBlockKind::Paragraph)
+                && block
+                    .editable_runs
+                    .iter()
+                    .any(|run| run.visible_text.contains('\u{feff}'))
+        }));
+
+        let end = document.text().len();
+        document.replace_range(end..end, "!");
+        document.force_save().unwrap();
+        let bytes = fs::read(&path).unwrap();
+        assert!(bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+        assert!(bytes.ends_with(b"ab\xef\xbb\xbfcd!"));
+    }
+
+    #[test]
     fn preview_marks_ordered_list_items() {
         let doc = MarkdownDocument::from_text("1. First\n2. Second");
 
@@ -11141,6 +11326,15 @@ Intro.
     }
 
     #[test]
+    fn math_validation_ignores_escaped_braces_but_rejects_real_imbalance() {
+        assert!(validate_latex(r"\left\{x\right.").is_ok());
+        assert!(validate_latex(r"\left\lbrace x\right.").is_ok());
+        assert!(validate_latex(r"x\}").is_ok());
+        assert!(validate_latex(r"x^{2").is_err());
+        assert!(validate_latex(r"x}").is_err());
+    }
+
+    #[test]
     fn display_math_inside_prose_remains_a_display_style_atom() {
         let source = "before $$\\sum_i x_i$$ after";
         let doc = MarkdownDocument::from_text(source);
@@ -11735,10 +11929,35 @@ Intro.
     #[test]
     fn export_to_markdown_writes_raw_text() {
         let dir = tempfile::tempdir().unwrap();
-        let doc = MarkdownDocument::from_text("# Hello\n\nbody text");
+        let original = dir.path().join("original.md");
+        fs::write(&original, "# Hello\n\nbody text").unwrap();
+        let mut doc = MarkdownDocument::open(&original).unwrap();
+        let end = doc.text().len();
+        doc.replace_range(end..end, " café");
+        assert!(doc.is_dirty());
         let path = dir.path().join("out.md");
         doc.export_to(&path, ExportFormat::Markdown).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "# Hello\n\nbody text");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# Hello\n\nbody text café"
+        );
+        assert_eq!(doc.path(), Some(original.as_path()));
+        assert!(doc.is_dirty());
+        assert_eq!(
+            fs::read_to_string(original).unwrap(),
+            "# Hello\n\nbody text"
+        );
+    }
+
+    #[test]
+    fn html_selection_resolves_original_reference_definitions() {
+        let doc = MarkdownDocument::from_text(
+            "[Guide][g]\n\nOther paragraph.\n\n[g]: guide.md\n[unused]: https://example.com",
+        );
+        let html = doc.render_html_fragment_from_selection("[Guide][g]");
+        assert!(html.contains("<a href=\"guide.md\">Guide</a>"));
+        assert!(!html.contains("Other paragraph"));
+        assert!(!html.contains("unused"));
     }
 
     #[test]

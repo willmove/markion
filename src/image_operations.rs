@@ -675,9 +675,24 @@ impl ImageOccurrence {
                     .destination_range
                     .clone()
                     .expect("inline occurrences have an attributed destination");
+                let expected = self.expected_destination_source();
+                let relative = range.start.saturating_sub(self.full_range.start)
+                    ..range.end.saturating_sub(self.full_range.start);
+                let wrapped = relative.start > 0
+                    && relative.end < self.expected_source.len()
+                    && self.expected_source.as_bytes()[relative.start - 1] == b'<'
+                    && self.expected_source.as_bytes()[relative.end] == b'>';
                 ImageSourceReplacement {
-                    expected_source: self.expected_destination_source(),
-                    range,
+                    expected_source: if wrapped {
+                        format!("<{expected}>")
+                    } else {
+                        expected
+                    },
+                    range: if wrapped {
+                        range.start.saturating_sub(1)..range.end.saturating_add(1)
+                    } else {
+                        range
+                    },
                     replacement: inline_edit::escape_destination(url),
                 }
             }
@@ -1504,6 +1519,27 @@ mod tests {
             },
         ));
         assert!(!controller.operation(id).unwrap().auto_apply_allowed);
+    }
+
+    #[test]
+    fn inline_image_replacement_keeps_exactly_one_destination_wrapper() {
+        for source in [
+            "![Map](<old map.png> \"Keep {width=50 align=right}\")",
+            "![Map](old%20map.png \"Keep\")",
+        ] {
+            let mut document = MarkdownDocument::from_text(source);
+            let image = document.image_occurrence_scan().occurrences.remove(0);
+            let edit = image.replacement("new map.png");
+            assert_eq!(document.text()[edit.range.clone()], edit.expected_source);
+            document.replace_range(edit.range, &edit.replacement);
+            assert!(
+                document.text().contains("<new map.png>"),
+                "{}",
+                document.text()
+            );
+            assert!(!document.text().contains("<<"));
+            assert!(document.text().contains("Keep"));
+        }
     }
 
     #[test]

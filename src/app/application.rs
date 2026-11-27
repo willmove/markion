@@ -2303,6 +2303,9 @@ impl MarkionApp {
             match found {
                 SearchTarget::Source(found) => {
                     self.reveal_visual_code_at(found.range.start);
+                    if !found.range.is_empty() {
+                        self.reveal_visual_code_at(found.range.end - 1);
+                    }
                     let tab = self.active_tab_mut();
                     tab.structured_selection = None;
                     tab.cell_drag_anchor = None;
@@ -2318,16 +2321,18 @@ impl MarkionApp {
                     match self.rendered_view_mode() {
                         ViewMode::VisualEdit => {
                             let blocks = self.active_tab().document.visual_blocks_shared();
+                            let active_end =
+                                found.range.end.saturating_sub(1).max(found.range.start);
                             if let Some(item_ix) = visual_block_index_for_offset(
                                 &blocks,
-                                found.range.start,
+                                active_end,
                                 self.active_tab().document.text().len(),
                             ) {
                                 self.active_tab().visual_list.scroll_to_reveal_item(item_ix);
                             }
                         }
                         ViewMode::Edit | ViewMode::Split => {
-                            self.scroll_editor_to_offset(found.range.start);
+                            self.scroll_editor_to_offset(found.range.end);
                         }
                         ViewMode::Read => {}
                     }
@@ -2342,9 +2347,15 @@ impl MarkionApp {
                     );
                 }
                 SearchTarget::ReadPreview(found) => {
-                    self.active_tab()
-                        .preview_list
-                        .scroll_to_reveal_item(found.block_index);
+                    let list = &self.active_tab().preview_list;
+                    if list.bounds_for_item(found.block_index).is_none() {
+                        list.scroll_to(gpui::ListOffset {
+                            item_ix: found.block_index,
+                            offset_in_item: px(0.),
+                        });
+                    } else {
+                        list.scroll_to_reveal_item(found.block_index);
+                    }
                     self.status = self.trf(
                         Msg::StatusMatches,
                         &[&self.search_matches.len().to_string()],
@@ -2711,8 +2722,8 @@ impl MarkionApp {
     }
 
     /// Open one snapshot path for restore/switch. Reuses an already-open tab.
-    /// When `replaced_initial` is false and the active tab is clean, may replace
-    /// it in place for the first document; images always append unless reused.
+    /// Only the first previously absent path may replace a clean active tab;
+    /// that opportunity is consumed even when a dirty tab must be retained.
     pub(super) fn open_restored_snapshot_path(
         &mut self,
         path: PathBuf,
@@ -2723,10 +2734,12 @@ impl MarkionApp {
             return Ok(());
         }
 
+        let replace_initial = !*replaced_initial;
+        *replaced_initial = true;
+
         if image_extension_supported(&path) {
-            if !*replaced_initial && self.active_tab().is_safe_to_replace() {
+            if replace_initial && self.active_tab().is_safe_to_replace() {
                 self.replace_active_tab_with_image(path, cx);
-                *replaced_initial = true;
             } else {
                 self.open_image_in_new_tab(path, cx);
             }
@@ -2735,12 +2748,8 @@ impl MarkionApp {
 
         if is_openable_text_path(&path) {
             let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
-            if !*replaced_initial
-                && !self.active_tab().is_dirty()
-                && self.active_tab().is_document()
-            {
+            if replace_initial && !self.active_tab().is_dirty() && self.active_tab().is_document() {
                 self.replace_active_tab(document, cx);
-                *replaced_initial = true;
             } else {
                 self.open_in_new_tab(document, cx);
             }
@@ -2798,6 +2807,7 @@ impl MarkionApp {
         } else if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         }
+        self.set_workspace_root(root.clone(), cx);
 
         let surviving: Vec<PathBuf> = snapshot
             .open_files
@@ -2869,7 +2879,6 @@ impl MarkionApp {
             }
         }
 
-        self.set_workspace_root(root.clone(), cx);
         self.schedule_file_tree_scan(Some(display_path.clone()), cx);
         self.sidebar_visible = true;
         self.sidebar_tab = SidebarTab::Files;
@@ -3152,7 +3161,7 @@ impl MarkionApp {
 
     /// Delete the selection (or the char before the caret) in the inline name
     /// editor. When an IME composition is active it is removed instead.
-    fn pop_name_text(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn pop_name_text(&mut self, cx: &mut Context<Self>) {
         let marked = self.input_marked_len;
         let Some(pending) = self.pending_name_input.as_mut() else {
             return;

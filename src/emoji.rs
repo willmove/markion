@@ -126,9 +126,23 @@ pub fn emoji_query_at(source: &str, cursor: usize, document_version: u64) -> Opt
     if query.contains(['\r', '\n']) || query.chars().any(|ch| !is_shortcode_char(ch)) {
         return None;
     }
+    let suffix_name_len = source[cursor..]
+        .char_indices()
+        .take_while(|(_, ch)| is_shortcode_char(*ch))
+        .map(|(index, ch)| index + ch.len_utf8())
+        .last()
+        .unwrap_or(0);
+    let suffix_end = cursor + suffix_name_len;
+    let source_end = if source[suffix_end..].starts_with(':')
+        && emoji_for_shortcode(&source[colon + 1..suffix_end]).is_some()
+    {
+        suffix_end + 1
+    } else {
+        cursor
+    };
     Some(EmojiQuery {
         document_version,
-        source_range: colon..cursor,
+        source_range: colon..source_end,
         query: query.to_string(),
     })
 }
@@ -245,6 +259,18 @@ mod tests {
         assert!(emoji_query_at("https://example.com", 8, 1).is_none());
         assert!(emoji_query_at("foo:bar", 4, 1).is_none());
         assert!(emoji_query_at("a:smi", 5, 1).is_none());
+    }
+
+    #[test]
+    fn query_covers_an_existing_recognized_shortcode_suffix() {
+        for (source, cursor, expected) in [
+            (":smile:", 6, 0..7),
+            (":smile:", 4, 0..7),
+            (":roc: :", 4, 0..4),
+        ] {
+            let query = emoji_query_at(source, cursor, 1).unwrap();
+            assert_eq!(query.source_range, expected, "{source:?} at {cursor}");
+        }
     }
 
     #[test]

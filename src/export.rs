@@ -1043,7 +1043,7 @@ pub(crate) fn build_docx_bytes(
         ),
         (
             "word/numbering.xml".to_string(),
-            docx_numbering_xml(rendered.ordered_groups).into_bytes(),
+            docx_numbering_xml(&rendered.ordered_groups).into_bytes(),
         ),
         (
             "word/settings.xml".to_string(),
@@ -1171,7 +1171,7 @@ fn docx_document_relationships(rendered: &DocxRenderResult) -> String {
 struct DocxRenderResult {
     document_xml: String,
     links: Vec<String>,
-    ordered_groups: u32,
+    ordered_groups: Vec<DocxOrderedGroup>,
     images: Vec<DocxImage>,
     footnotes_xml: Option<String>,
 }
@@ -1201,12 +1201,18 @@ struct DocxImage {
 /// Mutable state for the `word/document.xml` render pass: accumulates body
 /// XML, the deduplicated external hyperlink targets, ordered-list grouping so
 /// each contiguous ordered list gets a fresh numbering instance, embedded
+#[derive(Clone)]
+struct DocxOrderedGroup {
+    starts: [u64; 9],
+    seen_levels: [bool; 9],
+}
+
 /// images, and footnote definitions collected in a pre-pass.
 struct DocxRenderState {
     body: String,
     links: Vec<String>,
     ordered_group: Option<u32>,
-    ordered_group_count: u32,
+    ordered_groups: Vec<DocxOrderedGroup>,
     base_dir: Option<PathBuf>,
     images: Vec<DocxImage>,
     /// Remote (`http(s)`) image bytes prefetched by the export flow, keyed by
@@ -1229,7 +1235,7 @@ impl Default for DocxRenderState {
             body: String::new(),
             links: Vec::new(),
             ordered_group: None,
-            ordered_group_count: 0,
+            ordered_groups: Vec::new(),
             base_dir: None,
             images: Vec::new(),
             remote_images: HashMap::new(),
@@ -1332,13 +1338,22 @@ impl DocxRenderState {
         self.ordered_group = None;
     }
 
-    fn ordered_num_id(&mut self) -> u32 {
-        if let Some(num_id) = self.ordered_group {
-            return num_id;
+    fn ordered_num_id(&mut self, level: usize, start: Option<u64>) -> u32 {
+        let num_id = self.ordered_group.unwrap_or_else(|| {
+            let num_id = DOCX_FIRST_ORDERED_NUM_ID + self.ordered_groups.len() as u32;
+            self.ordered_groups.push(DocxOrderedGroup {
+                starts: [1; 9],
+                seen_levels: [false; 9],
+            });
+            self.ordered_group = Some(num_id);
+            num_id
+        });
+        let group = &mut self.ordered_groups[(num_id - DOCX_FIRST_ORDERED_NUM_ID) as usize];
+        let level = level.min(8);
+        if !group.seen_levels[level] {
+            group.starts[level] = start.unwrap_or(1).max(1);
+            group.seen_levels[level] = true;
         }
-        self.ordered_group_count += 1;
-        let num_id = DOCX_FIRST_ORDERED_NUM_ID + self.ordered_group_count - 1;
-        self.ordered_group = Some(num_id);
         num_id
     }
 
@@ -1550,7 +1565,7 @@ fn render_docx_document_xml(
     DocxRenderResult {
         document_xml,
         links: std::mem::take(&mut state.links),
-        ordered_groups: state.ordered_group_count,
+        ordered_groups: std::mem::take(&mut state.ordered_groups),
         images: std::mem::take(&mut state.images),
         footnotes_xml,
     }
@@ -1566,6 +1581,7 @@ fn render_docx_list_item(
     style: Option<&str>,
     level: usize,
     ordered: bool,
+    index: Option<u64>,
     checked: Option<bool>,
     text: &RichText,
 ) {
@@ -1573,19 +1589,23 @@ fn render_docx_list_item(
     let ilvl = level.saturating_sub(1).min(8) as u32;
     match checked {
         Some(done) => {
-            state.end_list_group();
+            if ilvl == 0 {
+                state.end_list_group();
+            }
             let prefix = if done { "[x] " } else { "[ ] " };
             let mut runs = docx_plain_runs(prefix);
             runs.push_str(&state.rich_runs(text));
             state.push_paragraph(style, None, Some(720 * (ilvl + 1)), &runs);
         }
         None if ordered => {
-            let num_id = state.ordered_num_id();
+            let num_id = state.ordered_num_id(ilvl as usize, index);
             let runs = state.rich_runs(text);
             state.push_paragraph(style, Some((ilvl, num_id)), None, &runs);
         }
         None => {
-            state.end_list_group();
+            if ilvl == 0 {
+                state.end_list_group();
+            }
             let runs = state.rich_runs(text);
             state.push_paragraph(style, Some((ilvl, DOCX_BULLET_NUM_ID)), None, &runs);
         }
@@ -1618,11 +1638,12 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
         PreviewBlock::ListItem {
             level,
             ordered,
+            index,
             checked,
             text,
             ..
         } => {
-            render_docx_list_item(state, None, *level, *ordered, *checked, text);
+            render_docx_list_item(state, None, *level, *ordered, *index, *checked, text);
         }
         PreviewBlock::BlockQuote {
             children,
@@ -1640,6 +1661,7 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
                     PreviewBlock::ListItem {
                         level,
                         ordered,
+                        index,
                         checked,
                         text,
                         ..
@@ -1649,6 +1671,7 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
                             Some("Quote"),
                             *level,
                             *ordered,
+                            *index,
                             *checked,
                             text,
                         );
@@ -1897,11 +1920,12 @@ fn render_docx_alert(
             PreviewBlock::ListItem {
                 level,
                 ordered,
+                index,
                 checked,
                 text,
                 ..
             } => {
-                render_docx_list_item(state, None, *level, *ordered, *checked, text);
+                render_docx_list_item(state, None, *level, *ordered, *index, *checked, text);
             }
             PreviewBlock::Table { .. } => render_docx_block(state, child),
             other => {
@@ -2039,18 +2063,18 @@ fn docx_drawing_run(
 }
 
 /// Builds `word/numbering.xml`: one shared bullet abstract definition plus a
-/// fresh decimal abstract/concrete pair per contiguous ordered-list group, so
-/// each ordered list restarts numbering.
-fn docx_numbering_xml(ordered_groups: u32) -> String {
+/// fresh decimal abstract/concrete pair per contiguous ordered-list group, with
+/// each used level retaining the group's resolved starting number.
+fn docx_numbering_xml(ordered_groups: &[DocxOrderedGroup]) -> String {
     let mut abstract_nums = docx_bullet_abstract_num(0);
     let mut nums =
         format!("<w:num w:numId=\"{DOCX_BULLET_NUM_ID}\"><w:abstractNumId w:val=\"0\"/></w:num>");
-    for group in 0..ordered_groups {
-        let abstract_id = group + 1;
-        abstract_nums.push_str(&docx_decimal_abstract_num(abstract_id));
+    for (group_index, group) in ordered_groups.iter().enumerate() {
+        let abstract_id = group_index as u32 + 1;
+        abstract_nums.push_str(&docx_decimal_abstract_num(abstract_id, &group.starts));
         nums.push_str(&format!(
             "<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"{abstract_id}\"/></w:num>",
-            DOCX_FIRST_ORDERED_NUM_ID + group
+            DOCX_FIRST_ORDERED_NUM_ID + group_index as u32
         ));
     }
     format!(
@@ -2071,13 +2095,14 @@ fn docx_bullet_abstract_num(id: u32) -> String {
     format!("<w:abstractNum w:abstractNumId=\"{id}\">{levels}</w:abstractNum>")
 }
 
-fn docx_decimal_abstract_num(id: u32) -> String {
+fn docx_decimal_abstract_num(id: u32, starts: &[u64; 9]) -> String {
     let mut levels = String::new();
     for ilvl in 0..9u32 {
         let left = 720 * (ilvl + 1);
         let text = format!("%{}.", ilvl + 1);
+        let start = starts[ilvl as usize];
         levels.push_str(&format!(
-            "<w:lvl w:ilvl=\"{ilvl}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"{text}\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"{left}\" w:hanging=\"360\"/></w:pPr></w:lvl>"
+            "<w:lvl w:ilvl=\"{ilvl}\"><w:start w:val=\"{start}\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"{text}\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"{left}\" w:hanging=\"360\"/></w:pPr></w:lvl>"
         ));
     }
     format!("<w:abstractNum w:abstractNumId=\"{id}\">{levels}</w:abstractNum>")
@@ -2985,6 +3010,49 @@ mod tests {
         assert!(document_xml.contains("<w:numId w:val=\"3\"/>"));
         assert!(numbering.contains("<w:abstractNum w:abstractNumId=\"1\">"));
         assert!(numbering.contains("<w:abstractNum w:abstractNumId=\"2\">"));
+    }
+
+    #[test]
+    fn ordered_lists_preserve_start_at_top_level_and_nested_levels() {
+        for source in [
+            "5. Add water\n6. Start cooking\n",
+            "1. Main\n\nprose\n\n5. Add water\n6. Start cooking\n",
+            "1. Outer\n\n    5. Nested\n\n2. Next\n",
+        ] {
+            let document = MarkdownDocument::from_text(source);
+            if source.starts_with("1. Outer") {
+                let items = document
+                    .preview_blocks()
+                    .iter()
+                    .filter_map(|block| match block {
+                        PreviewBlock::ListItem { level, index, .. } => Some((*level, *index)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(items, [(1, Some(1)), (2, Some(5)), (1, Some(2))]);
+            }
+            let numbering = entry(&docx_parts(&document), "word/numbering.xml");
+            if source.starts_with('5') {
+                assert!(numbering.contains("<w:lvl w:ilvl=\"0\"><w:start w:val=\"5\"/>"));
+            }
+            if source.starts_with("1. Main") {
+                assert!(numbering.contains("<w:lvl w:ilvl=\"0\"><w:start w:val=\"5\"/>"));
+            }
+            if source.starts_with("1. Outer") {
+                assert!(numbering.contains("<w:lvl w:ilvl=\"1\"><w:start w:val=\"5\"/>"));
+                assert!(numbering.contains("<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/>"));
+            }
+        }
+    }
+
+    #[test]
+    fn nested_bullet_does_not_split_enclosing_ordered_group() {
+        let document = MarkdownDocument::from_text(
+            "1. Fill pan\n   - Cover with lid\n2. Simmer rice\n3. Serve rice\n",
+        );
+        let document_xml = entry(&docx_parts(&document), "word/document.xml");
+        assert_eq!(document_xml.matches("<w:numId w:val=\"2\"/>").count(), 3);
+        assert!(document_xml.contains("<w:ilvl w:val=\"1\"/><w:numId w:val=\"1\"/>"));
     }
 
     #[test]

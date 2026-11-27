@@ -1336,7 +1336,11 @@ impl Element for VisualEditableText {
                         .read(cx)
                         .visual_block_text_range_at(block_index, source);
                 } else if event.click_count == 2 && !event.modifiers.shift {
-                    block_click_selection = projection.word_selection_range(visible);
+                    block_click_selection = {
+                        let app = entity.read(cx);
+                        let block = &app.active_tab().visual_list_blocks[block_index];
+                        markion::visual_word_selection_range(&projection, block, visible)
+                    };
                 }
                 let candidates = projection.boundary_candidates(visible);
                 let affinity =
@@ -5026,9 +5030,23 @@ fn visual_block_content_view(
                 .relative()
                 .w(gpui::relative(display_percent as f32 / 100.))
                 .max_w_full()
-                .on_drag_move::<DraggedImageResizeHandle>(
-                    cx.listener(MarkionApp::on_visual_image_resize_drag_move),
-                )
+                .on_drag_move::<DraggedImageResizeHandle>(cx.listener(
+                    move |app, event: &DragMoveEvent<DraggedImageResizeHandle>, window, cx| {
+                        if event.drag(cx).offset == offset {
+                            app.on_visual_image_resize_drag_move(event, window, cx);
+                        }
+                    },
+                ))
+                .on_drop::<DraggedImageResizeHandle>(cx.listener(move |app, _, _, cx| {
+                    if app
+                        .active_tab()
+                        .visual_image_resize_drag
+                        .as_ref()
+                        .is_some_and(|drag| drag.offset == offset)
+                    {
+                        app.commit_visual_image_resize_drag(cx);
+                    }
+                }))
                 .child(preview_image_view(
                     app,
                     url,
@@ -6523,6 +6541,13 @@ fn visual_table_cell_element(
             cx,
         );
     }
+    let source_projection = table_cell_rendered_projection(
+        app.active_tab().document.text(),
+        rich,
+        field,
+        &app.active_tab().visual_list_blocks[block_index].editable_runs,
+    )
+    .map(|(projection, _)| projection);
     let metrics = (
         typography.table_font_size,
         typography.text_line_height(typography.table_font_size),
@@ -6573,11 +6598,16 @@ fn visual_table_cell_element(
             let content = piece.strip_suffix('\n').unwrap_or(piece);
             let content_range = piece_start..piece_start + content.len();
             for (range, can_wrap_after) in breaks.fragments(content_range) {
+                let fragment_source = table_fragment_source_range(
+                    source_projection.as_ref(),
+                    range.clone(),
+                    field.source_range.clone(),
+                );
                 let child = visual_projection_fragment(
                     block_index,
                     index,
                     rich.text[range].to_string(),
-                    field.source_range.clone(),
+                    fragment_source,
                     visual_highlight_style(span.style, span.link.is_some()),
                     &mut None,
                     true,
@@ -6868,7 +6898,29 @@ pub(super) fn visual_table_editing_projection(
 /// Pair the table's preview styles with the exact source runs already derived
 /// for Visual Edit. Preview trims each hard-break line, so trim the runs at
 /// those same edges before checking the projection against the rendered text.
-fn table_cell_rendered_projection(
+pub(super) fn table_fragment_source_range(
+    projection: Option<&VisualProjection>,
+    range: Range<usize>,
+    fallback: Range<usize>,
+) -> Range<usize> {
+    projection
+        .and_then(|projection| {
+            projection.segments.iter().find(|segment| {
+                segment.display_range.start <= range.start && range.end <= segment.display_range.end
+            })
+        })
+        .map(|segment| {
+            if segment.atomic {
+                segment.source_range.clone()
+            } else {
+                let start = segment.source_range.start + range.start - segment.display_range.start;
+                start..start + range.len()
+            }
+        })
+        .unwrap_or(fallback)
+}
+
+pub(super) fn table_cell_rendered_projection(
     source: &str,
     rich: &RichText,
     field: &VisualEditorField,
@@ -7202,7 +7254,13 @@ fn visual_code_editor(
         .child(code_block_header_with_language(
             app,
             language,
-            code.to_string(),
+            markion::fenced_code_copy_text(
+                app.active_tab().document.text(),
+                app.active_tab().visual_list_blocks[block_index]
+                    .source_range
+                    .clone(),
+            )
+            .unwrap_or_else(|| code.to_string()),
             palette,
             label,
             (!indented).then(|| {
@@ -7525,7 +7583,11 @@ fn visual_diagram_editor(
             .child(code_block_header_with_language(
                 app,
                 language,
-                code,
+                markion::fenced_code_copy_text(
+                    app.active_tab().document.text(),
+                    block.source_range.clone(),
+                )
+                .unwrap_or(code),
                 code_palette(app.code_theme),
                 // The header only exists inside the payload editor, which is
                 // mounted when the user expanded the source — so the language
@@ -8981,9 +9043,8 @@ active_text = "#1e3a8a"
 }
 
 /// Small "Copy" button rendered in the header of every code block. Clicking it
-/// writes the block's raw text to the clipboard in one step, so users no longer
-/// have to select the code manually. Works in preview, split, read, and Visual
-/// Edit modes.
+/// writes the parsed code payload to the clipboard in one step, preserving
+/// intentional whitespace without requiring manual selection.
 fn code_copy_button(
     app: &MarkionApp,
     code: String,
@@ -9201,6 +9262,7 @@ fn code_block_view(
     app: &MarkionApp,
     language: &Option<String>,
     code: &str,
+    source_range: &Range<usize>,
     block_index: usize,
     show_code_line_numbers: bool,
     code_theme: CodeTheme,
@@ -9223,7 +9285,8 @@ fn code_block_view(
         .child(code_block_header(
             app,
             language.as_deref(),
-            code.to_string(),
+            markion::fenced_code_copy_text(app.active_tab().document.text(), source_range.clone())
+                .unwrap_or_else(|| code.to_string()),
             palette,
             format_target,
             cx,
@@ -9956,6 +10019,7 @@ pub(super) fn preview_block_view(
                         app,
                         language,
                         code,
+                        source_range,
                         block_index,
                         show_code_line_numbers,
                         code_theme,
@@ -9980,6 +10044,7 @@ pub(super) fn preview_block_view(
                         app,
                         language,
                         code,
+                        source_range,
                         block_index,
                         show_code_line_numbers,
                         code_theme,
@@ -9991,6 +10056,7 @@ pub(super) fn preview_block_view(
                     app,
                     language,
                     code,
+                    source_range,
                     block_index,
                     show_code_line_numbers,
                     code_theme,

@@ -406,3 +406,59 @@ fn visual_caret_follow_frames_expire_without_an_idle_redraw_loop(cx: &mut TestAp
         assert!(app.active_tab().typewriter_recenter.is_none());
     });
 }
+
+#[gpui::test]
+fn visual_page_navigation_carries_deferred_page_distance(cx: &mut TestAppContext) {
+    let source = (1..=96)
+        .map(|row| format!("- Row {row:03} cedar"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (app, cx) = visual_test_app(cx, &source, 2);
+    cx.simulate_resize(size(px(900.), px(430.)));
+    cx.run_until_parked();
+
+    for _ in 0..8 {
+        cx.dispatch_action(PageDown);
+        cx.run_until_parked();
+    }
+    let after_down = app.update(cx, |app, _| {
+        assert!(app.active_tab().pending_visual_navigation.is_none());
+        app.cursor_offset()
+    });
+    let row = source[..after_down]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    assert!(
+        row >= 70,
+        "eight pages should reach near the document end, got row {row}"
+    );
+
+    cx.dispatch_action(PageUp);
+    cx.run_until_parked();
+    let after_up = app.update(cx, |app, _| app.cursor_offset());
+    assert!(after_up < after_down);
+    let up_row = source[..after_up]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    assert!(up_row + 8 <= row);
+
+    cx.dispatch_action(SelectPageDown);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.selected_range.start < tab.selected_range.end);
+        assert!(
+            tab.selected_range.end
+                > after_up
+                    + source[after_up..]
+                        .lines()
+                        .take(8)
+                        .map(str::len)
+                        .sum::<usize>()
+        );
+    });
+}

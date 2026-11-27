@@ -162,10 +162,15 @@ pub fn previous_word_boundary(text: &str, offset: usize) -> usize {
     if offset == line_start && offset > 0 {
         return previous_word_boundary(text, offset - 1);
     }
+    let line_end = logical_line_end(text, offset);
     let mut previous = line_start;
-    for (index, segment) in text[line_start..offset].split_word_bound_indices() {
+    for (index, segment) in text[line_start..line_end].split_word_bound_indices() {
+        let start = line_start + index;
+        if start >= offset {
+            break;
+        }
         if !segment.trim().is_empty() {
-            previous = line_start + index;
+            previous = start;
         }
     }
     previous
@@ -297,6 +302,24 @@ mod tests {
         );
         assert!(text.is_char_boundary(next_word_boundary(text, text.len() - 1)));
         assert!(text.is_char_boundary(previous_word_boundary(text, text.len())));
+    }
+
+    #[test]
+    fn backward_word_navigation_uses_suffix_context() {
+        for text in ["can't wait", "can’t wait"] {
+            let caret = text.find('t').unwrap();
+            assert_eq!(previous_word_boundary(text, caret), 0);
+            let after = text.find(" wait").unwrap();
+            assert_eq!(previous_word_boundary(text, after), 0);
+        }
+        let decimal = "3.14 next";
+        assert_eq!(previous_word_boundary(decimal, 2), 0);
+        assert_eq!(previous_word_boundary(decimal, 5), 0);
+
+        let separated = "can ' t";
+        assert_eq!(previous_word_boundary(separated, 5), 4);
+        let sentence = "May. Next";
+        assert_eq!(previous_word_boundary(sentence, 4), 3);
     }
 
     #[test]

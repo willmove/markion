@@ -20,7 +20,16 @@ pub fn validate_latex(latex: &str) -> Result<(), String> {
     }
 
     let mut braces = Vec::new();
+    let mut escaped = false;
     for (index, ch) in latex.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
         match ch {
             '{' => braces.push(index),
             '}' if braces.pop().is_none() => {

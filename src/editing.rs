@@ -227,7 +227,7 @@ pub(crate) fn ordered_list_marker(rest: &str) -> Option<String> {
         return None;
     }
     let after_delimiter = &rest[digit_end + delimiter.len_utf8()..];
-    if !after_delimiter.starts_with(' ') {
+    if !after_delimiter.starts_with([' ', '\t']) {
         return None;
     }
     let body = &after_delimiter[1..];

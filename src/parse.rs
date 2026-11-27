@@ -760,7 +760,7 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>, parse_extended: bool) -> RichTe
     let mut emitted_line = false;
     for mut line in lines {
         while let Some(first) = line.first_mut() {
-            let trimmed = first.text.trim_start();
+            let trimmed = first.text.trim_start_matches([' ', '\t', '\r']);
             if trimmed.is_empty() && first.image.is_none() {
                 line.remove(0);
             } else {
@@ -771,7 +771,7 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>, parse_extended: bool) -> RichTe
             }
         }
         while let Some(last) = line.last_mut() {
-            let trimmed = last.text.trim_end();
+            let trimmed = last.text.trim_end_matches([' ', '\t', '\r']);
             if trimmed.is_empty() && last.image.is_none() {
                 line.pop();
             } else {
@@ -1202,7 +1202,7 @@ pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: Preview
 pub(crate) fn clean_preview_text(text: &str) -> String {
     let text = text
         .lines()
-        .map(str::trim)
+        .map(|line| line.trim_matches([' ', '\t', '\r']))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");

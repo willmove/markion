@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, LinkType, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
 use crate::frontmatter::{parse_front_matter, split_front_matter};
 use crate::model::{
@@ -17,34 +17,29 @@ use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fe
 use crate::table::{TableSource, table_cell_source_ranges};
 use crate::text_util::char_run_range;
 
-/// Collects the document's link reference definition lines so that per-block
-/// parsing in `inline_runs` can resolve reference-style links whose
-/// definitions live in other blocks. Lines inside fenced code blocks are
-/// skipped (they are code, not definitions), and footnote definitions
-/// (`[^label]:`) are excluded — `^` cannot start a link label, and keeping
-/// them out guarantees the appended suffix produces no parser events of its
-/// own interest to block mapping.
+/// Collects complete source spans for definitions accepted by the document
+/// parser, excluding lookalike lines embedded in paragraphs or code blocks.
 fn collect_link_reference_definitions(text: &str) -> String {
+    let parser = Parser::new_ext(text, visual_markdown_options());
+    let mut spans = parser
+        .reference_definitions()
+        .iter()
+        .map(|(_, definition)| definition.span.clone())
+        .collect::<Vec<_>>();
+    spans.sort_by_key(|span| span.start);
+    spans.dedup();
     let mut definitions = String::new();
-    let mut fence: Option<(char, usize)> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if let Some((marker, minimum)) = fence {
-            if is_closing_fence(trimmed, marker, minimum) {
-                fence = None;
-            }
+    for span in spans {
+        let line_start = text[..span.start].rfind('\n').map_or(0, |index| index + 1);
+        let indentation = text[line_start..span.start]
+            .bytes()
+            .take_while(|byte| *byte == b' ')
+            .count();
+        if indentation > 3 {
             continue;
         }
-        if let Some(open) = opening_fence(trimmed) {
-            fence = Some(open);
-            continue;
-        }
-        // Link reference definitions allow at most three leading spaces.
-        if line.len() - trimmed.len() <= 3
-            && !trimmed.starts_with("[^")
-            && is_reference_definition(trimmed)
-        {
-            definitions.push_str(trimmed);
+        if let Some(definition) = text.get(span) {
+            definitions.push_str(definition);
             definitions.push('\n');
         }
     }
@@ -290,6 +285,95 @@ impl VisualProjection {
             atom_start.unwrap_or_else(|| self.boundary_candidates(run.start).downstream_source);
         let end = atom_end.unwrap_or_else(|| self.boundary_candidates(run.end).upstream_source);
         (start < end).then_some(start..end)
+    }
+}
+
+pub fn visual_word_selection_range(
+    projection: &VisualProjection,
+    block: &VisualBlock,
+    display: usize,
+) -> Option<Range<usize>> {
+    let direct = projection.word_selection_range(display);
+    if projection.revealed_source_ranges.is_empty()
+        || projection
+            .atomic_display_range_containing(display)
+            .is_some()
+    {
+        return direct;
+    }
+    let candidates = projection.boundary_candidates(display);
+    let revealed = projection.revealed_source_ranges.iter().find(|range| {
+        range.contains(&candidates.downstream_source)
+            || range.contains(&candidates.upstream_source)
+            || direct
+                .as_ref()
+                .is_some_and(|direct| range.contains(&direct.start) || range.contains(&direct.end))
+    })?;
+    let mut visible = String::new();
+    let mut runs = Vec::new();
+    for run in &block.editable_runs {
+        if run.visible_text.is_empty() {
+            continue;
+        }
+        let display_range = visible.len()..visible.len() + run.visible_text.len();
+        visible.push_str(&run.visible_text);
+        runs.push((display_range, run));
+    }
+    if runs.is_empty() {
+        return direct;
+    }
+    let source = candidates.downstream_source;
+    let target = runs
+        .iter()
+        .filter(|(_, run)| {
+            run.content_range.start >= revealed.start && run.content_range.end <= revealed.end
+        })
+        .min_by_key(|(_, run)| {
+            if source < run.content_range.start {
+                run.content_range.start - source
+            } else {
+                source.saturating_sub(run.content_range.end)
+            }
+        })
+        .or_else(|| {
+            runs.iter().min_by_key(|(_, run)| {
+                if source < run.content_range.start {
+                    run.content_range.start - source
+                } else {
+                    source.saturating_sub(run.content_range.end)
+                }
+            })
+        })?;
+    let target_display = target.0.start
+        + source
+            .saturating_sub(target.1.content_range.start)
+            .min(target.0.len());
+    let selected = char_run_range(&visible, target_display);
+    let source_boundary = |offset: usize, end: bool| {
+        let run = runs.iter().find(|(range, _)| {
+            if end {
+                offset > range.start && offset <= range.end
+            } else {
+                offset >= range.start && offset < range.end
+            }
+        });
+        run.map(|(range, run)| {
+            if range.len() != run.content_range.len() {
+                if end {
+                    run.content_range.end
+                } else {
+                    run.content_range.start
+                }
+            } else {
+                run.content_range.start + offset - range.start
+            }
+        })
+    };
+    let start = source_boundary(selected.start, false);
+    let end = source_boundary(selected.end, true);
+    match (start, end) {
+        (Some(start), Some(end)) if start < end => Some(start..end),
+        _ => direct,
     }
 }
 
@@ -622,10 +706,18 @@ pub(crate) fn build_visual_blocks(
         reference_definitions.push_str(&footnote_stubs);
     }
     let mut blocks = Vec::with_capacity(preview.len() + 1);
-    if let Some((raw, body_start)) = split_front_matter(text)
+    let bom_len = text
+        .starts_with('\u{feff}')
+        .then_some('\u{feff}'.len_utf8())
+        .unwrap_or(0);
+    if let Some((raw, body_start)) = split_front_matter(&text[bom_len..])
         && body_start > 0
     {
-        blocks.push(front_matter_visual_block(raw, body_start, &mut allocate_id));
+        blocks.push(front_matter_visual_block(
+            raw,
+            bom_len + body_start,
+            &mut allocate_id,
+        ));
     }
 
     // Blockquotes are containers only. Their ordered leaf children become
@@ -741,7 +833,10 @@ pub(crate) fn build_visual_blocks(
     // overlap guard does not force-mark the images Unsupported.
     let (expanded, source_ranges) = partition_prose_around_nested_images(expanded, source_ranges);
 
-    let mut covered_until = blocks.last().map_or(0, |block| block.source_range.end);
+    let mut covered_until = blocks
+        .last()
+        .map_or(0, |block| block.source_range.end)
+        .max(bom_len);
     for (leaf, range) in expanded.iter().zip(source_ranges) {
         if range.start > covered_until {
             let gap_range = covered_until..range.start;
@@ -7761,8 +7856,22 @@ mod tests {
 
     #[test]
     fn display_math_always_carries_a_payload_editor() {
-        for source in ["$$\n\\frac{1}{2}\n$$", "```math\n\\alpha\n```"] {
-            let block = MarkdownDocument::from_text(source)
+        for source in [
+            "$$\n\\frac{1}{2}\n$$",
+            "```math\n\\alpha\n```",
+            "$$\nx^{2\n$$",
+            "$$\r\n\\frac{1}{2\r\n$$",
+        ] {
+            let document = MarkdownDocument::from_text(source);
+            if source.contains("x^{2") || source.contains("\\frac{1}{2\r") {
+                assert!(
+                    document.preview_blocks().iter().any(|block| matches!(
+                        block,
+                        PreviewBlock::MathBlock { error: Some(_), .. }
+                    ))
+                );
+            }
+            let block = document
                 .visual_blocks()
                 .into_iter()
                 .find(|block| matches!(block.kind, VisualBlockKind::MathBlock { .. }))
@@ -8018,6 +8127,32 @@ mod tests {
             !definitions.contains("[indented]"),
             "definitions indented four or more spaces are code blocks"
         );
+    }
+
+    #[test]
+    fn reference_definitions_match_document_parse_context() {
+        let source = "# Note\n\n[Read][a]\\\nReading list.\n\nExample text:\n[a]: #sample\n\n[a]: #next\n\n[continued][b]\n\n[b]:\n  #target\n";
+        let definitions = super::collect_link_reference_definitions(source);
+        assert!(!definitions.contains("#sample"));
+        assert!(definitions.contains("[a]: #next"));
+        assert!(definitions.contains("[b]:\n  #target"));
+
+        let document = MarkdownDocument::from_text(source);
+        let blocks = document.visual_blocks();
+        let labels = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .flat_map(|block| block.editable_runs.iter())
+            .collect::<Vec<_>>();
+        for (label, destination) in [("Read", "#next"), ("continued", "#target")] {
+            let run = labels.iter().find(|run| run.visible_text == label).unwrap();
+            assert_eq!(
+                run.navigation,
+                Some(VisualNavigationTarget::Heading {
+                    anchor: destination.trim_start_matches('#').into()
+                })
+            );
+        }
     }
 
     #[test]
@@ -9090,6 +9225,27 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         let content = source.match_indices("word").next().unwrap().0;
         assert_eq!(range, content..content + "word".len());
         assert_eq!(&source[range], "word");
+    }
+
+    #[test]
+    fn revealed_inline_syntax_does_not_steal_double_click_word_selection() {
+        for (source, word, expected) in [
+            ("A **cat** sits.", "cat", "cat"),
+            ("Pré sun**light**s rise.", "light", "sun**light**s"),
+        ] {
+            let document = MarkdownDocument::from_text(source);
+            let blocks = document.visual_blocks();
+            let block = blocks.first().unwrap();
+            let content = source.find(word).unwrap();
+            let projection = build_visual_projection(source, block, content..content, content);
+            let display = projection.text.find(word).unwrap() + 1;
+            let selected = super::visual_word_selection_range(&projection, block, display).unwrap();
+            assert_eq!(&source[selected], expected);
+
+            let opening = projection.text.find("**").unwrap();
+            let selected = super::visual_word_selection_range(&projection, block, opening).unwrap();
+            assert_eq!(&source[selected], expected);
+        }
     }
 
     #[test]

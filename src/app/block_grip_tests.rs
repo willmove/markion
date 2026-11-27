@@ -747,12 +747,34 @@ fn reorder_drag_preserves_terminal_paragraphs_and_exact_undo(cx: &mut TestAppCon
                     );
                     assert_eq!(tab.document.version(), version + 1);
                     assert_eq!(tab.undo_stack.len(), 1);
+                    if count == 2 {
+                        assert!(!tab.selected_range.is_empty());
+                        assert!(matches!(
+                            tab.structured_selection,
+                            Some(markion::selection::SelectionState::Blocks(_))
+                        ));
+                        let moved = &tab.document.text()[tab.selected_range.clone()];
+                        if forward {
+                            assert!(moved.contains("first 😀"));
+                            assert!(moved.contains("middle 中文"));
+                        } else {
+                            assert!(moved.contains("middle 中文"));
+                            assert!(moved.contains("last"));
+                        }
+                    }
+                    let moved_start = if forward {
+                        expected.find("first 😀").unwrap()
+                    } else {
+                        0
+                    };
                     assert_eq!(
                         tab.cursor_offset(),
-                        if forward {
-                            expected.find("first 😀").unwrap()
+                        if count == 2 && !tab.selection_reversed {
+                            tab.selected_range.end
+                        } else if count == 2 {
+                            tab.selected_range.start
                         } else {
-                            0
+                            moved_start
                         }
                     );
                     assert!(app.block_menu.is_none());

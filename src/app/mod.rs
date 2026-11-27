@@ -175,6 +175,7 @@ actions!(
         SetupGitSync,
         SyncNow,
         ResolveGitConflict,
+        ExportMarkdown,
         ExportHtml,
         ExportPlainHtml,
         ExportPdf,

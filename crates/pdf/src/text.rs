@@ -604,6 +604,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn combining_mark_offsets_stay_normalized_across_font_sizes() {
+        fn grave_position(text: &str, size: f32) -> (f32, f32, f32) {
+            let mut fs = bundled_only_font_system();
+            let mut cache = FontCache::default();
+            let runs = vec![Run {
+                text: text.into(),
+                ..Run::default()
+            }];
+            let mut spec = spec(&runs, Some(300.0));
+            spec.size = size;
+            let paragraph = shape_paragraph(&mut fs, &mut cache, &spec).unwrap();
+            for group in &paragraph.lines[0].groups {
+                let mut pen = group.start_x;
+                for (index, glyph) in group.glyphs.iter().enumerate() {
+                    if index > 0 && glyph.y_offset != 0.0 {
+                        return (pen / group.font_size, glyph.x_offset, glyph.y_offset);
+                    }
+                    pen += glyph.x_advance * group.font_size;
+                }
+            }
+            let glyphs = paragraph.lines[0]
+                .groups
+                .iter()
+                .flat_map(|group| {
+                    group.glyphs.iter().map(|glyph| {
+                        (
+                            group.text.clone(),
+                            glyph.text_range.clone(),
+                            glyph.x_offset,
+                            glyph.y_offset,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            panic!("missing combining grave: {glyphs:?}");
+        }
+
+        for text in ["m̀", "ọ̀"] {
+            let body = grave_position(text, theme::BODY_SIZE);
+            let large = grave_position(text, theme::BODY_SIZE * 2.0);
+            for (body, large) in [(body.0, large.0), (body.1, large.1), (body.2, large.2)] {
+                assert!((body - large).abs() < 0.02, "{text}: {body} != {large}");
+            }
+            assert_eq!(body.1, 0.0, "horizontal placement uses the shaped pen");
+        }
+
+        let mut fs = bundled_only_font_system();
+        let mut cache = FontCache::default();
+        let control = vec![Run {
+            text: "ò café".into(),
+            ..Run::default()
+        }];
+        assert!(shape_paragraph(&mut fs, &mut cache, &spec(&control, Some(300.0))).is_ok());
+    }
+
     /// A footnote reference run is replaced by its superscript number.
     #[test]
     fn footnote_reference_becomes_superscript_number() {

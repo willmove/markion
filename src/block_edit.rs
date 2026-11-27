@@ -632,14 +632,32 @@ pub fn slash_command_edit(
         return Err(BlockEditError::Stale);
     }
     let line_ending = preferred_line_ending(source);
-    let (mut replacement, caret) = slash_template(command, line_ending);
-    if matches!(
+    let (mut replacement, mut caret) = slash_template(command, line_ending);
+    let standalone = matches!(
         command,
         SlashCommand::CodeBlock | SlashCommand::Divider | SlashCommand::Table
-    ) && source[query.source_range.end..]
-        .split('\n')
-        .next()
-        .is_some_and(|suffix| !suffix.trim_end_matches('\r').is_empty())
+    );
+    let before = &source[..query.source_range.start];
+    let needs_prefix = standalone
+        && !before.is_empty()
+        && if let Some(without_newline) = before.strip_suffix('\n') {
+            without_newline
+                .trim_end_matches('\r')
+                .rsplit('\n')
+                .next()
+                .is_some_and(|line| !line.is_empty())
+        } else {
+            true
+        };
+    if needs_prefix {
+        replacement.insert_str(0, line_ending);
+        caret += line_ending.len();
+    }
+    if standalone
+        && source[query.source_range.end..]
+            .split('\n')
+            .next()
+            .is_some_and(|suffix| !suffix.trim_end_matches('\r').is_empty())
     {
         replacement.push_str(line_ending);
         // GFM accepts pipe-less body rows. A blank line prevents the
@@ -1926,6 +1944,44 @@ mod tests {
                 let edit = slash_command_edit(&empty_line, 7, &query, command).unwrap();
                 assert_eq!(edit.replacement, template);
             }
+        }
+    }
+
+    #[test]
+    fn slash_standalone_blocks_get_a_safe_preceding_boundary() {
+        for ending in ["\n", "\r\n"] {
+            let divider =
+                format!("Left paragraph.{ending}/divider{ending}{ending}Right paragraph.");
+            let query = slash_query_at(&divider, divider.find("/divider").unwrap() + 8, 7).unwrap();
+            let edit = slash_command_edit(&divider, 7, &query, SlashCommand::Divider).unwrap();
+            let mut result = divider;
+            result.replace_range(edit.range, &edit.replacement);
+            assert_eq!(
+                result,
+                format!("Left paragraph.{ending}{ending}---{ending}{ending}Right paragraph.")
+            );
+            let document = MarkdownDocument::from_text(result);
+            assert!(document.outline().is_empty());
+            assert!(
+                document
+                    .preview_blocks()
+                    .iter()
+                    .any(|block| matches!(block, PreviewBlock::Rule { .. }))
+            );
+
+            let code = format!(
+                "Overview /code{ending}{ending}## Keep this heading{ending}{ending}Body stays prose."
+            );
+            let query = slash_query_at(&code, code.find("/code").unwrap() + 5, 7).unwrap();
+            let edit = slash_command_edit(&code, 7, &query, SlashCommand::CodeBlock).unwrap();
+            let mut result = code;
+            result.replace_range(edit.range, &edit.replacement);
+            let document = MarkdownDocument::from_text(result);
+            assert_eq!(document.outline()[0].title, "Keep this heading");
+            assert!(document.preview_blocks().iter().any(|block| matches!(
+                block,
+                PreviewBlock::Paragraph { text, .. } if text.text == "Body stays prose."
+            )));
         }
     }
 
