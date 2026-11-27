@@ -1469,6 +1469,10 @@ fn visual_block_from_preview(
             || source_range.clone(),
             |prefix| prefix.source_range.end..source_range.end,
         )
+    } else if matches!(kind, VisualBlockKind::Table { .. }) {
+        // Keep the quote prefix on the first row so the parser sees one
+        // quoted table and retains the cell event offsets.
+        source_range.clone()
     } else {
         quote_context
             .as_ref()

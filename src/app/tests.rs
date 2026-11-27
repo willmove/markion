@@ -8043,6 +8043,92 @@ fn visual_table_padding_fallback_preserves_precise_text_clicks(cx: &mut TestAppC
     });
 }
 
+#[gpui::test]
+fn visual_tall_table_click_and_drag_select_exact_multiline_text(cx: &mut TestAppContext) {
+    let source = format!(
+        "| 名称 | 参数要求 | 数量 |\n| --- | --- | --- |\n| 服务器 | 第一段文字； <br>第二段中文文本<br>{} | 2 |\n{}",
+        "用于制造自动换行的参数说明。".repeat(12),
+        "| 设备 | 更多参数说明<br>下一行说明 | 1 |\n".repeat(24)
+    );
+    let (app, cx) = visual_table_handle_app(&source, cx);
+    cx.simulate_resize(size(px(760.), px(480.)));
+    cx.run_until_parked();
+    let (anchor, version, visual) = app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        let list = &tab.visual_list;
+        assert!(list.bounds_for_item(0).unwrap().size.height > list.viewport_bounds().size.height);
+        (
+            list.logical_scroll_top(),
+            tab.document.version(),
+            tab.document.visual_blocks_shared(),
+        )
+    });
+    let first = source.find("段文字").unwrap();
+    let second = source.find("段中文文本").unwrap();
+    let end = second + "段中文".len();
+    let position_for_source = |offset| {
+        app.read_with(cx, |app, _| {
+            let tab = app.active_tab();
+            let snapshot = &tab.visual_navigation_snapshots[&0];
+            let line = snapshot.line_index_for_source(offset).unwrap();
+            let window = snapshot.lines[line]
+                .windows
+                .iter()
+                .find(|window| window.projection.source_anchor == source.find("第一段").unwrap())
+                .unwrap();
+            let index = window.projection.display_for_source(offset).unwrap();
+            let position = window.layout.position_for_index(index).unwrap();
+            point(
+                position.x + px(0.25),
+                position.y + window.layout.line_height() * 0.5,
+            )
+        })
+    };
+    let first_position = position_for_source(first);
+    let second_position = position_for_source(second);
+    let end_position = position_for_source(end);
+    assert!(first_position.y < second_position.y);
+    let assert_scroll = |app: &MarkionApp| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(
+            (top.item_ix, top.offset_in_item),
+            (anchor.item_ix, anchor.offset_in_item)
+        );
+    };
+    cx.simulate_click(second_position, Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, second..second);
+        assert_scroll(app);
+    });
+
+    for (start, start_position) in [(second, second_position), (first, first_position)] {
+        cx.simulate_mouse_down(start_position, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_move(end_position, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab().selected_range, start..end);
+            assert_scroll(app);
+        });
+        cx.simulate_mouse_up(end_position, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    }
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            &tab.document.text()[tab.selected_range.clone()],
+            "段文字； <br>第二段中文"
+        );
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.document.version(), version);
+        assert!(!tab.document.is_dirty());
+        assert!(tab.undo_stack.is_empty());
+        assert!(Arc::ptr_eq(&tab.document.visual_blocks_shared(), &visual));
+        assert_scroll(app);
+    });
+}
+
 const TABLE_MATH_SAMPLE: &str = "| Topology | Diameter | Jumps |\n| --- | --- | --- |\n\
                                  | Ring | $\\lfloor N/2 \\rfloor$ | total $2N - 2\\sqrt{N}$ |\n";
 

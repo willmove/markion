@@ -6440,13 +6440,6 @@ fn visual_field_owns_caret(
         && source_cursor <= field.source_range.end
 }
 
-/// Content of a Visual Edit table cell with a proven field. A cell that owns
-/// the caret reveals its authored source through the ordinary field editor.
-/// Otherwise a cell with an authored line break, an image, a script run, or a
-/// rendered formula lays out as mixed prose: ready formulas become
-/// baseline-aligned image atoms whose halves resolve to their authored source
-/// boundaries, while images, text, and pending or failed formulas keep the
-/// same wrapped rows.
 fn apply_table_cell_alignment<E: Styled>(el: E, alignment: TableAlignment) -> E {
     match alignment {
         TableAlignment::Center => el.text_center(),
@@ -6455,27 +6448,21 @@ fn apply_table_cell_alignment<E: Styled>(el: E, alignment: TableAlignment) -> E 
     }
 }
 
+/// A focused cell reveals authored source. Text-only cells share the field
+/// layout with unfocused cells so both use the same wrapping. Images, script
+/// runs, and ready formulas use the mixed renderer when unfocused.
 fn visual_table_cell_element(
     app: &MarkionApp,
     block_index: usize,
-    field: &VisualEditorField,
+    cell: &markion::VisualTableCell,
     rich: &RichText,
     alignment: TableAlignment,
     element_id: ElementId,
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
-    let VisualEditorFieldKind::TableCell { row, column } = field.kind else {
-        return visual_editor_field_element(
-            app,
-            block_index,
-            field,
-            element_id,
-            None,
-            Some(rich),
-            cx,
-        );
-    };
+    let field = &cell.field;
+    let (row, column) = (cell.row, cell.column);
     if visual_field_owns_caret(app, block_index, field) {
         return visual_editor_field_element(
             app,
@@ -6483,7 +6470,7 @@ fn visual_table_cell_element(
             field,
             element_id,
             None,
-            Some(rich),
+            Some((cell, rich)),
             cx,
         );
     }
@@ -6505,12 +6492,13 @@ fn visual_table_cell_element(
             .as_ref()
             .is_some_and(|math| matches!(math_entry(math), MathCacheEntry::Ready(_)))
     });
-    let mixed = rich.text.contains('\n')
-        || has_ready_math
-        || rich
-            .spans
-            .iter()
-            .any(|span| span.image.is_some() || span.style.superscript || span.style.subscript);
+    let mixed = has_ready_math
+        || rich.spans.iter().any(|span| {
+            span.image.is_some()
+                || span.footnote.is_some()
+                || span.style.superscript
+                || span.style.subscript
+        });
     if !mixed {
         return visual_editor_field_element(
             app,
@@ -6518,7 +6506,7 @@ fn visual_table_cell_element(
             field,
             element_id,
             None,
-            Some(rich),
+            Some((cell, rich)),
             cx,
         );
     }
@@ -6629,7 +6617,7 @@ fn visual_editor_field_element(
     field: &VisualEditorField,
     element_id: ElementId,
     styled_text: Option<StyledText>,
-    cell_rich: Option<&RichText>,
+    table_cell: Option<(&markion::VisualTableCell, &RichText)>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let source = app.active_tab().document.text();
@@ -6653,49 +6641,43 @@ fn visual_editor_field_element(
     // Table cells render inline formatting (bold, links, etc.) while unfocused,
     // and reveal the authored source markup when focused for editing -
     // mirroring how non-table visual blocks reveal inline constructs.
-    let (mut projection, mut text, highlights, token_displays) = if let Some(rich) = cell_rich {
-        if caret_active {
-            // Focused cells reveal authored source; a data-URI payload inside
-            // collapses into the shared token (falls back to the ordinary
-            // cell projection — including escape collapsing — when the
-            // scanner finds nothing).
-            let breaks = app
-                .active_tab()
-                .visual_list_blocks
-                .get(block_index)
-                .and_then(|block| match &block.editor {
-                    Some(VisualBlockEditor::Table { cells }) => {
-                        cells.iter().find(|cell| cell.field == *field)
-                    }
-                    _ => None,
-                })
-                .map_or(&[][..], |cell| cell.hard_breaks.as_slice());
-            let (proj, token_displays) = visual_table_editing_projection(source, field, breaks);
+    let (mut projection, mut text, highlights, token_displays) =
+        if let Some((cell, rich)) = table_cell {
+            let rendered = if caret_active {
+                None
+            } else {
+                let runs = &app.active_tab().visual_list_blocks[block_index].editable_runs;
+                table_cell_rendered_projection(source, rich, field, runs)
+            };
+            if let Some((proj, hl)) = rendered {
+                let txt = proj.text.clone();
+                (proj, txt, hl, Vec::new())
+            } else {
+                // The focused field and the conservative fallback both use exact
+                // editable source, with HTML breaks and opaque payloads projected.
+                let (proj, token_displays) =
+                    visual_table_editing_projection(source, field, &cell.hard_breaks);
+                let txt = proj.text.clone();
+                (proj, txt, Vec::new(), token_displays)
+            }
+        } else if matches!(
+            field.kind,
+            VisualEditorFieldKind::ImageSource
+                | VisualEditorFieldKind::HtmlSource
+                | VisualEditorFieldKind::FrontMatterSource
+                | VisualEditorFieldKind::TableCell { .. }
+        ) {
+            // Opaque-payload fields (image source toggles, raw-HTML blocks, and
+            // focused table cells revealing authored source) collapse
+            // scanner-found data-URI payloads into atomic tokens.
+            let (proj, token_displays) = visual_payload_field_projection(source, field);
             let txt = proj.text.clone();
             (proj, txt, Vec::new(), token_displays)
         } else {
-            let (proj, hl) = table_cell_rendered_projection(rich, field);
+            let proj = visual_editor_field_projection(source, field);
             let txt = proj.text.clone();
-            (proj, txt, hl, Vec::new())
-        }
-    } else if matches!(
-        field.kind,
-        VisualEditorFieldKind::ImageSource
-            | VisualEditorFieldKind::HtmlSource
-            | VisualEditorFieldKind::FrontMatterSource
-            | VisualEditorFieldKind::TableCell { .. }
-    ) {
-        // Opaque-payload fields (image source toggles, raw-HTML blocks, and
-        // focused table cells revealing authored source) collapse
-        // scanner-found data-URI payloads into atomic tokens.
-        let (proj, token_displays) = visual_payload_field_projection(source, field);
-        let txt = proj.text.clone();
-        (proj, txt, Vec::new(), token_displays)
-    } else {
-        let proj = visual_editor_field_projection(source, field);
-        let txt = proj.text.clone();
-        (proj, txt, Vec::new(), Vec::new())
-    };
+            (proj, txt, Vec::new(), Vec::new())
+        };
 
     if matches!(field.kind, VisualEditorFieldKind::TableCell { .. }) && text.is_empty() {
         // A display-only blank supplies real line/caret geometry. Both edges
@@ -6887,15 +6869,89 @@ pub(super) fn visual_table_editing_projection(
     (projection, tokens)
 }
 
-/// Builds a rendered (non-source-revealing) projection for a table cell from
-/// its already-parsed `RichText`. The display text is the rendered content
-/// (e.g. "bold" for `**bold**`); segments map the whole run to the cell's
-/// source range so clicks resolve inside the cell; spans carry the inline
-/// styles for highlight generation.
+/// Pair the table's preview styles with the exact source runs already derived
+/// for Visual Edit. Preview trims each hard-break line, so trim the runs at
+/// those same edges before checking the projection against the rendered text.
 fn table_cell_rendered_projection(
+    source: &str,
     rich: &RichText,
     field: &VisualEditorField,
-) -> (VisualProjection, Vec<(Range<usize>, HighlightStyle)>) {
+    runs: &[markion::VisualInlineRun],
+) -> Option<(VisualProjection, Vec<(Range<usize>, HighlightStyle)>)> {
+    let mut segments = Vec::new();
+    let mut display = 0;
+    let start = runs.partition_point(|run| run.content_range.start < field.source_range.start);
+    let end = runs.partition_point(|run| run.content_range.start < field.source_range.end);
+    for line in runs
+        .get(start..end)?
+        .split_inclusive(|run| run.visible_text == "\n")
+    {
+        let (content, line_break) = match line.split_last() {
+            Some((last, content)) if last.visible_text == "\n" => (content, Some(last)),
+            _ => (line, None),
+        };
+        let first = content
+            .iter()
+            .position(|run| !run.visible_text.trim().is_empty());
+        let last = content
+            .iter()
+            .rposition(|run| !run.visible_text.trim().is_empty());
+        for (index, run) in content
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                first
+                    .zip(last)
+                    .is_some_and(|(first, last)| (first..=last).contains(index))
+            })
+            .chain(line_break.map(|run| (line.len(), run)))
+        {
+            let text = run.visible_text.as_str();
+            let visible = if Some(index) == first {
+                text.trim_start()
+            } else {
+                text
+            };
+            let leading = text.len() - visible.len();
+            let visible = if Some(index) == last {
+                visible.trim_end()
+            } else {
+                visible
+            };
+            let display_range = display..display + visible.len();
+            if rich.text.get(display_range.clone()) != Some(visible)
+                || run.content_range.end > field.source_range.end
+            {
+                return None;
+            }
+            let authored = source.get(run.content_range.clone())?;
+            let (source_range, atomic) = if authored == text {
+                let start = run.content_range.start + leading;
+                (start..start + visible.len(), false)
+            } else if visible == text && run.content_range.start < run.content_range.end {
+                (run.content_range.clone(), true)
+            } else {
+                return None;
+            };
+            if segments
+                .last()
+                .is_some_and(|previous: &markion::VisualProjectionSegment| {
+                    previous.source_range.end > source_range.start
+                })
+            {
+                return None;
+            }
+            display = display_range.end;
+            segments.push(markion::VisualProjectionSegment {
+                display_range,
+                source_range,
+                atomic,
+            });
+        }
+    }
+    if display != rich.text.len() {
+        return None;
+    }
     let text = rich.text.clone();
     let mut highlights = Vec::new();
     let mut spans = Vec::new();
@@ -6913,15 +6969,6 @@ fn table_cell_rendered_projection(
             source: false,
         });
     }
-    let segments = if text.is_empty() {
-        Vec::new()
-    } else {
-        vec![markion::VisualProjectionSegment {
-            display_range: 0..text.len(),
-            source_range: field.source_range.clone(),
-            atomic: false,
-        }]
-    };
     let projection = VisualProjection {
         text,
         segments,
@@ -6929,7 +6976,7 @@ fn table_cell_rendered_projection(
         revealed_source_ranges: Vec::new(),
         source_anchor: field.source_range.start,
     };
-    (projection, highlights)
+    Some((projection, highlights))
 }
 
 pub(super) fn visual_editor_field_projection(
@@ -7993,12 +8040,12 @@ pub(super) fn visual_table_view(
                             && (hovered_cell.is_some_and(|(_, column)| column == cell_index)
                                 || menu_axis == Some(column_drop))
                     });
-                    let field = cells.and_then(|cells| {
+                    let editor_cell = cells.and_then(|cells| {
                         cells
                             .iter()
                             .find(|cell| cell.row == row_index && cell.column == cell_index)
-                            .map(|cell| &cell.field)
                     });
+                    let field = editor_cell.map(|cell| &cell.field);
                     let col_alignment = alignments
                         .get(cell_index)
                         .copied()
@@ -8116,11 +8163,11 @@ pub(super) fn visual_table_view(
                                 },
                             ))
                         })
-                        .child(if let Some(field) = field {
+                        .child(if let Some(editor_cell) = editor_cell {
                             visual_table_cell_element(
                                 app,
                                 block_index,
-                                field,
+                                editor_cell,
                                 cell,
                                 col_alignment,
                                 ElementId::from(("visual-table-cell", cell_key)),

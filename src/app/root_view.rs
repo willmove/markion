@@ -106,12 +106,18 @@ impl Render for MarkionApp {
                 {
                     let list = self.active_tab().visual_list.clone();
                     let caret = self.active_tab().visual_caret_bounds;
-                    if !visible_table_remeasure {
-                        apply_visual_caret_reveal(&list, index, caret, inset);
-                    } else {
-                        // Structured selection may leave geometry from a
-                        // different field. Follow only the newly painted cell.
+                    let visible_table = matches!(blocks[index].kind, VisualBlockKind::Table { .. })
+                        && list.bounds_for_item(index).is_some_and(|bounds| {
+                            let viewport = list.viewport_bounds();
+                            bounds.bottom() > viewport.top() && bounds.top() < viewport.bottom()
+                        });
+                    if visible_table_remeasure || visible_table {
+                        // A table is one list item. Even a fully visible cell
+                        // can belong to a table taller than the viewport.
+                        // Use the newly painted caret for cell-level follow.
                         self.active_tab_mut().visual_caret_bounds = None;
+                    } else {
+                        apply_visual_caret_reveal(&list, index, caret, inset);
                     }
                     self.active_tab_mut().visual_caret_follow_frames = 2;
                 }
