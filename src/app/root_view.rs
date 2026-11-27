@@ -7888,6 +7888,19 @@ fn preferences_appearance_body(
                                 app.toggle_code_wrap(cx);
                             }),
                         ))
+                        .child(
+                            preference_boolean_row(
+                                app.tr(Msg::PrefPanelVisualCodeFolding),
+                                app.visual_code_folding,
+                                app.language,
+                                palette,
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.toggle_visual_code_folding(cx);
+                                }),
+                            )
+                            .id("preferences-visual-code-folding")
+                            .debug_selector(|| "preferences-visual-code-folding".to_string()),
+                        )
                         .child({
                             // Stepper shows the effective size (explicit, or
                             // derived from the reading size when unset).

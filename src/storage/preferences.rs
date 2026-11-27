@@ -50,6 +50,8 @@ struct PreferencesFile {
     code_theme: String,
     #[serde(deserialize_with = "deserialize_bool_or_true")]
     code_long_line_wrap: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    visual_code_folding: bool,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -535,6 +537,7 @@ impl From<&AppPreferences> for PreferencesFile {
             code_line_numbers: preferences.code_line_numbers,
             code_theme: preferences.code_theme.config_value().to_string(),
             code_long_line_wrap: preferences.code_long_line_wrap,
+            visual_code_folding: preferences.visual_code_folding,
             code_font_size: preferences
                 .code_font_size
                 .map(|size| normalize_code_font_size(size as i64)),
@@ -610,6 +613,7 @@ impl From<PreferencesFile> for AppPreferences {
             code_line_numbers: file.code_line_numbers,
             code_theme: CodeTheme::from_config(&file.code_theme),
             code_long_line_wrap: file.code_long_line_wrap,
+            visual_code_folding: file.visual_code_folding,
             code_font_size: file
                 .code_font_size
                 .map(|size| normalize_code_font_size(size as i64)),
@@ -1278,22 +1282,26 @@ mod tests {
         let preferences = AppPreferences {
             code_theme: CodeTheme::Light,
             code_long_line_wrap: false,
+            visual_code_folding: true,
             code_font_size: Some(16),
             ..AppPreferences::default()
         };
         let rendered = render_app_preferences(&preferences);
         assert!(rendered.contains("code_theme = \"light\""));
         assert!(rendered.contains("code_long_line_wrap = false"));
+        assert!(rendered.contains("visual_code_folding = true"));
         assert!(rendered.contains("code_font_size = 16"));
         let parsed = parse_app_preferences(&rendered).unwrap();
         assert_eq!(parsed.code_theme, CodeTheme::Light);
         assert!(!parsed.code_long_line_wrap);
+        assert!(parsed.visual_code_folding);
         assert_eq!(parsed.code_font_size, Some(16));
 
         // The default (dark / wrapped / follow reading size) omits the size key.
         let defaults = render_app_preferences(&AppPreferences::default());
         assert!(defaults.contains("code_theme = \"dark\""));
         assert!(defaults.contains("code_long_line_wrap = true"));
+        assert!(defaults.contains("visual_code_folding = false"));
         assert!(!defaults.contains("code_font_size"));
     }
 
@@ -1302,17 +1310,19 @@ mod tests {
         let missing = parse_app_preferences("theme = \"Paper\"\n").unwrap();
         assert_eq!(missing.code_theme, CodeTheme::Dark);
         assert!(missing.code_long_line_wrap);
+        assert!(!missing.visual_code_folding);
         assert_eq!(missing.code_font_size, None);
     }
 
     #[test]
     fn code_display_preferences_invalid_values_are_safe() {
         let invalid = parse_app_preferences(
-            "code_theme = \"solarized\"\ncode_long_line_wrap = \"maybe\"\ncode_font_size = \"big\"\n",
+            "code_theme = \"solarized\"\ncode_long_line_wrap = \"maybe\"\nvisual_code_folding = \"maybe\"\ncode_font_size = \"big\"\n",
         )
         .unwrap();
         assert_eq!(invalid.code_theme, CodeTheme::Dark);
         assert!(invalid.code_long_line_wrap);
+        assert!(!invalid.visual_code_folding);
         assert_eq!(invalid.code_font_size, None);
 
         let bounded = parse_app_preferences("code_font_size = 999\n").unwrap();

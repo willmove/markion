@@ -342,6 +342,7 @@ async fn replay(
 
     let (code_index, code_target, payload_offset) = this
         .update_in(cx, |app, _, cx| {
+            app.set_visual_code_folding(true);
             let blocks = app.active_tab().document.visual_blocks_shared();
             let (index, block, payload) = blocks
                 .iter()

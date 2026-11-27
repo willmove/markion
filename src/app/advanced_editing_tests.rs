@@ -1,5 +1,5 @@
 use super::*;
-use gpui::TestAppContext;
+use gpui::{Modifiers, TestAppContext};
 use markion::selection::{CellSelectionAxis, SelectionState};
 
 #[gpui::test]
@@ -316,26 +316,71 @@ fn advanced_table_rectangle_matrix_paste_and_final_tab_are_atomic(cx: &mut TestA
 #[gpui::test]
 fn advanced_code_fold_is_presentation_only_and_navigation_reveals_payload(cx: &mut TestAppContext) {
     let source = "```rust\nfn first() {}\nfn second() {}\nfn third() {}\n```\n\nafter";
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
+        app.preferences_path = preferences_path.clone();
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
         app.view_mode = ViewMode::VisualEdit;
         app
     });
+    cx.simulate_resize(size(px(960.), px(720.)));
     cx.update(|window, cx| {
         window.focus(&app.read(cx).focus_handle);
         window.activate_window();
     });
     cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-code-fold-0").is_none());
+    let default_height = cx
+        .debug_bounds("visual-document-row-0")
+        .unwrap()
+        .size
+        .height;
+    let (blocks, version, target) = app.update(cx, |app, cx| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let version = app.active_tab().document.version();
+        let target = BlockTarget::from_block(version, &blocks[0]);
+        app.toggle_visual_code_fold(target.clone(), cx);
+        assert!(app.active_tab().folded_visual_code_blocks.is_empty());
+        app.preferences_panel_open = true;
+        app.select_preferences_tab(PreferencesTab::Appearance, cx);
+        (blocks, version, target)
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        let scroll = &app.preferences_appearance_scroll;
+        scroll.set_offset(point(px(0.), -scroll.max_offset().height));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let toggle = cx.debug_bounds("preferences-visual-code-folding").unwrap();
+    cx.simulate_click(
+        point(toggle.right() - px(14.), toggle.center().y),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(
+        load_app_preferences(&preferences_path)
+            .unwrap()
+            .visual_code_folding
+    );
+    app.update_in(cx, |app, window, cx| {
+        assert!(app.visual_code_folding);
+        assert!(app.active_tab().folded_visual_code_blocks.is_empty());
+        app.close_preferences_panel(window, cx);
+    });
+    cx.run_until_parked();
+
     let height = cx
         .debug_bounds("visual-document-row-0")
         .unwrap()
         .size
         .height;
-    app.update(cx, |app, cx| {
-        let blocks = app.active_tab().document.visual_blocks_shared();
-        let version = app.active_tab().document.version();
-        app.toggle_visual_code_fold(BlockTarget::from_block(version, &blocks[0]), cx);
+    let fold_button = cx.debug_bounds("visual-code-fold-0").unwrap();
+    cx.simulate_click(fold_button.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
         assert_eq!(app.active_tab().document.version(), version);
         assert!(app.active_tab().undo_stack.is_empty());
         assert!(std::sync::Arc::ptr_eq(
@@ -355,7 +400,29 @@ fn advanced_code_fold_is_presentation_only_and_navigation_reveals_payload(cx: &m
         app.move_to(source.find("second").unwrap(), cx);
         assert!(app.active_tab().folded_visual_code_blocks.is_empty());
         assert_eq!(app.active_tab().document.text(), source);
+        app.toggle_visual_code_fold(target, cx);
+        assert!(!app.active_tab().folded_visual_code_blocks.is_empty());
     });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.toggle_visual_code_folding(cx);
+        assert!(!app.visual_code_folding);
+        assert!(app.active_tab().folded_visual_code_blocks.is_empty());
+    });
+    cx.run_until_parked();
+    // GPUI retains old debug bounds for removed elements, so check the row height.
+    assert_eq!(
+        cx.debug_bounds("visual-document-row-0")
+            .unwrap()
+            .size
+            .height,
+        default_height,
+    );
+    assert!(
+        !load_app_preferences(&preferences_path)
+            .unwrap()
+            .visual_code_folding
+    );
 }
 
 #[gpui::test]
@@ -463,6 +530,7 @@ fn advanced_dormant_tabs_restore_selection_and_folding_without_retaining_visual_
         app
     });
     app.update(cx, |app, cx| {
+        app.set_visual_code_folding(true);
         let blocks = app.active_tab().document.visual_blocks_shared();
         app.active_tab_mut().sync_visual_list(&blocks);
         let old_id = blocks[0].id;
@@ -493,6 +561,24 @@ fn advanced_dormant_tabs_restore_selection_and_folding_without_retaining_visual_
             app.active_tab()
                 .folded_visual_code_blocks
                 .contains(&blocks[0].id)
+        );
+        app.tabs
+            .push(EditorTab::new(MarkdownDocument::from_text("other tab")));
+        app.switch_active_tab(1, cx);
+        app.set_visual_code_folding(false);
+        app.set_visual_code_folding(true);
+        app.switch_active_tab(0, cx);
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        app.active_tab_mut().sync_visual_list(&blocks);
+        assert!(app.active_tab().folded_visual_code_blocks.is_empty());
+        assert!(matches!(
+            app.active_tab().structured_selection,
+            Some(SelectionState::Blocks(_))
+        ));
+
+        app.toggle_visual_code_fold(
+            BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]),
+            cx,
         );
         app.active_tab_mut().enter_dormant();
         insert_checked_for_test(app, "changed\n\n");

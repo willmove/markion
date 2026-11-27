@@ -4531,7 +4531,7 @@ fn global_shortcut_clear_restores_defaults_and_exits_capture(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn reset_preferences_clears_stable_visual_inline_without_touching_document(
+fn reset_preferences_restores_presentation_defaults_without_touching_document(
     cx: &mut TestAppContext,
 ) {
     let config_dir = tempfile::tempdir().unwrap();
@@ -4539,6 +4539,7 @@ fn reset_preferences_clears_stable_visual_inline_without_touching_document(
     let (text, version) = app.update(cx, |app, _| {
         app.preferences_path = config_dir.path().join("config.toml");
         app.stable_visual_inline = true;
+        app.set_visual_code_folding(true);
         app.paragraph_spacing = 96;
         app.line_spacing = 150;
         let tab = app.active_tab();
@@ -4558,6 +4559,7 @@ fn reset_preferences_clears_stable_visual_inline_without_touching_document(
 
     app.update(cx, |app, _| {
         assert!(!app.stable_visual_inline);
+        assert!(!app.visual_code_folding);
         assert_eq!(app.paragraph_spacing, markion::DEFAULT_PARAGRAPH_SPACING);
         assert_eq!(app.line_spacing, DEFAULT_LINE_SPACING);
         assert_eq!(app.active_tab().document.text(), text);

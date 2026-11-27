@@ -3367,6 +3367,7 @@ struct MarkionApp {
     code_line_numbers: bool,
     code_theme: CodeTheme,
     code_long_line_wrap: bool,
+    visual_code_folding: bool,
     code_font_size: Option<u16>,
     preview_adaptive_width: bool,
     editor_font_size: u16,

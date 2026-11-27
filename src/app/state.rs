@@ -1724,6 +1724,15 @@ impl DocumentTabState {
         self.sync_scroll_state.reset();
     }
 
+    pub(super) fn invalidate_visual_layout(&mut self) {
+        super::appearance::invalidate_list_measurements_around_scroll_anchor(&self.visual_list);
+        self.visual_caret_bounds = None;
+        self.visual_marked_range_bounds = None;
+        self.visual_input_bounds = None;
+        self.visual_navigation_snapshots.clear();
+        self.visual_navigation_snapshot_ids.clear();
+    }
+
     pub(super) fn clear_preview_selection(&mut self) {
         self.preview_selection = None;
         self.preview_is_selecting = false;

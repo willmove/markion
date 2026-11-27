@@ -10440,6 +10440,7 @@ Intro.
             code_line_numbers: false,
             code_theme: CodeTheme::Light,
             code_long_line_wrap: false,
+            visual_code_folding: true,
             code_font_size: Some(16),
             preview_adaptive_width: true,
             editor_font_size: 18,

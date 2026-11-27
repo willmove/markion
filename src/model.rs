@@ -439,6 +439,8 @@ pub struct AppPreferences {
     /// the content through bounded horizontal scrolling. The Visual Edit
     /// direct code editor always soft-wraps.
     pub code_long_line_wrap: bool,
+    /// Show manual code fold controls in Visual Edit.
+    pub visual_code_folding: bool,
     /// Explicit fenced-code font size in logical pixels. `None` derives the
     /// size from the rendered body size (the historical behavior).
     pub code_font_size: Option<u16>,
@@ -545,6 +547,7 @@ impl Default for AppPreferences {
             code_line_numbers: true,
             code_theme: CodeTheme::default(),
             code_long_line_wrap: true,
+            visual_code_folding: false,
             code_font_size: None,
             preview_adaptive_width: false,
             editor_font_size: DEFAULT_EDITOR_FONT_SIZE,

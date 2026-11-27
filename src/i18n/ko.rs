@@ -603,6 +603,7 @@ pub(super) fn t(msg: Msg) -> &'static str {
         Msg::PrefPanelCodeThemeLight => "밝게",
         Msg::PrefPanelCodeThemeDark => "어둡게",
         Msg::PrefPanelCodeWrap => "긴 줄 자동 줄 바꿈",
+        Msg::PrefPanelVisualCodeFolding => "시각적 편집에서 코드 접기 허용",
         Msg::PrefPanelCodeFontSize => "코드 글꼴 크기",
         Msg::PrefPanelCodeFontFollowReading => "읽기 크기 따르기",
         Msg::PrefPanelPreviewAdaptiveWidth => "미리보기 너비 자동 조절",

@@ -126,6 +126,7 @@ impl MarkionApp {
                     app.code_line_numbers = preferences.code_line_numbers;
                     app.code_theme = preferences.code_theme;
                     app.code_long_line_wrap = preferences.code_long_line_wrap;
+                    app.set_visual_code_folding(preferences.visual_code_folding);
                     app.code_font_size = preferences.code_font_size;
                     app.preview_adaptive_width = preferences.preview_adaptive_width;
                     app.editor_font_size = preferences.editor_font_size;
@@ -286,6 +287,31 @@ impl MarkionApp {
         self.status = self.trf(Msg::StatusCodeFontSize, &[&format!("{value}px")]);
         self.persist_preferences();
         cx.notify();
+    }
+
+    pub(super) fn toggle_visual_code_folding(&mut self, cx: &mut Context<Self>) {
+        self.set_visual_code_folding(!self.visual_code_folding);
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn set_visual_code_folding(&mut self, enabled: bool) {
+        if self.visual_code_folding == enabled {
+            return;
+        }
+        self.visual_code_folding = enabled;
+        for tab in &mut self.tabs {
+            let Some(tab) = tab.document_tab_mut() else {
+                continue;
+            };
+            if !enabled {
+                tab.folded_visual_code_blocks.clear();
+                if let Some(dormant) = tab.dormant_visual_state.as_mut() {
+                    dormant.folded_code.clear();
+                }
+            }
+            tab.invalidate_visual_layout();
+        }
     }
 
     /// Clears the explicit code size, returning to reading-size derivation.
@@ -466,12 +492,7 @@ impl MarkionApp {
             }
             if rendered_changed {
                 invalidate_list_measurements_around_scroll_anchor(&tab.preview_list);
-                invalidate_list_measurements_around_scroll_anchor(&tab.visual_list);
-                tab.visual_caret_bounds = None;
-                tab.visual_marked_range_bounds = None;
-                tab.visual_input_bounds = None;
-                tab.visual_navigation_snapshots.clear();
-                tab.visual_navigation_snapshot_ids.clear();
+                tab.invalidate_visual_layout();
                 tab.sync_scroll_state.invalidate_geometry();
             }
         }

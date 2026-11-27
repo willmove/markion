@@ -7089,38 +7089,41 @@ fn visual_code_editor(
     let typography = app.typography_metrics();
     let palette = code_palette(app.code_theme);
     let authored = &app.active_tab().document.text()[payload.source_range.clone()];
-    let fold_target = BlockTarget::from_block(
-        app.active_tab().document.version(),
-        &app.active_tab().visual_list_blocks[block_index],
-    );
-    let folded = app
-        .active_tab()
-        .folded_visual_code_blocks
-        .contains(&block_id);
-    let fold_label = markion::i18n::advanced_t(
-        app.language,
-        if folded {
-            markion::i18n::AdvancedMsg::ExpandCode
-        } else {
-            markion::i18n::AdvancedMsg::FoldCode
-        },
-    );
-    let fold_button = div()
-        .id(("visual-code-fold", block_id.as_u64()))
-        .debug_selector(move || format!("visual-code-fold-{block_index}"))
-        .px_2()
-        .py_1()
-        .text_size(px(11.))
-        .text_color(app.palette().muted)
-        .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _, _, cx| cx.stop_propagation()),
-        )
-        .on_click(
-            cx.listener(move |app, _, _, cx| app.toggle_visual_code_fold(fold_target.clone(), cx)),
-        )
-        .child(fold_label);
+    let folded = app.visual_code_folding
+        && app
+            .active_tab()
+            .folded_visual_code_blocks
+            .contains(&block_id);
+    let fold_button = app.visual_code_folding.then(|| {
+        let fold_target = BlockTarget::from_block(
+            app.active_tab().document.version(),
+            &app.active_tab().visual_list_blocks[block_index],
+        );
+        let fold_label = markion::i18n::advanced_t(
+            app.language,
+            if folded {
+                markion::i18n::AdvancedMsg::ExpandCode
+            } else {
+                markion::i18n::AdvancedMsg::FoldCode
+            },
+        );
+        div()
+            .id(("visual-code-fold", block_id.as_u64()))
+            .debug_selector(move || format!("visual-code-fold-{block_index}"))
+            .px_2()
+            .py_1()
+            .text_size(px(11.))
+            .text_color(app.palette().muted)
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+            )
+            .on_click(cx.listener(move |app, _, _, cx| {
+                app.toggle_visual_code_fold(fold_target.clone(), cx);
+            }))
+            .child(fold_label)
+    });
     if folded {
         let count = markion::i18n::advanced_t(app.language, markion::i18n::AdvancedMsg::CodeLines)
             .replace("{0}", &authored.lines().count().to_string());
@@ -7137,7 +7140,7 @@ fn visual_code_editor(
             .flex()
             .items_center()
             .gap_2()
-            .child(fold_button)
+            .children(fold_button)
             .child(
                 div()
                     .text_color(app.palette().muted)
@@ -7199,7 +7202,7 @@ fn visual_code_editor(
             tab.hovered_visual_code_block = next;
             cx.notify();
         }))
-        .child(fold_button)
+        .children(fold_button)
         .child(code_block_header_with_language(
             app,
             language,

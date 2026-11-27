@@ -204,7 +204,7 @@ impl MarkionApp {
         true
     }
     pub(super) fn reveal_visual_code_at(&mut self, offset: usize) {
-        if self.active_tab().is_image() {
+        if !self.visual_code_folding || self.active_tab().is_image() {
             return;
         }
         let tab = self.active_tab_mut();
@@ -674,7 +674,7 @@ impl MarkionApp {
     }
 
     pub(super) fn toggle_visual_code_fold(&mut self, target: BlockTarget, cx: &mut Context<Self>) {
-        if self.active_tab().is_image() {
+        if !self.visual_code_folding || self.active_tab().is_image() {
             return;
         }
         let blocks = self.active_tab().document.visual_blocks_shared();

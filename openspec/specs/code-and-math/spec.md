@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers fenced code block handling, syntax highlighting, line-number rendering, and Markdown math (`$...$` inline and `$$...$$` block). Real KaTeX/MathJax-quality math rendering is **not** part of this capability — math is parsed into structured data with a readable Unicode fallback and simple LaTeX validation; full-quality rendering is a future candidate.
+
 ## Requirements
+
 ### Requirement: Fenced code block highlighting
 The editor SHALL first compare the first fenced info-string token against the aliases in the registered diagram backend registry using ASCII case-insensitive matching. A matching block SHALL follow the diagram-rendering capability instead of ordinary syntax highlighting while retaining its authored code and source range; when diagram rendering is pending or fails, its source fallback SHALL preserve the original indentation and whitespace. All other fenced code blocks SHALL apply grammar-based (syntect) syntax coloring when their language identifier is covered by the bundled extended grammar registry (syntect defaults plus the two-face extended syntax set — including TypeScript, TOML, Kotlin, Swift, Dockerfile, PowerShell and other modern mainstream languages), falling back to the hand-written token-class lexer for identifiers the registry does not cover. The advertised code-language list SHALL be the union of the syntax registry's actual grammar names and the lexer-fallback identifiers, so the advertisement reflects real code-highlighting coverage and does not imply diagram-backend compatibility. Colors SHALL continue to be derived from Markion's theme-mapped token classes (`HighlightKind`), never from a fixed syntect color theme. Grammar loading SHALL remain lazy with a background warm-up at startup, and highlighting results SHALL remain memoized per language/code pair.
 
@@ -155,15 +157,20 @@ Native formula typesetting and rasterization SHALL run outside the synchronous t
 - **AND** pending work does not cause unbounded cache growth or raster allocation
 
 ### Requirement: Session-only visual code folding
-An ordinary code block in Visual Edit SHALL provide a localized fold/expand control and a compact folded summary. Folding SHALL be isolated per document tab and SHALL NOT change Markdown, version, dirty state or undo history. Explicit navigation or editing into a folded payload SHALL expand it before positioning input. Stale or removed code-block identities SHALL not retain unrelated folding state.
+When the Visual Edit code folding preference is enabled, an ordinary code block in Visual Edit SHALL provide a localized fold/expand control and a compact folded summary. With the preference disabled, ordinary code blocks SHALL show their full editable payload with the fold control hidden. Folding SHALL be isolated per document tab and SHALL NOT change Markdown, version, dirty state or undo history. Explicit navigation or editing into a folded payload SHALL expand it before positioning input. Stale or removed code-block identities SHALL not retain unrelated folding state. Disabling the preference SHALL clear folded states across tabs.
 
 #### Scenario: Fold and expand code
-- **WHEN** the user folds a code block and expands its summary
+- **WHEN** the folding preference is enabled and the user folds a code block and expands its summary
 - **THEN** the exact highlighted payload becomes visible again with no source or history mutation
 
 #### Scenario: Navigate to folded code
 - **WHEN** an explicit source navigation targets a folded code payload
 - **THEN** that code block expands and the canonical caret remains visible
+
+#### Scenario: Disable folding while blocks are collapsed
+- **WHEN** the user disables the preference with folded blocks in open tabs
+- **THEN** the visible blocks expand immediately and the fold controls disappear
+- **AND** previously folded blocks in inactive tabs appear expanded when revisited, including if the preference was re-enabled first
 
 ### Requirement: Code backgrounds respect the document column across tabs
 Code-block backgrounds, headers and editable payloads SHALL remain within the document content column across tab activation, new/close/reopen transitions and viewport reflow. Long payload lines SHALL follow the existing wrapping/overflow policy without expanding the background beyond the column. Presentation changes SHALL not mutate canonical source or history, or introduce extra derivation invalidation beyond the established dormant-tab policy.
