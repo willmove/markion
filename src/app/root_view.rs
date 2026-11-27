@@ -132,10 +132,10 @@ impl Render for MarkionApp {
                 std::sync::Arc::new(Vec::new())
             };
         self.note_visual_input_stage("visual_model_ready");
-        let document_dir = (!active_is_image)
-            .then(|| self.active_tab().document.path())
-            .flatten()
-            .and_then(Path::parent)
+        let document_dir = self
+            .active_tab()
+            .document_tab()
+            .and_then(DocumentTabState::resource_dir)
             .map(PathBuf::from);
         let active_tab = self.active_tab;
         if let Some(key) = self.active_tab().image().map(|image| image.key.clone()) {
@@ -1056,6 +1056,9 @@ impl Render for MarkionApp {
             })
             .when(self.markdown_reference_open, |root| {
                 root.child(markdown_reference_view(self, cx))
+            })
+            .when_some(self.examples_gallery.as_ref(), |root, gallery| {
+                root.child(examples_gallery::gallery_view(self, gallery, window, cx))
             })
             // Hairline window outline, painted above the chrome. No id and no
             // listeners, so it registers no hitbox and stays input-transparent.
@@ -4618,6 +4621,7 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::FileTree => "file-tree-scrollbar",
         PaneScrollTarget::Outline => "outline-scrollbar",
         PaneScrollTarget::MarkdownReference => "markdown-reference-scrollbar",
+        PaneScrollTarget::ExamplesGallery => "examples-gallery-scrollbar",
     };
     let viewport_height = scroll_handle.bounds().size.height;
     let max_scroll = scroll_handle.max_offset().height.max(px(0.));

@@ -2912,6 +2912,8 @@ enum PaneScrollTarget {
     Outline,
     /// Help → Markdown Reference overlay body. Drag identity only.
     MarkdownReference,
+    /// Help → Examples and Templates gallery. Drag identity only.
+    ExamplesGallery,
 }
 
 /// Identity of a selectable plain-text run inside one preview list item.
@@ -3197,6 +3199,7 @@ mod documents;
 mod docx_import;
 mod editing;
 mod editor_element;
+mod examples_gallery;
 mod export_prefs;
 mod git_conflicts;
 mod git_panel;
@@ -3309,6 +3312,8 @@ struct MarkionApp {
     /// Scroll handle for the Markdown Reference overlay body so it can show a
     /// draggable right-side scrollbar when content overflows.
     markdown_reference_scroll: ScrollHandle,
+    examples_gallery: Option<examples_gallery::ExamplesGallery>,
+    examples_gallery_focus: FocusHandle,
     status: SharedString,
     /// Last caption sent to the native window title. Compared before
     /// `set_window_title` so unchanged identity does not hit the platform.

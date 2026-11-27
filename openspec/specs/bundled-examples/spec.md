@@ -23,25 +23,34 @@ The library SHALL demonstrate headings, paragraphs, inline emphasis/strong/strik
 - **AND** the user can practice common editing and export tasks without downloading sample assets
 
 ### Requirement: Discoverable and non-destructive example access
-Both the native and in-window Help menus SHALL offer a localized Examples and Templates action without a default shortcut. Invoking it SHALL reveal the bundled example index in the system file manager, dismiss the active menu, and leave the workspace and all open documents unchanged. A missing collection SHALL produce localized status feedback without crashing or creating an empty directory. If the Windows file manager cannot be launched, Markion SHALL show localized launch failure feedback in the status bar. The welcome document SHALL identify the Help entry. The index SHALL instruct users to copy examples before editing because installed resources may be read-only or replaced by upgrades, and SHALL explain that image-bearing copies must retain their resource directory.
+Both the native and in-window Help menus SHALL offer a localized Examples and Templates action without a default shortcut. Invoking it SHALL dismiss the menu and display a scrollable overview of the bundled index, guides, and templates within Markion without launching an external program. Each card SHALL include a content thumbnail and open its corresponding Markdown document when activated with the mouse or keyboard. Markion SHALL open an editable draft in a new tab or focus an existing draft of the same bundled document. Until the draft is saved, its bundled source SHALL provide the base for relative images and links to other examples. Saving a draft for the first time SHALL require the user to choose a destination. The welcome document and index SHALL describe the in-app gallery. Missing or unreadable resources SHALL produce localized feedback.
 
 #### Scenario: Open examples while editing
 - **WHEN** the user invokes Help → Examples and Templates with unsaved edits in an open document
-- **THEN** the system file manager reveals the bundled index
-- **AND** document text, dirty flags, undo history, workspace selection, and derived caches are unchanged
+- **THEN** Markion displays the thumbnail overview inside the current window
+- **AND** opening or dismissing the overview preserves the active document, dirty flags, undo history, workspace selection, and derived caches
+
+#### Scenario: Open a sample or template from its thumbnail
+- **WHEN** the user activates a thumbnail
+- **THEN** Markion opens that Markdown in a new editable tab or focuses the existing draft of that document
+- **AND** the current workspace and the previously open documents remain available
+- **AND** changes to the draft cannot autosave to the installed sample
+
+#### Scenario: Follow bundled resources from a draft
+- **WHEN** a newly opened bundled guide refers to an image or another bundled Markdown document by a relative path
+- **THEN** its image resolves against the original sample directory and its Markdown link opens the target in Markion
 
 #### Scenario: Examples are missing
-- **WHEN** the example index cannot be found in application resources
-- **THEN** Markion reports a localized missing-examples status and dismisses the menu
-- **AND** no document or directory is created or replaced
+- **WHEN** Markion cannot locate the example collection or read the selected document
+- **THEN** Markion shows localized feedback without replacing the user's document or workspace
 
 #### Scenario: Windows resource path contains spaces or non-ASCII characters
-- **WHEN** the user invokes Help → Examples and Templates and the Windows resource path contains spaces or non-ASCII characters
-- **THEN** Explorer opens the bundled examples directory and selects `README.md`
+- **WHEN** the Windows resource path contains spaces or non-ASCII characters and the user activates a thumbnail
+- **THEN** Markion reads the corresponding Markdown and opens it in the editor
 
 #### Scenario: Windows file manager cannot launch
-- **WHEN** the bundled index exists and Markion cannot launch the Windows file manager for Help → Examples and Templates
-- **THEN** Markion dismisses the menu and displays a localized file manager error in the status bar
+- **WHEN** the Windows file manager is unavailable and the user invokes Help → Examples and Templates
+- **THEN** Markion displays the gallery and can open the selected bundled Markdown in the editor
 
 ### Requirement: Distribution verifies example completeness
 Native package verification SHALL compare the packaged example collection with the checked-in collection and fail before publication if any required document or image is absent or altered.

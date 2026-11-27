@@ -841,6 +841,8 @@ impl ImageTabState {
 /// Markdown cache state remains isolated here and is absent from image tabs.
 pub(super) struct DocumentTabState {
     pub(super) document: MarkdownDocument,
+    /// Bundled source for an unsaved example draft, separate from its save path.
+    pub(super) bundled_example: Option<PathBuf>,
     /// Destination divergence detected after open/save. This state never
     /// rewrites the canonical in-memory Markdown by itself.
     pub(super) external_conflict: Option<DiskState>,
@@ -1054,7 +1056,11 @@ impl WorkspaceTab {
     }
 
     pub(super) fn title(&self) -> String {
-        title_from_path(self.path()).to_string()
+        let path = self.path().or_else(|| {
+            self.document_tab()
+                .and_then(|tab| tab.bundled_example.as_deref())
+        });
+        title_from_path(path).to_string()
     }
 
     pub(super) fn focus_identity(&self) -> Option<PathBuf> {
@@ -1178,6 +1184,13 @@ impl std::ops::DerefMut for WorkspaceTab {
 }
 
 impl DocumentTabState {
+    pub(super) fn resource_dir(&self) -> Option<&Path> {
+        self.document
+            .path()
+            .or(self.bundled_example.as_deref())
+            .and_then(Path::parent)
+    }
+
     /// The editing pipeline this tab carries, derived on demand from the
     /// document's current path so it can never go stale after Save As or a
     /// rename/remap reload: data/config text gets the source-only `Data`
@@ -1226,6 +1239,7 @@ impl DocumentTabState {
         let version = document.version();
         Self {
             document,
+            bundled_example: None,
             external_conflict: None,
             recovery_id: next_recovery_id(),
             undo_stack: Vec::new(),

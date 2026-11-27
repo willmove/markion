@@ -408,6 +408,10 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.examples_gallery.is_some() {
+            self.close_examples_gallery(window, cx);
+            return;
+        }
         if self.git_ui.settings.is_some()
             || self.git_ui.onboarding.is_some()
             || self.git_ui.inspection.is_some()

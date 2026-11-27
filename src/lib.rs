@@ -70,7 +70,7 @@ This starter document is a quick tour of Markdown in Markion. Edit the source on
 
 ## Examples and templates
 
-Choose **Help → Examples and Templates** to find the offline library in `assets/examples`: getting-started and formatting guides, plus daily notes, meeting notes, project plans, and more. Copy the whole examples folder to your own documents directory before editing; the index explains each template and how to keep local images with your copies.
+Choose **Help → Examples and Templates** to browse the offline library in Markion. Select a thumbnail to open its Markdown in a new draft tab, then save it to a location you choose. The index describes the guides, templates, and related resources.
 
 ## Heading hierarchy
 

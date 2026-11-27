@@ -1310,6 +1310,9 @@ pub enum Msg {
     ItemCheckForUpdates,
     ItemMarkdownReference,
     ItemExamplesTemplates,
+    ExamplesGalleryGuides,
+    ExamplesGalleryTemplates,
+    ExamplesGalleryClose,
     StatusExamplesMissing,
     ItemReportIssue,
     ItemOnlineDocs,
@@ -4688,6 +4691,9 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "Report an Issue",
         Msg::ItemOnlineDocs => "Online Documentation",
         Msg::ItemExamplesTemplates => "Examples and Templates",
+        Msg::ExamplesGalleryGuides => "Guides",
+        Msg::ExamplesGalleryTemplates => "Templates",
+        Msg::ExamplesGalleryClose => "Close",
         Msg::StatusExamplesMissing => {
             "Bundled examples are missing. Reinstall Markion to restore assets/examples."
         }
@@ -5400,6 +5406,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "問題を報告",
         Msg::ItemOnlineDocs => "オンラインドキュメント",
         Msg::ItemExamplesTemplates => "サンプルとテンプレート",
+        Msg::ExamplesGalleryGuides => "ガイド",
+        Msg::ExamplesGalleryTemplates => "テンプレート",
+        Msg::ExamplesGalleryClose => "閉じる",
         Msg::StatusExamplesMissing => {
             "サンプルが見つかりません。Markion を再インストールして assets/examples を復元してください。"
         }
@@ -6105,6 +6114,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "Signaler un problème",
         Msg::ItemOnlineDocs => "Documentation en ligne",
         Msg::ItemExamplesTemplates => "Exemples et modèles",
+        Msg::ExamplesGalleryGuides => "Guides",
+        Msg::ExamplesGalleryTemplates => "Modèles",
+        Msg::ExamplesGalleryClose => "Fermer",
         Msg::StatusExamplesMissing => {
             "Les exemples intégrés sont introuvables. Réinstallez Markion pour restaurer assets/examples."
         }
@@ -6847,6 +6859,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "Problem melden",
         Msg::ItemOnlineDocs => "Online-Dokumentation",
         Msg::ItemExamplesTemplates => "Beispiele und Vorlagen",
+        Msg::ExamplesGalleryGuides => "Anleitungen",
+        Msg::ExamplesGalleryTemplates => "Vorlagen",
+        Msg::ExamplesGalleryClose => "Schließen",
         Msg::StatusExamplesMissing => {
             "Die mitgelieferten Beispiele fehlen. Installieren Sie Markion erneut, um assets/examples wiederherzustellen."
         }
@@ -7571,6 +7586,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "Informar de un problema",
         Msg::ItemOnlineDocs => "Documentación en línea",
         Msg::ItemExamplesTemplates => "Ejemplos y plantillas",
+        Msg::ExamplesGalleryGuides => "Guías",
+        Msg::ExamplesGalleryTemplates => "Plantillas",
+        Msg::ExamplesGalleryClose => "Cerrar",
         Msg::StatusExamplesMissing => {
             "Faltan los ejemplos incluidos. Reinstala Markion para restaurar assets/examples."
         }
@@ -8289,6 +8307,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "反馈问题",
         Msg::ItemOnlineDocs => "在线文档",
         Msg::ItemExamplesTemplates => "样例与模板",
+        Msg::ExamplesGalleryGuides => "样例指南",
+        Msg::ExamplesGalleryTemplates => "写作模板",
+        Msg::ExamplesGalleryClose => "关闭",
         Msg::StatusExamplesMissing => "未找到内置样例，请重新安装 Markion 以恢复 assets/examples。",
 
         Msg::LabelEditor => "编辑器",
@@ -8964,6 +8985,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "回報問題",
         Msg::ItemOnlineDocs => "線上文件",
         Msg::ItemExamplesTemplates => "範例與範本",
+        Msg::ExamplesGalleryGuides => "範例指南",
+        Msg::ExamplesGalleryTemplates => "寫作範本",
+        Msg::ExamplesGalleryClose => "關閉",
         Msg::StatusExamplesMissing => "找不到內建範例，請重新安裝 Markion 以還原 assets/examples。",
 
         Msg::LabelEditor => "編輯器",
@@ -10302,6 +10326,9 @@ mod tests {
             Msg::ItemCheckForUpdates,
             Msg::ItemMarkdownReference,
             Msg::ItemExamplesTemplates,
+            Msg::ExamplesGalleryGuides,
+            Msg::ExamplesGalleryTemplates,
+            Msg::ExamplesGalleryClose,
             Msg::StatusExamplesMissing,
             Msg::ItemAboutMarkion,
             Msg::LabelEditor,

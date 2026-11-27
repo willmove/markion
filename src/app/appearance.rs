@@ -922,7 +922,8 @@ impl MarkionApp {
             | PaneScrollTarget::PreferencesEditor
             | PaneScrollTarget::FileTree
             | PaneScrollTarget::Outline
-            | PaneScrollTarget::MarkdownReference => return,
+            | PaneScrollTarget::MarkdownReference
+            | PaneScrollTarget::ExamplesGallery => return,
         }
         cx.notify();
     }

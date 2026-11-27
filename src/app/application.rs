@@ -107,6 +107,9 @@ impl DocumentTabState {
         }
 
         save(&mut self.document)?;
+        if self.document.path().is_some() {
+            self.bundled_example = None;
+        }
         if let Some(state) = &mut autosave {
             // A worker queued behind the explicit save must see this before
             // it can start. Recovery cleanup follows on the success path.
@@ -329,6 +332,8 @@ impl MarkionApp {
             about_dialog_open: false,
             markdown_reference_open: false,
             markdown_reference_scroll: ScrollHandle::new(),
+            examples_gallery: None,
+            examples_gallery_focus: cx.focus_handle(),
             status: t(language, Msg::StatusReady).into(),
             applied_window_title: None,
             publishing_service: None,
@@ -1631,7 +1636,7 @@ impl MarkionApp {
         self.open_tab_in_new_tab(tab, cx);
     }
 
-    fn open_tab_in_new_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
+    pub(super) fn open_tab_in_new_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
         self.dismiss_document_editing_overlays();
         let previous = self.active_tab;
         let opening_image = tab.is_image();

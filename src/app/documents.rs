@@ -950,14 +950,7 @@ impl MarkionApp {
     ) {
         let target = SaveTarget::Markdown;
         let directory = self.suggested_directory();
-        let suggested_name = self
-            .active_tab()
-            .document
-            .path()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("Untitled.md")
-            .to_string();
+        let suggested_name = self.active_tab().title();
         let save_future =
             prompt_for_save_path(window, &directory, &suggested_name, self.language, target);
 

@@ -2,14 +2,11 @@
 
 欢迎使用 Markion！这里有 **5 篇上手与格式指南、12 份日常写作模板**，以及一张随安装包附带的本地示例图片。所有文档都能离线阅读、复制和修改，无需账户或额外下载。
 
-## 先复制，再开始写
+## 在 Markion 中打开样例
 
-1. 通过 **帮助 → 样例与模板**，在系统文件管理器中找到此目录。
-2. 将整个 `examples` 文件夹复制到自己的“文档”目录，例如 `我的文档/Markion 练习`。
-3. 回到 Markion，选择 **文件 → 打开文件夹**，打开刚复制的文件夹，从文件树中选择文档。
-4. 复制一份模板并重命名，替换其中的 `【占位内容】`，再保存为自己的 Markdown 文档。
+选择 **帮助 → 样例与模板**，在缩略图总览中点选文档。Markion 会在标签页中打开一份可编辑草稿。替换其中的 `【占位内容】`，再把草稿保存到自己的目录。
 
-> 安装目录可能只读，应用升级也可能替换其中的文件。请保留安装目录里的原件，把个人修改保存到自己的目录。默认自动保存可能写回已经打开的文档，所以应当在编辑前完成复制。
+要用整套样例练习文件夹操作，可将整个 `examples` 目录复制到自己的文档目录，再用 **文件 → 打开文件夹** 打开副本。
 
 含图片的文档请连同 `images` 文件夹一起复制。只对单个 `.md` 文件执行“另存为”不会自动复制本地图片；移动后需要保留相同的相对路径，或重新插入图片。样例之间也使用相对链接，复制整个目录最方便。
 
@@ -44,12 +41,12 @@
 
 ## 文档放在哪里
 
-Windows 安装版和便携版通常在应用资源目录的 `assets/examples` 中；macOS 位于应用包的 `Contents/Resources/assets/examples`；Linux 的资源位置随 DEB、RPM、AppImage、pacman 布局而变化。**帮助 → 样例与模板** 会定位实际位置，无需记忆安装路径。AppImage 的运行时资源可能位于临时挂载目录，请复制到自己的目录后再使用。
+Windows 安装版和便携版通常将样例放在应用资源目录的 `assets/examples` 中。macOS 将样例放在应用包的 `Contents/Resources/assets/examples` 中。Linux 的资源位置随 DEB、RPM、AppImage、pacman 布局而变化。AppImage 的资源可能位于临时挂载目录，保存练习时请选择自己的文档目录。
 
 这些文件是普通 UTF-8 Markdown。切换界面语言不会翻译文档正文。在线链接仅供选读，不影响离线练习。样例中的人物、项目、数据和联系方式均为演示占位内容；请在正式使用前替换。
 
 ## English quick start
 
-This offline collection contains five Chinese-language guides and twelve reusable writing templates. The tables above provide English descriptions. Choose **Help → Examples and Templates** to reveal this directory in your system file manager.
+This offline collection contains five Chinese-language guides and twelve reusable writing templates. The tables above provide English descriptions. Choose **Help → Examples and Templates** in Markion, then select a thumbnail to open an editable draft and save it to a location you choose.
 
-Copy the **entire examples directory** to a writable location before editing, then use **File → Open Folder** in Markion. Installed originals can be read-only or replaced during upgrades; autosave can write back to opened files. Duplicate a template, replace `【placeholders】`, and save your own copy. Keep the `images` subdirectory and relative paths with image-bearing documents; Save As alone does not copy their images. External links are optional references, and the examples need no network connection.
+To practice with the full library, copy the **entire examples directory** to a writable location and use **File → Open Folder** in Markion. Keep the `images` subdirectory and relative paths with image-bearing documents. Save As writes the Markdown file, so copy its local images separately when needed. External links are optional references, and the examples work offline.

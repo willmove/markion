@@ -6561,7 +6561,7 @@ fn visual_table_cell_element(
         let mut piece_start = offset;
         offset += span.text.len();
         if let Some(image) = &span.image {
-            let document_dir = app.active_tab().document.path().and_then(Path::parent);
+            let document_dir = app.active_tab().resource_dir();
             let selector = format!("visual-table-image-{block_index}-{row}-{column}-{image_index}");
             prose.push_atom(
                 preview_inline_image_view(

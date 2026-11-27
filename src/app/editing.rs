@@ -7647,6 +7647,9 @@ impl MarkionApp {
             self.navigate_to_outline_heading(offset, cx);
             return;
         }
+        if self.open_bundled_example_link(url, cx) {
+            return;
+        }
         if !url.trim().is_empty() {
             cx.open_url(url);
         }

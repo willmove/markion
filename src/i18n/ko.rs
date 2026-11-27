@@ -132,6 +132,9 @@ pub(super) fn t(msg: Msg) -> &'static str {
         Msg::ItemReportIssue => "문제 보고",
         Msg::ItemOnlineDocs => "온라인 문서",
         Msg::ItemExamplesTemplates => "예제 및 템플릿",
+        Msg::ExamplesGalleryGuides => "가이드",
+        Msg::ExamplesGalleryTemplates => "템플릿",
+        Msg::ExamplesGalleryClose => "닫기",
         Msg::StatusExamplesMissing => {
             "기본 예제가 없습니다. Markion을 다시 설치하여 assets/examples를 복원하세요."
         }
