@@ -2293,19 +2293,24 @@ pub(super) fn math_atom_boundary(authored_range: &Range<usize>, trailing_half: b
 /// bottom edge; this margin lifts the formula so `ascent` from its top meets
 /// the text baseline (mirroring HTML `vertical-align: -descent` relative to
 /// GPUI's half-leading baseline offset).
+///
+/// GPUI's `TextSystem::descent` returns a negative `FontMetrics` value on all
+/// platforms whereas `paint_line` uses a positive `LineLayout::descent`
+/// magnitude without clamping `padding_top`; normalize `font_descent` with
+/// `.abs()` so the computed baseline matches `paint_line`.
 pub(super) fn inline_math_baseline_margin_from_metrics(
     line_height: Pixels,
     font_ascent: Pixels,
     font_descent: Pixels,
     math_descent: Pixels,
 ) -> Pixels {
-    let content = font_ascent + font_descent;
-    let padding_top = ((line_height - content) / 2.).max(px(0.));
+    let font_descent = font_descent.abs();
+    let padding_top = (line_height - font_ascent - font_descent) / 2.;
     let text_baseline_from_bottom = line_height - padding_top - font_ascent;
     text_baseline_from_bottom - math_descent
 }
 
-fn inline_math_baseline_margin(
+pub(super) fn inline_math_baseline_margin(
     cx: &App,
     font_family: &SharedString,
     font_size: f32,

@@ -2654,10 +2654,118 @@ fn inline_math_baseline_margin_lifts_shallow_formulas_to_text_baseline() {
     // Old mb=descent left the formula ~5.8px too low for this case.
     assert!(f32::from(margin) > f32::from(math_descent) + 4.0);
 
+    // GPUI's TextSystem::descent returns a negative FontMetrics value on all
+    // platforms; it must yield the exact same margin as a positive magnitude.
+    let signed_margin = inline_math_baseline_margin_from_metrics(
+        line_height,
+        font_ascent,
+        -font_descent,
+        math_descent,
+    );
+    assert!((f32::from(signed_margin) - f32::from(margin)).abs() < 0.001);
+
+    // Tight lines where ascent + descent > line_height mirror paint_line's
+    // unclamped half-leading: (20 - 18.56 + 4.61) / 2 - 1.0 = 2.025.
+    let tight =
+        inline_math_baseline_margin_from_metrics(px(20.0), px(18.56), px(-4.61), px(1.0));
+    assert!((f32::from(tight) - 2.025).abs() < 0.01);
+
     // Deep formulas may need a negative margin so descent hangs below the line.
     let deep =
         inline_math_baseline_margin_from_metrics(line_height, font_ascent, font_descent, px(12.0));
     assert!(f32::from(deep) < 0.0);
+}
+
+#[gpui::test]
+fn inline_math_baseline_aligns_with_gpui_text_baseline_in_read_and_visual_edit(
+    cx: &mut TestAppContext,
+) {
+    let source = "每个节点注入带宽为 $\\lambda$ 的数据";
+    let math_offset = source.find("$\\lambda$").unwrap();
+    for mode in [ViewMode::Read, ViewMode::VisualEdit] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.view_mode = mode;
+            if mode == ViewMode::VisualEdit {
+                // Keep caret off the formula so it stays rendered as an inline atom.
+                app.active_tab_mut().selected_range = 0..0;
+            }
+            app
+        });
+        cx.run_until_parked();
+
+        let (expected_margin, expected_baseline_from_bottom, math_descent, line_height) =
+            cx.update(|window, cx| {
+                let display_scale = window.scale_factor();
+                app.update(cx, |app, cx| {
+                    let typography = app.typography_metrics();
+                    let font_family = &app.resolved_font_families.rendered;
+                    let font_size = typography.rendered_font_size;
+                    let line_height = typography.paragraph_line_height;
+                    let font_id = cx.text_system().resolve_font(&font(font_family.clone()));
+                    let ascent = cx.text_system().ascent(font_id, px(font_size));
+                    let descent = cx.text_system().descent(font_id, px(font_size));
+                    assert!(
+                        descent < px(0.),
+                        "GPUI TextSystem::descent is negative on all platforms"
+                    );
+                    let MathCacheEntry::Ready(image) = app.math_entry(
+                        "\\lambda",
+                        MathLayoutStyle::Text,
+                        typography.math_font_size(MathLayoutStyle::Text),
+                        1.0,
+                        display_scale,
+                        app.palette().text,
+                    ) else {
+                        panic!("{mode:?}: expected ready inline math image");
+                    };
+                    let margin = preview::inline_math_baseline_margin(
+                        cx,
+                        font_family,
+                        font_size,
+                        line_height,
+                        image.descent,
+                    );
+                    // Matches GPUI's paint_line: padding_top = (lh - ascent - |descent|) / 2.
+                    let baseline_from_bottom = (px(line_height) - ascent + descent.abs()) / 2.;
+                    assert!(
+                        (f32::from(margin) - f32::from(baseline_from_bottom - image.descent)).abs()
+                            < 0.01,
+                        "{mode:?}: margin must lift math baseline to painted text baseline"
+                    );
+                    (margin, baseline_from_bottom, image.descent, px(line_height))
+                })
+            });
+
+        let atom_selector = match mode {
+            ViewMode::Read => format!("preview-math-0-{math_offset}"),
+            ViewMode::VisualEdit => format!("visual-math-atom-{math_offset}"),
+            _ => unreachable!(),
+        };
+        let atom = cx
+            .debug_bounds(test_debug_selector(atom_selector))
+            .expect("rendered inline math atom bounds");
+        if mode == ViewMode::VisualEdit {
+            let line = cx
+                .debug_bounds("visual-mixed-line-0-0")
+                .expect("visual mixed line bounds");
+            let atom_bottom_gap = line.bottom() - atom.bottom();
+            assert!(
+                (f32::from(atom_bottom_gap) - f32::from(expected_margin)).abs() < 0.5,
+                "visual atom bottom gap {atom_bottom_gap:?} should match expected margin {expected_margin:?}"
+            );
+            let math_baseline_from_bottom = line.bottom() - (atom.bottom() - math_descent);
+            assert!(
+                (f32::from(math_baseline_from_bottom) - f32::from(expected_baseline_from_bottom))
+                    .abs()
+                    < 0.5,
+                "visual math baseline {math_baseline_from_bottom:?} should match text baseline {expected_baseline_from_bottom:?} (line_height={line_height:?})"
+            );
+        } else {
+            assert!(atom.size.height > px(0.));
+        }
+    }
 }
 
 #[test]
