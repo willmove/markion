@@ -1,9 +1,10 @@
 # Project status / 项目进展
 
-Updated / 更新：2026-11-24。This snapshot describes repository implementation and recorded evidence; publication is tracked separately below. 本页区分代码实现、已有证据与发布状态，不以任务勾选数代替验收结果。
+Updated / 更新：2026-11-27。This snapshot describes repository implementation and recorded evidence; publication is tracked separately below. 本页区分代码实现、已有证据与发布状态，不以任务勾选数代替验收结果。
 
 ## Release state / 发布状态
 
+- v0.6.4 published / 已发布：表格选择与引用内表格、表格手柄菜单与均分列宽、渲染保真（引用块子元素、表头强调与列对齐、嵌套粗斜体、标点跟随、公式基线、Linux 字体回退）、可选的 Visual Edit 代码折叠，以及 Word 导入／LaTeX／Word／HTML 导出保真与一批编辑安全修复。最终工作区测试 **2,384 passed / 5 ignored / 0 failed**；发布预检中发现并修复了紧凑列表“复制块”插入空行的回归（未随任何版本发布）。标签工作流全部作业成功，八包、两签名、双清单与 OSS 哈希完成核验；未执行的原生人工项按 V064-EX-01 一次性例外披露，见 [v0.6.4 preflight](verification/release-v0.6.4-preflight.md)。
 - v0.6.3 published / 已发布：新增 Arch/Omarchy 兼容 pacman 包、代码块格式化、表格公式渲染与主题一致性改进。最终工作区测试通过；标签工作流十个作业全部成功，八包、两签名、双清单与 OSS 哈希均完成核验，两个 macOS 架构通过签名、公证和安装启动检查。未执行的原生人工项按 V063-EX-01 一次性例外披露，见 [v0.6.3 preflight](verification/release-v0.6.3-preflight.md)。
 - v0.6.2 tag preserved, no GitHub Release / 保留标签但未发布 Release：Apple 公证网络故障后未重建或移动公开标签；v0.6.3 包含其后修复并作为当前发布版本。
 
@@ -11,8 +12,8 @@ Updated / 更新：2026-11-24。This snapshot describes repository implementatio
 
 - v0.6.0 published / 已发布：紧凑上下文菜单、表格与图片属性、斜杠/emoji 补全、独立右侧大纲及离线样例库；Windows workspace **2,216 passed / 5 ignored / 0 failed**。四个平台打包、AppImage 冒烟、签名、发布、镜像及哈希验证均完成；未验证人工项按维护者授权明确跳过，见 [v0.6.0 preflight](verification/release-v0.6.0-preflight.md)。
 
-- Latest verified public stable tag / 当前公开稳定版本：[`v0.6.3`](https://github.com/willmove/markion/releases/tag/v0.6.3).
-- Published comparison / 本次完整对比：[`v0.6.2...v0.6.3`](https://github.com/willmove/markion/compare/v0.6.2...v0.6.3).
+- Latest verified public stable tag / 当前公开稳定版本：[`v0.6.4`](https://github.com/willmove/markion/releases/tag/v0.6.4).
+- Published comparison / 本次完整对比：[`v0.6.3...v0.6.4`](https://github.com/willmove/markion/compare/v0.6.3...v0.6.4).
 - Previous v0.5.3 preflight / 上一版本记录: **2136 passed / 5 ignored / 0 failed**, bundle verification and build/lint/spec checks pass; the tag packaging/signing/publication/mirror workflow and Windows repository quality gate passed. 本次全量回归、标签构建/签名/发布/镜像及 Windows 仓库质量检查已通过；缺少环境的人工项按维护者授权记录为跳过；详见 [v0.5.3 preflight](verification/release-v0.5.3-preflight.md)。
 - Follow the [release process](release-process.md). A prepared version or successful build alone does not establish publication: native packages, updater signatures and manifests, the AppImage smoke test, OSS mirror, release notes, and required manual evidence must be verified. 准备版本号或构建成功不等于发布完成；安装包、签名、元数据、冒烟测试、镜像与人工验证均须核实。
 
@@ -24,7 +25,7 @@ Updated / 更新：2026-11-24。This snapshot describes repository implementatio
 | Editing baseline / 编辑基本功 | Word/line/page navigation, double/triple click, progressive Select All, paired-input rules, nested list indentation, nearby overlays / 词行页导航、双击三击、逐级全选、配对输入、嵌套列表缩进及就近浮层 | [P1 report](visual-p1-editing.md), [shortcuts](keyboard-shortcuts.md) |
 | Structured selection / 结构选区 | Text/block/cell state; multi-block copy/delete/move and subtree drag; one validated transaction and semantic undo / 文本、块、单元格选区，多块复制删除移动、子树拖动及统一事务撤销 | [Structured-selection archive](../openspec/changes/archive/2026-11-11-add-structured-visual-selection/tasks.md), [coverage contract](visual-editing-quality.md) |
 | Block grip settings / 块首快捷菜单 | Exclusive selection ends leave the next block's syntax hidden; completed clicks open compact block settings, optional in General preferences; Shift extension and dragging remain available / 修正后续块标记误展开，完成单击后打开紧凑菜单，可在常规偏好中关闭，保留扩选和拖动 | [Change tasks](../openspec/changes/archive/2026-11-17-fix-block-handle-selection-and-menu/tasks.md), [Windows and regression verification](verification/block-grip-menu-windows-2026-11-16.md) |
-| Tables and code / 表格与代码 | Rectangular/row/column selection, TSV/HTML copy, matrix paste, final-cell Tab adds a row, code folding / 矩形与整行整列选区、TSV/HTML 复制、矩阵粘贴、末格 Tab 加行、代码折叠 | [Advanced-block archive](../openspec/changes/archive/2026-11-11-complete-advanced-visual-blocks/tasks.md), [smoke fixture](fixtures/visual-p3-smoke.md) |
+| Tables and code / 表格与代码 | Rectangular/row/column selection, TSV/HTML copy, matrix paste, final-cell Tab adds a row, opt-in code folding, quoted-table editing and Equalize Column Widths / 矩形与整行整列选区、TSV/HTML 复制、矩阵粘贴、末格 Tab 加行、可选代码折叠、引用内表格编辑与均分列宽 | [Advanced-block archive](../openspec/changes/archive/2026-11-11-complete-advanced-visual-blocks/tasks.md), [smoke fixture](fixtures/visual-p3-smoke.md) |
 | Windows native input / 原生输入 | CF_HTML clipboard publishing, composition-scoped IME undo, stable table viewport, coalesced input-triggered frames / HTML 剪贴板、组合输入撤销、表格视口稳定及输入后帧调度 | [Windows real-input report](verification/windows-native-input-2026-11-11.md), [IME/frame archive](../openspec/changes/archive/2026-11-11-fix-windows-ime-undo-grouping/tasks.md) |
 | Linux window chrome / 窗口 | Wayland client controls, rounded corners, shadows and resize margins; sidebar overlap fix / Wayland 客户端窗口按钮、圆角、阴影和缩放边缘，侧栏背景修复 | [Window-control tasks](../openspec/changes/archive/2026-11-17-fix-linux-wayland-window-controls/tasks.md), [corner tasks](../openspec/changes/archive/2026-11-17-round-csd-window-corners/tasks.md), [resize tasks](../openspec/changes/add-csd-resize-borders/tasks.md) |
 | Existing workflows / 既有流程 | Markdown/plain-text/JSON/YAML/TOML documents, native Word import, local MarkNice publishing, AI opt-in, backup/sync and signed Windows/AppImage updates / 文档与数据文件、Word 导入、本地公众号排版、可选 AI、备份同步及签名更新 | [README](../README.md), [Word import](word-import.md), [MarkNice](marknice-workspace.md), [AI guide](ai-agent-guide.md), [sync guide](git-sync.md) |

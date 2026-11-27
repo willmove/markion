@@ -49,18 +49,18 @@ Markion uses [`pulldown-cmark`](https://github.com/pulldown-cmark/pulldown-cmark
 
 ## View modes
 
-Markion cycles through four modes with **Ctrl+Shift+V** (default is Split), or jumps straight to one with the mode shortcuts:
+Markion cycles through four modes with **Ctrl+Shift+V** (default is Visual Edit), or jumps straight to one with the mode shortcuts:
 
-1. **Edit** (Ctrl+/) — raw Markdown source text only.
-2. **Visual Edit** (Ctrl+E) — a WYSIWYG-first, source-backed editing surface; see [README: Editing modes](../README.md#editing-modes) for what it covers.
-3. **Split** (Ctrl+P) — source on the left, rendered preview on the right (default).
+1. **Edit** (Ctrl+/) — raw Markdown source text only; Ctrl+/ toggles between Source and Split Preview.
+2. **Visual Edit** (Ctrl+E) — a WYSIWYG-first, source-backed editing surface; see [README: Editing modes](../README.md#editing-modes) for what it covers. This is the default mode.
+3. **Split** — source on the left, rendered preview on the right.
 4. **Read** (Ctrl+R) — rendered preview only, non-editing.
 
 Switching modes preserves the active document, cursor/selection, undo history, and per-tab scroll state.
 
 ## Math
 
-Markion typesets math on screen (Split/Read preview and Visual Edit) with an embedded RaTeX engine (KaTeX-compatible, bundled fonts) that renders `$inline$` and `$$block$$` formulas into cached SVG — no network access and no external LaTeX install required. LaTeX export keeps the native `$...$`/`$$...$$` source for the reader's own toolchain to typeset. The built-in DOCX export fallback (used only when pandoc is unavailable) still degrades formulas to a readable Unicode plain-text approximation rather than embedding typeset glyphs.
+Markion typesets math on screen (Split/Read preview and Visual Edit) with an embedded RaTeX engine (KaTeX-compatible, bundled fonts) that renders `$inline$` and `$$block$$` formulas into cached SVG — no network access and no external LaTeX install required. LaTeX export keeps the native `$...$`/`$$...$$` source for the reader's own toolchain to typeset. The built-in DOCX exporter converts supported formulas to native Word math, with readable source fallbacks for unsupported formulas.
 
 ## Export
 
@@ -72,12 +72,12 @@ Markion exports to eight formats. Run an export from the **Export** menu or with
 | HTML (styled) | built-in |
 | Plain HTML | built-in |
 | LaTeX | built-in (rich inline styling, table alignment, `lstlisting` code blocks) |
-| PDF | pandoc engine first, falls back to the built-in `markion-pdf` writer |
-| DOCX | pandoc engine first, falls back to built-in |
-| PNG | built-in (basic text snapshot) |
-| JPEG | built-in (basic text snapshot) |
+| PDF | built-in layout writer (default); optional pandoc engine |
+| DOCX | built-in writer (default); optional pandoc engine |
+| PNG | built-in (same layout engine as PDF) |
+| JPEG | built-in (same layout engine as PDF) |
 
-**PDF and DOCX** try the pandoc engine first (a subprocess invoking [`pandoc`](https://pandoc.org/)). If pandoc (or the PDF engine, default `xelatex`) is unavailable or fails, Markion **silently falls back** to the built-in writer so export always succeeds. The status bar message after export discloses which backend produced the file. For PDF, the built-in fallback is now a full layout engine (krilla + cosmic-text) that supports CJK and Latin typography, embedded images, syntax-highlighted code blocks, tables, and footnotes, so the built-in message is shown neutrally. For DOCX, the built-in writer is still simpler, and its status message continues to hint that installing pandoc yields richer output.
+**PDF and DOCX** use the built-in writers by default. If you set the export backend to pandoc (**Preferences → Export**, or `[export] backend = "pandoc"` in `config.toml`), Markion invokes [`pandoc`](https://pandoc.org/) as a subprocess; when pandoc (or the PDF engine, default `xelatex`) is unavailable or fails, Markion **silently falls back** to the built-in writer so export always succeeds. The status bar message after export discloses which backend produced the file. The built-in PDF writer is a full layout engine (krilla + cosmic-text) that supports CJK and Latin typography, embedded images, syntax-highlighted code blocks, tables, and footnotes, and PNG/JPEG snapshots reuse it. For DOCX, the built-in writer is simpler, and its status message continues to hint that installing pandoc yields richer output.
 
 You can change the PDF engine and tune the built-in PDF output via the config file:
 
@@ -109,7 +109,7 @@ pandoc_path = "C:/tools/pandoc.exe"       # optional
 reference_doc = "templates/my-style.docx" # optional
 ```
 
-The built-in PNG/JPEG paths are deliberately basic text snapshots. The built-in PDF writer is now a rich fallback; for DOCX-specific pandoc customization or advanced PDF templating, install pandoc plus a LaTeX engine (e.g. `xelatex` from TeX Live / MiKTeX, or `pdfroff` from groff).
+The built-in PNG/JPEG snapshots reuse the PDF layout engine. For DOCX-specific pandoc customization or advanced PDF templating, install pandoc plus a LaTeX engine (e.g. `xelatex` from TeX Live / MiKTeX, or `pdfroff` from groff) and select the pandoc backend.
 
 YAML front matter `title` / `author` / `date` feed into export metadata: HTML `<meta>` tags, DOCX document properties, and the LaTeX preamble.
 
@@ -175,12 +175,12 @@ Markion stores its configuration under platform-standard directories.
 
 ### `config.toml`
 
-The complete supported schema (all fields optional, defaults shown):
+The main defaults (all fields optional; see the [user guide](user-guide.md) for the full schema):
 
 ```toml
 theme = "Paper"                   # built-in or custom theme name
 # custom_theme = "Midnight"      # a custom theme name (optional)
-language = "en"                   # en, zh-hans, zh-hant, ja, fr, de, es
+language = "en"                   # en, zh-hans, zh-hant, ja, ko, fr, de, es
 focus_mode = false
 typewriter_mode = false
 code_line_numbers = true
@@ -229,7 +229,7 @@ Markion caches derived document state (preview blocks, outline, statistics, synt
 
   Repeat this only after browser-downloaded updates to older ad-hoc builds. Downloading with `curl -LO <dmg-url>` avoids the prompt entirely, because curl does not set the quarantine flag.
 - **Windows SmartScreen warns before running the installer.** Click **More info → Run anyway**. Releases are unsigned.
-- **PDF export produced a tiny, plain-looking file.** The built-in PDF writer (a text snapshot) was used because pandoc or its PDF engine was not installed. Install [pandoc](https://pandoc.org/) and a LaTeX engine (e.g. `xelatex`), or set `[export] pdf_engine = "pdfroff"` and install groff, then re-export — the status bar will say "pandoc engine" when the richer path succeeds.
+- **PDF export used the built-in writer and you want the pandoc path.** The built-in PDF writer (krilla + cosmic-text layout) is the default. For pandoc-driven PDF or advanced templating, install [pandoc](https://pandoc.org/) and a LaTeX engine (e.g. `xelatex`), or set `[export] pdf_engine = "pdfroff"` and install groff, then select the pandoc backend — the status bar will say "pandoc engine" when that path succeeds.
 - **A custom theme is not appearing in Preferences.** Confirm the `.toml` file is in the themes directory (see [Configuration locations](#configuration-locations)), that its `name` field is set and non-empty, and that no built-in theme has the same name (built-ins take precedence).
 - **Where are the logs?** See the Logs dir column in [Configuration locations](#configuration-locations). Set `RUST_LOG=debug` before launching to increase verbosity.
 

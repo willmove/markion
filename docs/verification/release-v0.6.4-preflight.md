@@ -1,6 +1,6 @@
 # Markion v0.6.4 release verification
 
-**Status: CANDIDATE VERIFIED ON WINDOWS; the release-specific scope decision is pending. Unrun native/manual checks remain BLOCKED/NOT_RUN, not PASS.**
+**Status: PUBLISHED AND VERIFIED under disclosed exception V064-EX-01. Unrun native/manual checks remain BLOCKED/NOT_RUN, not PASS.**
 
 The comparison base is tag `v0.6.3`, the latest published GitHub Release. The range `v0.6.3..a9ce8e4` contains 77 commits: 75 fixes and features, one merge and the v0.6.3 records commit. All were direct pushes to `main`.
 
@@ -92,4 +92,27 @@ The exception covers the disclosed unrun items: native macOS and Linux desktop e
 
 ## Final tagged artifact and publication evidence
 
-Pending.
+- Release commits: formatting `0fdf15c`, list-duplicate repair `dae08fb`, documentation `080c861`, dedicated release commit `4df26771b0337a402e5508ab719d44db9dacf7f7` with only the synchronized version fields; annotated tag `v0.6.4` (`14d6f5d4`) resolves to it. Local `main`, `origin/main` and the tag were synchronized at push time; the worktree is clean; the tag was never moved.
+- [Tag workflow 45948581120](https://github.com/willmove/markion/actions/runs/45948581120): **PASS**. All ten jobs succeeded: four native build/package jobs, the no-GPU AppImage smoke, updater signing, both macOS installed-app launches, GitHub publication and OSS mirroring.
+- [GitHub Release v0.6.4](https://github.com/willmove/markion/releases/tag/v0.6.4): published stable, non-draft, title `Markion v0.6.4`, curated English/Chinese notes with the full comparison link. Exactly 11 assets: eight packages, two Minisign signatures and `update.json`.
+- GitHub `update.json`: version `0.6.4`; only `windows-x86_64`/NSIS and `linux-x86_64`/AppImage entries; each installer URL names its GitHub asset, and each embedded signature equals the corresponding published `.sig` asset byte-for-byte (the `.sig` assets carry the base64-encoded Minisign file, as in earlier releases).
+- OSS `latest/`: all 14 public objects return HTTP 200. `manifest.json` reports version `0.6.4`, tag `v0.6.4` and all eight packages including `linux-arch-x86_64`; every digest in `sha256sums.txt` equals the GitHub asset digest for the same package; the mirrored `update.json` names OSS installer URLs on both platforms and its signatures are identical to GitHub's.
+- Apple Silicon DMG SHA-256 `af4fd08c6f185e227a5ab10a3171de7a2f2745d5008135d9bc80a56b1222ef87` and Intel DMG SHA-256 `23d9838041496c89720e95c5b47ea2e75b97afc79c9b75848ab45f36b1474adb` match the public GitHub assets. Both launch jobs verified Developer ID signatures and stapled notarization (`source=Notarized Developer ID` on the app and the DMG) and then opened a visible installed-app window on the matching architecture.
+- Final Windows portable package technical check: the released `markion_0.6.4_x64-portable.zip` (SHA-256 `46a45a63dd6c76dc66d57613fba337572495ccf98ec4d8b53873d40cc0ce36f1`, equal to GitHub and `sha256sums.txt`) was downloaded, its packaged `markion.exe` hashed, and the isolated-profile launch and native visual smoke were re-run against this final binary; see the addendum below.
+- Previous-version signed upgrades remain NOT_RUN under V064-EX-01; nothing was installed on the maintainer's account.
+
+### Final package smoke addendum (Windows, isolated profile)
+
+- Final packaged `markion.exe`: SHA-256 `f44ba90d9a09ae282de37e68e48537175662f8ede2619d9834dcda43ef840fbc` (70,692,352 bytes); differs from the candidate `6abdaa68…`, as expected from the release-range repair and the `0.6.4` metadata.
+- Isolated launch on the synthetic tables document: PASS — visible window `Markion - tables.md` (1180×760 logical at 120 DPI), non-blank `PrintWindow` capture (SHA-256 `5531f4e128a7c0897016bec843a264fb8cf10d0b5456e838c233dd161b2a5a49`), unchanged document bytes, untouched real `session.toml`.
+- Native visual smoke (CALLBACK_REPLAY) on the final binary: `passed: true`, exit code 0, 5.6 s, peak working set 251.2 MiB, reported version `0.6.4`; input P50/P95 across 100/300/600/1024 KiB fixtures 12.46–27.76 ms / 20.72–36.97 ms; no OS input injection.
+- Real OS input, installation and signed-update flows remain in the disclosed NOT_RUN/BLOCKED scope.
+
+## Final publication checklist
+
+- [x] Complete workspace and release-only diff validation; all ten workspace packages resolve to 0.6.4 and no tag/Release collision existed.
+- [x] Formatting-gate repair verified formatting-only; D064-01 repaired with regression tests before tagging, never shipped.
+- [x] Windows candidate and final package resource, launch and native-smoke checks under V064-EX-01; unrun native scope disclosed and not relabelled.
+- [x] Successful tag workflow, including both notarized macOS installed-app launches, AppImage smoke, updater signing and publication.
+- [x] Eight GitHub packages, NSIS/AppImage signatures, `update.json`, and curated bilingual notes verified.
+- [x] Eight OSS package mirrors, both signatures, both manifests, `packager.toml` and `sha256sums.txt` verified with matching versions, URLs and signatures.

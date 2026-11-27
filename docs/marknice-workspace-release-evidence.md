@@ -33,3 +33,7 @@ The [release preflight](verification/release-v0.5.3-preflight.md) records the ma
 ## v0.6.0 release-specific scope
 
 On 2026-11-17 the maintainer explicitly authorized skipping unavailable cross-platform manual acceptance for v0.6.0 after all automated/native package, signing and mirror gates pass. The browser/WeChat/Word matrix above remains unverified; this authorization neither fills those rows as passed nor changes the default release gate. See the [v0.6.0 preflight](verification/release-v0.6.0-preflight.md) for the exact scope, recorded Windows source checks and final publication evidence.
+
+## v0.6.1, v0.6.3 and v0.6.4 release-specific scope
+
+The v0.6.1, v0.6.3 and v0.6.4 releases each carried the maintainer's own one-time exception for the same unavailable manual matrix (native macOS/Linux desktops, previous-version signed upgrades, real IME/browser/Word/WeChat interoperability); none of them fills the rows above as passed. See the [v0.6.1 preflight](verification/release-v0.6.1-preflight.md) (V061-NATIVE-SCOPE), the [v0.6.3 preflight](verification/release-v0.6.3-preflight.md) (V063-EX-01) and the [v0.6.4 preflight](verification/release-v0.6.4-preflight.md) (V064-EX-01) for each exact scope and disclosure.
