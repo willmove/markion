@@ -375,6 +375,7 @@ impl EntityInputHandler for MarkionApp {
             .get(edit_range.clone())
             .is_some_and(|current| current != replacement);
         let mut applied = false;
+        let mut ime_commit: Option<RecentImeCommit> = None;
         if changed {
             let intent = if committing_ime {
                 UndoCaptureKind::Ime
@@ -417,6 +418,13 @@ impl EntityInputHandler for MarkionApp {
                         "canonical edit accepted by checked boundary"
                     );
                     self.document_input_target = Some((receipt.document, receipt.after_version));
+                    if active_marked_range.is_some() {
+                        ime_commit = Some(RecentImeCommit {
+                            document: (receipt.document, receipt.after_version),
+                            before_version: receipt.before_version,
+                            at: Instant::now(),
+                        });
+                    }
                     applied = true;
                 }
                 Err(rejection) => {
@@ -462,6 +470,9 @@ impl EntityInputHandler for MarkionApp {
         .into();
         if applied {
             self.after_document_changed(cx);
+            if let Some(commit) = ime_commit {
+                self.recent_ime_commit = Some(commit);
+            }
         }
         cx.notify();
     }

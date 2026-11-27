@@ -490,6 +490,15 @@ impl Interactivity {
         }));
     }
 
+    /// Set the pointer travel threshold before [`Self::on_drag`] starts a drag.
+    /// Defaults to `DRAG_THRESHOLD` (2 px) when unset.
+    pub fn drag_threshold(&mut self, threshold: Pixels)
+    where
+        Self: Sized,
+    {
+        self.drag_threshold = Some(threshold);
+    }
+
     /// On drag initiation, this callback will be used to create a new view to render the dragged value for a
     /// drag and drop operation. This API should also be used as the equivalent of 'on drag start' with
     /// the [`Self::on_drag_move`] API
@@ -1122,6 +1131,16 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Set the pointer travel threshold before [`Self::on_drag`] starts a drag.
+    /// Defaults to 2 px when unset.
+    fn drag_threshold(mut self, threshold: Pixels) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().drag_threshold(threshold);
+        self
+    }
+
     /// On drag initiation, this callback will be used to create a new view to render the dragged value for a
     /// drag and drop operation. This API should also be used as the equivalent of 'on drag start' with
     /// the [`InteractiveElement::on_drag_move`] API.
@@ -1518,6 +1537,7 @@ pub struct Interactivity {
     pub(crate) can_drop_predicate: Option<CanDropPredicate>,
     pub(crate) click_listeners: Vec<ClickListener>,
     pub(crate) drag_listener: Option<(Arc<dyn Any>, DragListener)>,
+    pub(crate) drag_threshold: Option<Pixels>,
     pub(crate) hover_listener: Option<Box<dyn Fn(&bool, &mut Window, &mut App)>>,
     pub(crate) tooltip_builder: Option<TooltipBuilder>,
     pub(crate) window_control: Option<WindowControlArea>,
@@ -2080,6 +2100,10 @@ impl Interactivity {
             });
         }
         let drag_cursor_style = self.base_style.as_ref().mouse_cursor;
+        let drag_threshold = self
+            .drag_threshold
+            .map(|threshold| f64::from(f32::from(threshold)).max(0.))
+            .unwrap_or(DRAG_THRESHOLD);
 
         let mut drag_listener = mem::take(&mut self.drag_listener);
         let drop_listeners = mem::take(&mut self.drop_listeners);
@@ -2156,7 +2180,7 @@ impl Interactivity {
                         let mut pending_mouse_down = pending_mouse_down.borrow_mut();
                         if let Some(mouse_down) = pending_mouse_down.clone()
                             && !cx.has_active_drag()
-                            && (event.position - mouse_down.position).magnitude() > DRAG_THRESHOLD
+                            && (event.position - mouse_down.position).magnitude() > drag_threshold
                             && let Some((drag_value, drag_listener)) = drag_listener.take()
                         {
                             *clicked_state.borrow_mut() = ElementClickedState::default();

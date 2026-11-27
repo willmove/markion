@@ -463,6 +463,9 @@ impl MarkionApp {
             self.close_markdown_reference(cx);
             return;
         }
+        if self.pending_block_grip.take().is_some() {
+            return;
+        }
         if self.block_menu.is_some() || self.visual_table_menu.is_some() {
             if self.back_visual_context_submenu(cx) {
                 return;

@@ -2733,9 +2733,36 @@ pub(super) fn visual_edit_surface_view(
         .relative()
         .flex_1()
         .min_h_0()
-        .on_scroll_wheel(cx.listener(|app, _, _, cx| {
-            app.close_visual_block_menu(cx);
+        .on_scroll_wheel(cx.listener(|app, event: &gpui::ScrollWheelEvent, _, cx| {
+            app.handle_visual_block_menu_scroll(event, cx);
         }))
+        // Resolve pending grip clicks in Bubble phase (not Capture with
+        // stop_propagation) so GPUI's descendant MouseUp capture handlers
+        // always clear `pending_mouse_down` and `clicked_state`.
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|app, event: &MouseUpEvent, _, cx| {
+                if app.finish_visual_block_grip_press(
+                    event.position,
+                    event.modifiers,
+                    cx.has_active_drag(),
+                    cx,
+                ) {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(|app, event: &MouseUpEvent, _, cx| {
+                app.finish_visual_block_grip_press(
+                    event.position,
+                    event.modifiers,
+                    cx.has_active_drag(),
+                    cx,
+                );
+            }),
+        )
         .on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
             if app.typing_chrome_suppressed {
                 app.typing_chrome_suppressed = false;

@@ -936,6 +936,7 @@ impl MarkionApp {
             &target,
         );
         self.visual_table_menu = None;
+        self.visual_menu_scroll_dismiss_accum = 0.0;
         let (context, is_fenced_code, can_wrap_table) = self
             .active_tab()
             .document
@@ -2105,12 +2106,36 @@ impl MarkionApp {
     pub(super) fn dismiss_visual_block_menu(&mut self) -> bool {
         let block_menu = self.block_menu.take().is_some();
         let table_menu = self.visual_table_menu.take().is_some();
+        self.visual_menu_scroll_dismiss_accum = 0.0;
         block_menu || table_menu
+    }
+
+    pub(super) fn handle_visual_block_menu_scroll(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if self.block_menu.is_none() && self.visual_table_menu.is_none() {
+            return;
+        }
+        let pixel_delta = event.delta.pixel_delta(px(20.));
+        let magnitude = f32::from(pixel_delta.x)
+            .abs()
+            .max(f32::from(pixel_delta.y).abs());
+        if magnitude <= f32::EPSILON {
+            return;
+        }
+        self.visual_menu_scroll_dismiss_accum += magnitude;
+        if self.visual_menu_scroll_dismiss_accum >= VISUAL_BLOCK_MENU_SCROLL_DISMISS_THRESHOLD {
+            self.close_visual_block_menu(cx);
+        }
     }
 
     /// A tab/document transition ends every overlay bound to the old source.
     pub(super) fn dismiss_document_editing_overlays(&mut self) {
         self.dismiss_visual_block_menu();
+        self.pending_block_grip = None;
+        self.recent_ime_commit = None;
         self.preview_context_menu = None;
         self.editor_context_menu = None;
         self.tab_context_menu = None;
@@ -2141,6 +2166,7 @@ impl MarkionApp {
                 .is_none()
         }) {
             self.visual_table_menu = None;
+            self.visual_menu_scroll_dismiss_accum = 0.0;
         }
     }
 
@@ -4889,6 +4915,7 @@ impl MarkionApp {
         // Each mouse-down starts a fresh click: clear the click-away flag left
         // over from the previous click before deciding what this click does.
         self.name_editor_click_away = false;
+        self.pending_block_grip = None;
         let had_transient_ui = self.active_menu.is_some()
             || self.file_tree_context_menu.is_some()
             || self.preview_context_menu.is_some()

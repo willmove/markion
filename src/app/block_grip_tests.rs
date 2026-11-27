@@ -877,3 +877,523 @@ fn block_grip_preference_persists_resets_and_keeps_document_caches(cx: &mut Test
         }
     }
 }
+
+#[gpui::test]
+fn block_grip_click_tolerates_pointer_jitter_below_drag_threshold(cx: &mut TestAppContext) {
+    const SOURCE: &str = "First paragraph\n\nSecond paragraph\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let (version, blocks) = app.read_with(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+
+    // Jitter of ~4.0 px exceeds GPUI's default 2 px drag threshold but stays
+    // inside the 6 px grip threshold, so the click opens the quick menu.
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    let jittered = grip.center() + point(px(3.5), px(2.0));
+    cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_event(MouseMoveEvent {
+        position: jittered,
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, cx| {
+        assert!(!cx.has_active_drag(), "4 px jitter must not enter drag");
+        assert!(app.block_menu.is_none());
+    });
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: jittered,
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let menu = app
+            .block_menu
+            .as_ref()
+            .expect("jittered click inside threshold must open grip quick menu");
+        assert!(menu.from_grip);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+
+    // Moving the pointer freely after a grip click must never trigger a
+    // phantom drag or dismiss the open quick menu.
+    cx.simulate_event(MouseMoveEvent {
+        position: grip.center() + point(px(120.), px(60.)),
+        pressed_button: None,
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, cx| {
+        assert!(
+            !cx.has_active_drag(),
+            "moving unpressed pointer after grip click must not start a phantom drag"
+        );
+        assert!(
+            app.block_menu.as_ref().is_some_and(|menu| menu.from_grip),
+            "moving unpressed pointer after grip click must keep the quick menu open"
+        );
+    });
+
+    // Travel past the 6 px threshold enters drag and suppresses the popup.
+    let dragged = grip.center() + point(px(8.0), px(2.0));
+    cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_event(MouseMoveEvent {
+        position: dragged,
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, cx| {
+        assert!(cx.has_active_drag(), "travel past 6 px must start drag");
+        assert!(app.block_menu.is_none());
+    });
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: dragged,
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(
+            app.block_menu.is_none(),
+            "completed drag must not open click popup"
+        );
+    });
+}
+
+#[gpui::test]
+fn block_grip_click_survives_intermediate_frame_layout_collapse(cx: &mut TestAppContext) {
+    // 1. Caret inside a collapsible HTML source pane above the target paragraph.
+    const HTML_ABOVE: &str =
+        "<div>\n<p>Line one</p>\n<p>Line two</p>\n<p>Line three</p>\n</div>\n\nTarget paragraph\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(HTML_ABOVE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
+        app.sidebar_visible = false;
+        app.outline_visible = false;
+        let offset = HTML_ABOVE.find("Line one").unwrap();
+        app.active_tab_mut().selected_range = offset..offset;
+        app
+    });
+    cx.simulate_resize(size(px(460.), px(520.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (target_index, html_id) = app.read_with(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let html_id = blocks
+            .iter()
+            .find(|b| matches!(b.kind, VisualBlockKind::Html { .. }))
+            .unwrap()
+            .id;
+        let target_index = blocks
+            .iter()
+            .position(|b| {
+                matches!(b.kind, VisualBlockKind::Paragraph)
+                    && app.active_tab().document.text()[b.source_range.clone()]
+                        .contains("Target paragraph")
+            })
+            .unwrap();
+        (target_index, html_id)
+    });
+    let selector = test_debug_selector(format!("visual-block-drag-grip-{target_index}"));
+    let grip_before = cx.debug_bounds(selector).unwrap();
+
+    // Real clicks render one or more frames between MouseDown and MouseUp.
+    cx.simulate_mouse_down(grip_before.center(), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let grip_mid = cx.debug_bounds(selector).unwrap();
+    assert_eq!(
+        grip_mid, grip_before,
+        "unmodified grip MouseDown must not collapse earlier blocks before MouseUp"
+    );
+    app.read_with(cx, |app, _| assert!(app.block_menu.is_none()));
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: grip_before.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let menu = app
+            .block_menu
+            .as_ref()
+            .expect("multi-frame grip click must open quick menu");
+        assert!(menu.from_grip);
+        assert!(
+            app.active_tab().document.text()[app.active_tab().selected_range.clone()]
+                .starts_with("Target paragraph")
+        );
+    });
+
+    // 2. Even if an external layout shift moves the grip off the pointer while
+    // held down, releasing at the down position still completes the grip click.
+    app.update(cx, |app, cx| {
+        app.close_visual_block_menu(cx);
+        app.active_tab_mut()
+            .set_visual_source_expanded(html_id, true);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let grip_expanded = cx.debug_bounds(selector).unwrap();
+    cx.simulate_mouse_down(grip_expanded.center(), MouseButton::Left, Modifiers::none());
+    app.update(cx, |app, cx| {
+        app.active_tab_mut()
+            .set_visual_source_expanded(html_id, false);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let grip_shifted = cx.debug_bounds(selector).unwrap();
+    assert!(
+        grip_shifted.top() < grip_expanded.top(),
+        "external collapse shifted the grip upward while mouse was held"
+    );
+    assert!(
+        !grip_shifted.contains(&grip_expanded.center()),
+        "pointer is no longer inside the shifted 22px grip hitbox"
+    );
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: grip_expanded.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(
+            app.block_menu.as_ref().is_some_and(|menu| menu.from_grip),
+            "grip click must survive external mid-click layout shift"
+        );
+    });
+}
+
+#[gpui::test]
+fn block_grip_menu_ignores_zero_and_micro_scroll_events_until_threshold(cx: &mut TestAppContext) {
+    const SOURCE: &str = "Paragraph one\n\nParagraph two\n\nParagraph three\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    let row = cx.debug_bounds("visual-block-row-0").unwrap();
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (version, selection, blocks) = app.read_with(cx, |app, _| {
+        assert!(app.block_menu.as_ref().is_some_and(|menu| menu.from_grip));
+        (
+            app.active_tab().document.version(),
+            app.active_tab().selected_range.clone(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+
+    let scroll_point = point(row.right() - px(4.), row.center().y);
+    for (phase, dy) in [
+        (gpui::TouchPhase::Started, 0.0_f32),
+        (gpui::TouchPhase::Ended, 0.0_f32),
+        (gpui::TouchPhase::Moved, -1.2_f32),
+        (gpui::TouchPhase::Moved, -1.2_f32),
+    ] {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: scroll_point,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(dy))),
+            touch_phase: phase,
+            modifiers: Modifiers::none(),
+        });
+        cx.run_until_parked();
+        app.read_with(cx, |app, _| {
+            assert!(
+                app.block_menu.is_some(),
+                "zero/sub-threshold scroll ({phase:?}, dy={dy}) must not dismiss block menu"
+            );
+        });
+    }
+
+    // Deliberate scroll past the dismissal threshold closes the menu without
+    // mutating document state or caches.
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll_point,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-20.))),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(app.block_menu.is_none());
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().selected_range, selection);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+}
+
+#[gpui::test]
+fn block_grip_click_recovers_after_synchronous_ime_commit_and_rejects_unrelated_stale(
+    cx: &mut TestAppContext,
+) {
+    for click_same_block in [false, true] {
+        const SOURCE: &str = "Hello\n\nSecond paragraph\n";
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+            app.view_mode = ViewMode::VisualEdit;
+            app.language = Language::En;
+            app.active_tab_mut().selected_range = 5..5;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        // Start active IME composition in the first paragraph.
+        app.update_in(cx, |app, window, cx| {
+            gpui::EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                None,
+                "nihao",
+                Some(5..5),
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let target_index = app.read_with(cx, |app, _| {
+            let blocks = app.active_tab().document.visual_blocks_shared();
+            if click_same_block {
+                0
+            } else {
+                blocks
+                    .iter()
+                    .position(|b| {
+                        matches!(b.kind, VisualBlockKind::Paragraph)
+                            && app.active_tab().document.text()[b.source_range.clone()]
+                                .contains("Second paragraph")
+                    })
+                    .unwrap()
+            }
+        });
+        let selector = test_debug_selector(format!("visual-block-drag-grip-{target_index}"));
+        let grip = cx.debug_bounds(selector).unwrap();
+
+        // Simulate macOS NSTextInputContext::handleEvent committing the marked
+        // range synchronously immediately before MouseDown dispatches to the
+        // previously rendered frame (no redraw in between).
+        let version_after_commit = app.update_in(cx, |app, window, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(app, None, "你好", window, cx);
+            app.active_tab().document.version()
+        });
+        cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position: grip.center(),
+            modifiers: Modifiers::none(),
+            click_count: 1,
+        });
+        cx.run_until_parked();
+
+        app.read_with(cx, |app, _| {
+            let menu = app
+                .block_menu
+                .as_ref()
+                .expect("grip click right after synchronous IME commit must open quick menu");
+            assert!(menu.from_grip);
+            assert_eq!(menu.target.document_version, version_after_commit);
+            let selected =
+                &app.active_tab().document.text()[app.active_tab().selected_range.clone()];
+            if click_same_block {
+                assert!(selected.starts_with("Hello你好"), "selected={selected:?}");
+            } else {
+                assert!(
+                    selected.starts_with("Second paragraph"),
+                    "selected={selected:?}"
+                );
+            }
+        });
+    }
+
+    // Unrelated (non-IME) document mutation before MouseDown on a stale frame
+    // must still be rejected without opening a menu or changing selection.
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("One\n\nTwo\n"))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    app.update(cx, |app, _| {
+        app.active_tab_mut()
+            .document
+            .set_text("Replaced externally\n\nTwo\n");
+    });
+    cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: grip.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert!(
+            app.block_menu.is_none(),
+            "non-IME stale frame click must remain rejected"
+        );
+    });
+}
+
+#[gpui::test]
+fn math_block_renders_block_grip_and_opens_quick_menu(cx: &mut TestAppContext) {
+    const SOURCE: &str = "$$\nE = mc^2\n$$\n\nAfter paragraph\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let grip = cx
+        .debug_bounds("visual-block-drag-grip-0")
+        .expect("display math block must expose its block-leading grip");
+    let formula_label = t(Language::En, Msg::VisualInlineFormulaLabel);
+    let format_selector =
+        test_debug_selector(format!("visual-block-grip-format-0-{formula_label}"));
+    assert!(
+        cx.debug_bounds(format_selector).is_some(),
+        "display math block grip must display the math format symbol"
+    );
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let menu = app
+            .block_menu
+            .as_ref()
+            .expect("clicking display math block grip must open quick menu");
+        assert!(menu.from_grip);
+        assert!(
+            app.active_tab().document.text()[app.active_tab().selected_range.clone()]
+                .starts_with("$$")
+        );
+    });
+}
+
+#[gpui::test]
+fn block_grip_click_ignores_macos_function_flag_and_keeps_next_collapsible_collapsed(
+    cx: &mut TestAppContext,
+) {
+    const SOURCE: &str = "$$\nE = mc^2\n$$\n\n<div>\n<p>Keep collapsed</p>\n</div>\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::En;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let html_index = app.read_with(cx, |app, _| {
+        app.active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .position(|b| matches!(b.kind, VisualBlockKind::Html { .. }))
+            .unwrap()
+    });
+    let html_height_before = app
+        .read_with(cx, |app, _| {
+            app.active_tab().visual_list.bounds_for_item(html_index)
+        })
+        .unwrap()
+        .size
+        .height;
+
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    let fn_modifier = Modifiers {
+        function: true,
+        ..Modifiers::none()
+    };
+    cx.simulate_mouse_down(grip.center(), MouseButton::Left, fn_modifier);
+    cx.run_until_parked();
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: grip.center(),
+        modifiers: fn_modifier,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    app.read_with(cx, |app, _| {
+        assert!(
+            app.block_menu.as_ref().is_some_and(|menu| menu.from_grip),
+            "macOS NSFunctionKeyMask (modifiers.function) must not suppress the block grip quick menu"
+        );
+        let html_height_after = app
+            .active_tab()
+            .visual_list
+            .bounds_for_item(html_index)
+            .unwrap()
+            .size
+            .height;
+        assert_eq!(
+            html_height_after, html_height_before,
+            "exclusive block-selection end must not expand the following collapsible HTML block"
+        );
+    });
+}

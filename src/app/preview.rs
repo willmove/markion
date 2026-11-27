@@ -4936,6 +4936,9 @@ fn visual_block_content_view(
                                 marker.cursor_pointer().on_mouse_up(
                                     MouseButton::Left,
                                     cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                        if app.pending_block_grip.is_some() {
+                                            return;
+                                        }
                                         app.toggle_visual_task_checkbox(checkbox_index, cx);
                                     }),
                                 )
@@ -5188,17 +5191,10 @@ fn visual_block_content_view(
         }
         VisualBlockKind::MathBlock { latex, .. } => {
             if let Some(VisualBlockEditor::Math { payload, .. }) = block.editor.as_ref() {
-                return visual_math_editor(
-                    app,
-                    block,
-                    block_index,
-                    latex,
-                    payload,
-                    display_scale,
-                    cx,
-                );
+                visual_math_editor(app, block, block_index, latex, payload, display_scale, cx)
+            } else {
+                visual_source_island_view(app, block, block_index, cx)
             }
-            visual_source_island_view(app, block, block_index, cx)
         }
         VisualBlockKind::CodeBlock { language } => {
             if let Some(VisualBlockEditor::Code { payload, info, .. }) = block.editor.as_ref() {
@@ -5429,6 +5425,8 @@ fn visual_block_chrome(
     let before_target = target.clone();
     let after_target = target.clone();
     let drag_target = target.clone();
+    let drag_select_target = target.clone();
+    let drag_app = cx.entity();
     let drag_label: SharedString = p1_t(app.language, P1Msg::DragBlock).into();
     let drop_version = target.document_version;
     let drop_id = target.block_id;
@@ -5530,17 +5528,19 @@ fn visual_block_chrome(
                         cx.listener(move |app, event: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
                             window.focus(&app.focus_handle);
-                            app.select_visual_block_grip(
+                            app.begin_visual_block_grip_press(
                                 &press_target,
-                                event.modifiers.shift,
-                                true,
+                                event.position,
+                                event.modifiers,
                                 cx,
                             );
                         }),
                     )
                     .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        if !event.modifiers().modified() {
+                        if event.is_keyboard()
+                            && !MarkionApp::has_grip_click_modifiers(event.modifiers())
+                        {
+                            cx.stop_propagation();
                             app.open_visual_block_grip_menu(
                                 click_target.clone(),
                                 event.position(),
@@ -5548,11 +5548,15 @@ fn visual_block_chrome(
                             );
                         }
                     }))
+                    .drag_threshold(px(VISUAL_BLOCK_GRIP_DRAG_THRESHOLD))
                     .on_drag(
                         DraggedVisualBlock {
                             target: drag_target,
                         },
                         move |_, _, _, cx| {
+                            drag_app.update(cx, |app, cx| {
+                                app.begin_visual_block_grip_drag(&drag_select_target, cx);
+                            });
                             cx.new(|_| VisualBlockDragPreview {
                                 label: drag_label.clone(),
                                 background: palette.panel_bg.into(),
@@ -7591,8 +7595,15 @@ fn visual_collapsible_source_block(
     let palette = app.palette();
     let tab = app.active_tab();
     let cursor = tab.cursor_offset();
-    let caret_in_payload =
-        payload.source_range.contains(&cursor) || cursor == payload.source_range.end;
+    let selected = tab.safe_selected_range();
+    // Respect half-open selection boundaries: an exclusive block-selection end
+    // touching the next block's start must not expand its collapsible payload.
+    let caret_in_payload = tab.structured_selection.is_none()
+        && if selected.is_empty() {
+            payload.source_range.contains(&cursor) || cursor == payload.source_range.end
+        } else {
+            selected.start < payload.source_range.end && selected.end > payload.source_range.start
+        };
     let user_expanded = tab.is_visual_source_expanded(block_id);
     let caret_opens_payload = caret_in_payload && !(payload_first && app.stable_visual_inline);
     let show_payload = forced || user_expanded || caret_opens_payload;
@@ -8426,10 +8437,11 @@ fn visual_table_grip(
     };
     match (draggable, target.axis) {
         (false, _) => grip,
-        (true, VisualTableAxis::Row(_)) => {
-            grip.on_drag(DraggedTableRow { target }, |_, _, _, cx| cx.new(|_| Empty))
-        }
+        (true, VisualTableAxis::Row(_)) => grip
+            .drag_threshold(px(VISUAL_BLOCK_GRIP_DRAG_THRESHOLD))
+            .on_drag(DraggedTableRow { target }, |_, _, _, cx| cx.new(|_| Empty)),
         (true, VisualTableAxis::Column(_)) => grip
+            .drag_threshold(px(VISUAL_BLOCK_GRIP_DRAG_THRESHOLD))
             .on_drag(DraggedTableColumn { target }, |_, _, _, cx| {
                 cx.new(|_| Empty)
             }),

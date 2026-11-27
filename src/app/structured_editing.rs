@@ -251,6 +251,162 @@ impl MarkionApp {
         };
         self.select_table_cells(index, cell, axis, extend, cx);
     }
+    fn resolve_block_grip_target(&self, target: &BlockTarget) -> Option<BlockTarget> {
+        if self.active_tab().is_image() || !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return None;
+        }
+        let tab = self.active_tab();
+        let current_version = tab.document.version();
+        let blocks = tab.document.visual_blocks_shared();
+        if validate_block_target(current_version, &blocks, target).is_ok() {
+            return Some(target.clone());
+        }
+        // On macOS, NSTextInputContext::handleEvent commits an active IME
+        // marked range synchronously before dispatching MouseDown to the
+        // previously rendered frame. Relocate the pressed block unambiguously
+        // across that single IME ChangeSet; reject every other stale target.
+        let commit = self.recent_ime_commit?;
+        let current_doc = self.active_document_target();
+        if commit.document != current_doc
+            || commit.before_version != target.document_version
+            || commit.at.elapsed() > RECENT_IME_COMMIT_WINDOW
+        {
+            return None;
+        }
+        let change = tab.document.last_change_set()?;
+        if change.before_version != target.document_version
+            || change.after_version != current_version
+        {
+            return None;
+        }
+        let relocated = if let Some(mapped) = change.map_unchanged(target.source_range.clone()) {
+            Some(mapped)
+        } else if target.source_range.start <= change.old_range.start
+            && change.old_range.end <= target.source_range.end
+        {
+            let shift = change.new_range.len() as isize - change.old_range.len() as isize;
+            target
+                .source_range
+                .end
+                .checked_add_signed(shift)
+                .map(|end| target.source_range.start..end)
+        } else {
+            None
+        };
+        let index = if let Some(expected_range) = relocated.as_ref() {
+            let mut exact = blocks.iter().enumerate().filter(|(index, block)| {
+                block.source_range == *expected_range && block_can_reorder_at(&blocks, *index)
+            });
+            let first = exact.next();
+            if first.is_some() && exact.next().is_none() {
+                first.map(|(index, _)| index)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+        .or_else(|| {
+            // If the IME commit touched the edited block's boundary without
+            // splitting it, match a unique reorderable block at the same start.
+            let expected_start = relocated
+                .as_ref()
+                .map(|range| range.start)
+                .filter(|_| target.source_range.start <= change.old_range.start)?;
+            let mut by_start = blocks.iter().enumerate().filter(|(index, block)| {
+                block.source_range.start == expected_start && block_can_reorder_at(&blocks, *index)
+            });
+            let first = by_start.next();
+            (first.is_some() && by_start.next().is_none())
+                .then(|| first.map(|(index, _)| index))
+                .flatten()
+        })?;
+        Some(BlockTarget::from_block(current_version, &blocks[index]))
+    }
+
+    pub(super) fn has_grip_click_modifiers(modifiers: gpui::Modifiers) -> bool {
+        // Ignore `modifiers.function` (`NSFunctionKeyMask` on macOS): Fn/Globe
+        // and navigation keys can leave or toggle it without being a pointer
+        // selection/context modifier.
+        modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform
+    }
+
+    pub(super) fn begin_visual_block_grip_press(
+        &mut self,
+        target: &BlockTarget,
+        position: Point<Pixels>,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(resolved) = self.resolve_block_grip_target(target) else {
+            self.pending_block_grip = None;
+            return;
+        };
+        let closed_menu = self.dismiss_visual_block_menu() || self.active_menu.take().is_some();
+        if modifiers.shift {
+            self.pending_block_grip = None;
+            self.select_visual_block_grip(&resolved, true, true, cx);
+            return;
+        }
+        if Self::has_grip_click_modifiers(modifiers) {
+            self.pending_block_grip = None;
+            self.select_visual_block_grip(&resolved, false, true, cx);
+            return;
+        }
+        // Defer unmodified selection until either drag starts or the click
+        // releases so intermediate frames between MouseDown and MouseUp cannot
+        // collapse an earlier focused block and shift this 22px grip away.
+        self.pending_block_grip = Some(PendingBlockGripPress {
+            document_id: self.active_document_target().0,
+            target: resolved,
+            down_position: position,
+        });
+        if closed_menu {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn begin_visual_block_grip_drag(
+        &mut self,
+        fallback_target: &BlockTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .pending_block_grip
+            .take()
+            .map(|press| press.target)
+            .unwrap_or_else(|| fallback_target.clone());
+        self.select_visual_block_grip(&target, false, true, cx);
+    }
+
+    pub(super) fn finish_visual_block_grip_press(
+        &mut self,
+        position: Point<Pixels>,
+        modifiers: gpui::Modifiers,
+        has_active_drag: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(press) = self.pending_block_grip.take() else {
+            return false;
+        };
+        if has_active_drag
+            || Self::has_grip_click_modifiers(modifiers)
+            || !matches!(self.view_mode, ViewMode::VisualEdit)
+            || self.active_tab().is_image()
+            || self.active_document_target().0 != press.document_id
+        {
+            return true;
+        }
+        let travel = (position - press.down_position).magnitude();
+        if travel > f64::from(VISUAL_BLOCK_GRIP_DRAG_THRESHOLD) {
+            return true;
+        }
+        self.active_tab_mut().is_selecting = false;
+        self.active_tab_mut().cell_drag_anchor = None;
+        self.open_visual_block_grip_menu(press.target, position, cx);
+        true
+    }
+
     pub(super) fn select_visual_block_grip(
         &mut self,
         target: &BlockTarget,

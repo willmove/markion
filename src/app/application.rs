@@ -457,6 +457,9 @@ impl MarkionApp {
             dismissed_emoji_query: None,
             block_menu: None,
             visual_table_menu: None,
+            visual_menu_scroll_dismiss_accum: 0.0,
+            pending_block_grip: None,
+            recent_ime_commit: None,
             search_visible: false,
             replace_visible: false,
             search_form: SearchPanelForm::Find,
@@ -981,6 +984,8 @@ impl MarkionApp {
         self.emoji_completer = None;
         self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
+        self.pending_block_grip = None;
+        self.recent_ime_commit = None;
         self.selection_toolbar_suppressed = true;
         self.typing_chrome_suppressed = true;
         let tab = self.active_tab_mut();

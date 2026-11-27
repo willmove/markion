@@ -2789,6 +2789,31 @@ struct DraggedImageResizeHandle {
     offset: usize,
     document_version: u64,
 }
+/// Pointer travel threshold (in logical pixels) before a dual click-and-drag
+/// Visual Edit grip enters drag mode instead of completing a click.
+const VISUAL_BLOCK_GRIP_DRAG_THRESHOLD: f32 = 6.0;
+/// Accumulated scroll-wheel displacement (in logical pixels) required before
+/// dismissing an open Visual Edit block/table menu, filtering macOS zero-delta
+/// touch phases (`MayBegin`/`Ended`) and tiny residual momentum ticks.
+const VISUAL_BLOCK_MENU_SCROLL_DISMISS_THRESHOLD: f32 = 4.0;
+/// Maximum age for matching a synchronous platform IME commit immediately
+/// preceding a grip `MouseDown` (macOS `NSTextInputContext handleEvent:`).
+const RECENT_IME_COMMIT_WINDOW: Duration = Duration::from_millis(250);
+
+#[derive(Clone, Debug)]
+struct PendingBlockGripPress {
+    document_id: DocumentInstanceId,
+    target: BlockTarget,
+    down_position: Point<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RecentImeCommit {
+    document: (DocumentInstanceId, u64),
+    before_version: u64,
+    at: Instant,
+}
+
 #[derive(Debug, Clone)]
 struct DraggedVisualBlock {
     target: BlockTarget,
@@ -3497,6 +3522,15 @@ struct MarkionApp {
     dismissed_emoji_query: Option<EmojiQuery>,
     block_menu: Option<BlockMenuState>,
     visual_table_menu: Option<VisualTableMenuState>,
+    /// Accumulated scroll distance while a Visual Edit block or table menu is
+    /// open; resets whenever a menu opens or closes.
+    visual_menu_scroll_dismiss_accum: f32,
+    /// Unmodified left-button press on a Visual Edit block grip waiting for
+    /// either drag initiation or click release.
+    pending_block_grip: Option<PendingBlockGripPress>,
+    /// Most recent canonical commit triggered while an IME marked range was
+    /// active, used to relocate a same-tick grip press on macOS.
+    recent_ime_commit: Option<RecentImeCommit>,
     search_visible: bool,
     /// Whether replacement controls are currently available. The requested
     /// form is retained separately so Read mode can temporarily present Find.

@@ -459,6 +459,8 @@ impl MarkionApp {
             app.git_ui.window_active = window.is_window_active();
             if app.git_ui.window_active {
                 app.refresh_git_details(cx);
+            } else {
+                app.pending_block_grip = None;
             }
         })
         .detach();
