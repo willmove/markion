@@ -4244,9 +4244,16 @@ pub(super) fn dir_is_non_empty(path: &Path) -> bool {
 pub(super) fn reveal_in_system_file_manager(path: &Path, select_file: bool) -> io::Result<()> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+
+        let path = dunce::simplified(path);
         let mut command = Command::new("explorer");
         if select_file {
-            command.arg(format!("/select,{}", path.display()));
+            // Explorer parses a comma-separated option and path. Quote the path itself.
+            let mut argument = std::ffi::OsString::from("/select,\"");
+            argument.push(path);
+            argument.push("\"");
+            command.raw_arg(argument);
         } else {
             command.arg(path);
         }

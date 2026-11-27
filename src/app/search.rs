@@ -323,13 +323,24 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(index) = bundled_resource_path("assets/examples/README.md") {
-            cx.reveal_path(&index);
-            self.status = t(self.language, Msg::ItemExamplesTemplates).into();
-        } else {
-            self.status = t(self.language, Msg::StatusExamplesMissing).into();
-        }
         self.active_menu = None;
+        let relative_index = PathBuf::from_iter(["assets", "examples", "README.md"]);
+        self.status = match bundled_resource_path(relative_index) {
+            #[cfg(target_os = "windows")]
+            Some(index) => match reveal_in_system_file_manager(&index, true) {
+                Ok(()) => self.trf(
+                    Msg::StatusShownInFileManager,
+                    &[&index.display().to_string()],
+                ),
+                Err(error) => self.trf(Msg::StatusShowInFileManagerFailed, &[&error.to_string()]),
+            },
+            #[cfg(not(target_os = "windows"))]
+            Some(index) => {
+                cx.reveal_path(&index);
+                t(self.language, Msg::ItemExamplesTemplates).into()
+            }
+            None => t(self.language, Msg::StatusExamplesMissing).into(),
+        };
         cx.notify();
     }
 
