@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>立即下載</strong></a> · <a href="#new-in-v061">新版亮點</a> · <a href="#performance">實測效能</a> · <a href="docs/user-guide.md#simplified-chinese">使用指南</a></p>
+<p align="center"><a href="#install"><strong>立即下載</strong></a> · <a href="#new-in-v064">新版亮點</a> · <a href="#performance">實測效能</a> · <a href="docs/user-guide.md#simplified-chinese">使用指南</a></p>
 
 ![Windows 實機截圖：檔案樹、視覺化 Markdown、任務列表與表格，以及獨立的右側大綱](docs/images/markion-workspace-windows.png)
 
@@ -22,37 +22,38 @@
 | --- | --- | --- |
 | 視覺化編輯按需隱藏語法，隨時切換原始碼或分欄預覽。 | 普通本地 Markdown 檔案，無需帳號。Rust + GPUI 原生編輯器，無 Electron 或內嵌 WebView。 | 匯入 Word，編寫程式碼、公式與圖表，再匯出 PDF、Word、HTML 或圖片。 |
 
-<a id="new-in-v060"></a><a id="new-in-v061"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a><a id="new-in-v063"></a><a id="new-in-v064"></a>
 
-## v0.6.1 新亮點
+## v0.6.4 新亮點
 
 | 亮點 | 帶來的改變 |
 | --- | --- |
-| **韓語介面** | 八種完整介面語言，在偏好設定中選擇 **한국어**。 |
-| **依習慣調整間距** | 在**偏好設定 → 外觀**中設定 75–300% 行距與 0–128px 段距。 |
-| **背景準備更新** | 每五小時檢查，預設自動下載；確認後才安裝，並保護尚未儲存的編輯。 |
-| **插入時保留原內容** | 精簡插入選單與「在下方新增表格/分隔線」保留既有文字及表格，插入分隔線後可繼續輸入。 |
+| **程式碼區塊預設展開** | 程式碼摺疊改為可選：在**偏好設定 → 外觀**的「程式碼區塊」中開啟**允許摺疊程式碼（視覺化編輯）**，即可恢復「摺疊程式碼 / 展開程式碼」控制項。 |
+| **表格更順手** | 表格控點選單集中了整表命令，新增**均分欄寬**，並在「在下方插入」中提供與段落相同的選項；在高表格中選取文字不再讓頁面跳動。 |
+| **所見即所寫** | 引用區塊內的標題與圖片、表頭強調與欄位對齊、巢狀粗斜體，以及跟隨前文的收尾標點，現在各模式都能正確顯示。 |
+| **匯入匯出更保真** | Word 匯入保留清單編號、手動換行與明確格式；LaTeX 匯出保留巢狀清單與起始編號；Word 匯出將帶格式的連結保持為整體。 |
+| **預設更安全** | 閱讀模式不再修改文件；有未儲存編輯的分頁開啟時，重新命名檔案或資料夾會被拒絕；還原工作階段不再改動「開啟最近檔案」。 |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Markion 實機塊選單：標題層級、列表、塊操作與行內格式"></p>
 <p align="center"><sub>v0.6.0</sub></p>
 
-[完整發布說明](docs/release-notes/release-notes-v0.6.1.md) · [專案進展與驗證記錄](docs/project-status.md)
+[完整發布說明](docs/release-notes/release-notes-v0.6.4.md) · [專案進展與驗證記錄](docs/project-status.md)
 
 <a id="install"></a>
 
 ## 下載，即刻開始
 
-| 平臺 | v0.6.3 下載 |
+| 平臺 | v0.6.4 下載 |
 | --- | --- |
-| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman（Arch/Omarchy）](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
+| **Windows x64** | [安裝程式](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-setup.exe) · [便攜 ZIP](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.rpm) · [pacman（Arch/Omarchy）](https://github.com/willmove/markion/releases/download/v0.6.4/markion-0.6.4-1-x86_64.pkg.tar.zst) |
 
 [全部版本與資源校驗資訊](https://github.com/willmove/markion/releases)
 
 - **Windows：**執行安裝程式或解壓 ZIP。暫未提供 Authenticode 簽名，SmartScreen 可能需要選擇**更多資訊 → 仍要執行**。
 - **macOS。**下載與晶片對應的 Apple Silicon 或 Intel DMG，開啟後把 Markion 拖到「應用程式」，再按兩下啟動。兩個安裝檔皆已通過 Developer ID 簽署與 Apple 公證。[首次啟動說明](docs/user-guide.md#安装)。
-- **Linux：**為 AppImage 新增執行許可權（`chmod +x markion*.AppImage`）後執行，或安裝 DEB/RPM/pacman。Arch Linux 與 Omarchy 執行 `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`。無 FUSE 時可用 `--appimage-extract-and-run`。
+- **Linux：**為 AppImage 新增執行許可權（`chmod +x markion*.AppImage`）後執行，或安裝 DEB/RPM/pacman。Arch Linux 與 Omarchy 執行 `sudo pacman -U markion-0.6.4-1-x86_64.pkg.tar.zst`。無 FUSE 時可用 `--appimage-extract-and-run`。
 
 開啟 Markdown 檔案或資料夾即可寫作。試用內建樣例時，請**先複製整個 examples 資料夾及其中的圖片，再開始編輯**。[上手與模板](assets/examples/README.md)。
 
@@ -89,7 +90,7 @@
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-另一輪 1 MiB 文件的 **1080 次系統按鍵**實測中，應用輸入回撥 → 游標 paint 為 **P50 26.63 ms / P95 33.14 ms**，不含硬體/系統輸入傳輸與 GPU 呈現。這些是既有記錄，不是 v0.6.1 的重新跑分或競品排名。[測試方法、原始資料與復現命令](docs/performance.md)。
+另一輪 1 MiB 文件的 **1080 次系統按鍵**實測中，應用輸入回撥 → 游標 paint 為 **P50 26.63 ms / P95 33.14 ms**，不含硬體/系統輸入傳輸與 GPU 呈現。這些是既有記錄，不是 v0.6.4 的重新跑分或競品排名。[測試方法、原始資料與復現命令](docs/performance.md)。
 
 ## 開始前瞭解這些
 

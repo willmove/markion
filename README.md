@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>Download</strong></a> · <a href="#new-in-v061">What's new</a> · <a href="#performance">Performance</a> · <a href="docs/user-guide.md">User guide</a></p>
+<p align="center"><a href="#install"><strong>Download</strong></a> · <a href="#new-in-v064">What's new</a> · <a href="#performance">Performance</a> · <a href="docs/user-guide.md">User guide</a></p>
 
 ![Markion on Windows: rendered Markdown, tasks and a table between the file tree and independent right outline](docs/images/markion-workspace-windows.png)
 
@@ -24,37 +24,38 @@
 | --- | --- | --- |
 | Visual Edit hides syntax as you write; switch to source or split preview whenever you need. | Ordinary local Markdown files, no account required. Native Rust + GPUI editor, without Electron or an embedded WebView. | Import Word, work with code, math and diagrams, then export to PDF, Word, HTML or images. |
 
-<a id="new-in-v060"></a><a id="new-in-v061"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a><a id="new-in-v063"></a><a id="new-in-v064"></a>
 
-## New in v0.6.1
+## New in v0.6.4
 
 | Highlight | What it means for your writing |
 | --- | --- |
-| **Korean UI** | Eight complete interface languages; choose **한국어** in Preferences. |
-| **Your preferred spacing** | Set line spacing to 75–300% and paragraph spacing to 0–128px in **Preferences → Appearance**. |
-| **Updates prepared in the background** | Check every five hours; automatic downloads are on by default. Install only after confirmation, with unsaved edits protected. |
-| **Safer block insertion** | Compact Insert controls and direct Add Table/Divider Below keep existing text and tables intact; continue typing after a divider. |
+| **Code blocks start expanded** | Folding is now optional. Turn on **Allow code folding in Visual Edit** in **Preferences → Appearance** (Code blocks) to bring back the Fold code / Expand code control. |
+| **Tables that behave** | A table's handle menu gathers whole-table commands, **Equalize Column Widths** and the same Insert Below palette as paragraphs. Selecting text in a tall table no longer scrolls the page. |
+| **Rendered as written** | Headings and images inside block quotes, table header emphasis and column alignment, nested bold/italic, and closing punctuation that stays with its text now display correctly in every mode. |
+| **Faithful import and export** | Word import keeps list numbering, manual line breaks and explicit formatting. LaTeX export keeps nested lists and start numbers; Word export keeps styled links whole. |
+| **Safer by default** | Read mode no longer changes the document. Renaming a file or folder is refused while an open tab has unsaved edits, and restoring a session leaves Open Recent untouched. |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Actual Markion block menu: heading levels, lists, block actions and inline formatting"></p>
 <p align="center"><sub>v0.6.0</sub></p>
 
-[Release notes](docs/release-notes/release-notes-v0.6.1.md) · [Project status and verification](docs/project-status.md)
+[Release notes](docs/release-notes/release-notes-v0.6.4.md) · [Project status and verification](docs/project-status.md)
 
 <a id="install"></a><a id="安装"></a>
 
 ## Download and start writing
 
-| Platform | v0.6.3 downloads |
+| Platform | v0.6.4 downloads |
 | --- | --- |
-| **Windows x64** | [Installer](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [Portable ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman (Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
+| **Windows x64** | [Installer](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-setup.exe) · [Portable ZIP](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.rpm) · [pacman (Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.4/markion-0.6.4-1-x86_64.pkg.tar.zst) |
 
 [All releases and verification](https://github.com/willmove/markion/releases)
 
 - **Windows:** run the installer or extract the ZIP. No Authenticode signature yet; SmartScreen may require **More info → Run anyway**.
 - **macOS.** Choose the Apple Silicon or Intel DMG for your Mac. Open it, drag Markion to Applications, then double-click Markion. Both DMGs are Developer ID signed and Apple notarized. [First-launch details](docs/user-guide.md#install).
-- **Linux:** make the AppImage executable (`chmod +x markion*.AppImage`) and run it, or install DEB/RPM/pacman. On Arch Linux and Omarchy, run `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`. Without FUSE, use `--appimage-extract-and-run`.
+- **Linux:** make the AppImage executable (`chmod +x markion*.AppImage`) and run it, or install DEB/RPM/pacman. On Arch Linux and Omarchy, run `sudo pacman -U markion-0.6.4-1-x86_64.pkg.tar.zst`. Without FUSE, use `--appimage-extract-and-run`.
 
 Open a Markdown file or folder. To try the examples, **copy the entire examples folder, including images, before editing**. [Getting started](assets/examples/README.md).
 
@@ -103,7 +104,7 @@ Switch modes while keeping your place, selection and undo history. [Shortcuts](d
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-In a separate **1080-system-key-event** run on a 1 MiB document, application callback → caret paint was **26.63 ms P50 / 33.14 ms P95**. It excludes hardware/OS delivery and GPU presentation. These are earlier recorded results, not a fresh v0.6.1 benchmark or a competitor ranking. [Method, raw data and reproduction](docs/performance.md).
+In a separate **1080-system-key-event** run on a 1 MiB document, application callback → caret paint was **26.63 ms P50 / 33.14 ms P95**. It excludes hardware/OS delivery and GPU presentation. These are earlier recorded results, not a fresh v0.6.4 benchmark or a competitor ranking. [Method, raw data and reproduction](docs/performance.md).
 
 <a id="current-limitations"></a><a id="当前限制"></a>
 

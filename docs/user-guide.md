@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [简体中文概览](../README.zh-CN.md)
 
-Detailed workflows and configuration, retained from the project README. For a quick tour, start with the overview above. **The v0.6.2 macOS DMGs for Apple Silicon and Intel are Developer ID signed and Apple notarized.**
+Detailed workflows and configuration, retained from the project README. For a quick tour, start with the overview above. **The macOS DMGs for Apple Silicon and Intel are Developer ID signed and Apple notarized.**
 
 <a id="english"></a>
 
@@ -89,8 +89,8 @@ The **View → Source/Split Preview** command (`Ctrl+/` on Windows/Linux, `Cmd+/
 - Heading commands expose H1–H5 by default, with an H1–H6 option in Preferences.
 - Find and replace supports case sensitivity, regular expressions, next/previous navigation, replace current, and replace all.
 - Source table commands can format tables and add, delete, or move rows and columns. Visual Edit adds rectangular, full-row, and full-column selections, TSV/HTML copy, clear, matrix paste, direct cell editing, and width reflow. Tab in the final cell creates a body row; ordinary preview tables remain read-only.
-- Visual Edit supports multi-block copy/delete/move, complete list-subtree drag and indentation, and quote-container splitting. Select with Esc or a block grip, extend with Shift+arrows/Shift+click, and move with Ctrl/Cmd+Shift+Up/Down or a selected grip. Ordinary code blocks fold locally per tab and expand when navigation enters their payload. See [keyboard shortcuts](keyboard-shortcuts.md).
-- Clicking a block grip opens compact block settings with direct type controls, Copy/Cut and Add Below. Disable **Show block menu on grip click** in **File → Preferences → General** for selection-only clicks; Shift-click extension, dragging and explicit context menus remain available. A selection ending before the next heading keeps that heading's markers hidden. Reordering preserves separate paragraphs even at the end of a document, while tight list siblings keep their spacing. See the [Windows verification record](verification/block-grip-menu-windows-2026-11-16.md).
+- Visual Edit supports multi-block copy/delete/move, complete list-subtree drag and indentation, and quote-container splitting. Select with Esc or a block grip, extend with Shift+arrows/Shift+click, and move with Ctrl/Cmd+Shift+Up/Down or a selected grip. Ordinary code blocks stay expanded by default; turn on **Allow code folding in Visual Edit** (**File → Preferences → Appearance**, Code blocks) to fold them locally per tab, and navigation into a folded payload expands it. See [keyboard shortcuts](keyboard-shortcuts.md).
+- Clicking a block grip opens compact block settings with direct type controls, Copy/Cut and Add Below. A table's grip instead opens whole-table commands: Copy Table, Cut Table, Make a Table Copy, Move Table Up/Down, Equalize Column Widths, Wrap in Quote, an Insert Below flyout with the same catalog as the paragraph Insert menu, and Delete Table. Disable **Show block menu on grip click** in **File → Preferences → General** for selection-only clicks; Shift-click extension, dragging and explicit context menus remain available. A selection ending before the next heading keeps that heading's markers hidden. Reordering preserves separate paragraphs even at the end of a document, while tight list siblings keep their spacing. See the [Windows verification record](verification/block-grip-menu-windows-2026-11-16.md).
 - Visual selections copy readable text plus HTML; cell selections copy TSV plus HTML tables. Windows publishes CF_HTML, macOS `public.html`, and Linux `text/html`; native cross-application interoperability beyond the recorded Windows checks remains pending.
 - An image-resource workflow ingests clipboard images, dragged files, explicit file/URL insertion, and existing document images. Policies can keep, copy/download, or upload through PicGo HTTP, PicGo Core, or a literal custom command; see the [image handling and upload guide](image-handling.md). Markion uses collision-resistant document-relative resources, preserves exact image metadata, and keeps transfer recovery outside Markdown.
 - YAML front matter is parsed and hidden from preview; `title`, `author`, and `date` feed export metadata.
@@ -113,7 +113,7 @@ Rendered preview supports:
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
 - Custom themes use `.toml` files in Markion's local themes directory. On first use a `typewriter.toml` sample — including the optional `[fonts]` table (`editor`, `rendered`, `code`) that supplies font families for the Markdown source editor, rendered body text, and code surfaces whenever the user has no explicit preference — is installed there as a starting point. Legacy `.theme` files migrate automatically when first loaded.
 - Eight interface languages in current source: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, French, German, and Spanish. Select 한국어 in Preferences; v0.6.1 includes the Korean interface.
-- The in-app Preferences panel covers language, sidebar visibility, Preview adaptive width, focus/typewriter modes, Markdown auto-pairing, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth on **General**; theme, per-plane font families (source, reading, code), font sizes, and paragraph spacing on **Appearance**.
+- The in-app Preferences panel covers language, sidebar visibility, Preview adaptive width, focus/typewriter modes, Markdown auto-pairing, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth on **General**; theme, per-plane font families (source, reading, code), font sizes, the Visual Edit code-folding switch, and paragraph spacing on **Appearance**.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
 All configuration fields are optional. The main defaults and file-only settings are:
@@ -135,6 +135,7 @@ block_handle_menu = true
 slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
+visual_code_folding = false        # Fold code / Expand code control in Visual Edit
 
 # Optional font families per plane; absent = follow the theme, then the
 # built-in default (system UI font for source/reading, JetBrains Mono for code).
@@ -219,7 +220,7 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 
 - Visual Edit is WYSIWYG-first while retaining canonical Markdown; constructs without a proven byte-exact rendering expose exact source as a transitional affordance (tracked on the [WYSIWYG coverage roadmap](visual-editing-quality.md)) rather than accepting a guessed rich-tree mutation, and block reordering is offered only when non-overlapping source boundaries are provable. Remaining gaps include multiline/malformed images and residual source ranges whose exact ownership cannot be proven; the matrix tracks these individually.
 - On-screen rendering (Split/Read preview and Visual Edit) typesets math with the embedded RaTeX engine; LaTeX export keeps native `$...$`/`$$...$$` source for the reader's own toolchain, and the built-in DOCX exporter converts supported formulas to native Word math, with readable source fallbacks for unsupported formulas.
-- Visual Edit table cells support direct editing plus Bold/Italic/Inline Code/Link on a selection that stays inside one cell. GFM column widths can be dragged and persisted as an HTML comment (`<!-- markion-cols:… -->`) immediately before the table. Inline images accept integer widths from 10–100% and can be drag-resized. Single-line reference-style block images retain their picture and exact source editor; multiline/malformed images and unparseable tables retain conservative source-backed paths. GFM merged cells, arbitrary multi-block cells, and image pixel cropping are not supported.
+- Visual Edit table cells support direct editing plus Bold/Italic/Inline Code/Link on a selection that stays inside one cell. GFM column widths can be dragged and persisted as an HTML comment (`<!-- markion-cols:… -->`) immediately before the table, or reset to equal shares in one undoable step with **Equalize Column Widths** in the table's grip menu. Inline images accept integer widths from 10–100% and can be drag-resized. Single-line reference-style block images retain their picture and exact source editor; multiline/malformed images and unparseable tables retain conservative source-backed paths. GFM merged cells, arbitrary multi-block cells, and image pixel cropping are not supported.
 - One-click updates install the Windows NSIS distribution and replace a running Linux AppImage in place after Minisign verification (the updated AppImage relaunches automatically); macOS bundle replacement and Linux system-package self-replacement remain future work, and updater authentication is not Windows Authenticode or Apple notarization.
 - A full custom-theme installation UI is not implemented.
 - Export uses format-specific layouts rather than capturing editor pixels; very large documents do not yet use a rope or fully incremental parsing across every derived subsystem.
@@ -341,8 +342,8 @@ Markion 提供四种视图模式，默认使用可视化编辑。
 - 标题命令默认显示 H1–H5，可在“偏好设置”中扩展为 H1–H6。
 - 查找与替换支持区分大小写、正则表达式、上一个/下一个匹配、替换当前项和全部替换。
 - 源码表格命令可格式化表格并增删、移动行列。可视化表格还支持矩形、整行和整列选区、TSV/HTML 复制、清空、矩阵粘贴、直接编辑与列宽重排；最后一格按 Tab 新增正文行。普通预览表格保持只读。
-- 可视化编辑支持多块复制、删除、移动，完整列表子树拖动与缩进，以及引用容器拆分。Esc 或点击块手柄进入选择，Shift+方向键或 Shift+点击扩展，Ctrl/Cmd+Shift+Up/Down 或拖动已选手柄移动。普通代码块可按标签页折叠，导航进入正文时展开。详见[快捷键](keyboard-shortcuts.md)。
-- 普通点击块首手柄会打开紧凑快捷菜单，可直接切换块类型、复制/剪切或在下方新增段落。“文件 → 首选项 → 常规 → 点击块首时显示快捷菜单”可关闭自动弹出，保留点击选块、Shift 扩选、拖动及显式右键菜单；块选区停在下一标题之前时，不再误展开下一标题的井号。段落拖到文档末尾或向前移动后仍保持独立，紧凑列表兄弟项保留原有排列。详见[Windows 验证记录](verification/block-grip-menu-windows-2026-11-16.md)。
+- 可视化编辑支持多块复制、删除、移动，完整列表子树拖动与缩进，以及引用容器拆分。Esc 或点击块手柄进入选择，Shift+方向键或 Shift+点击扩展，Ctrl/Cmd+Shift+Up/Down 或拖动已选手柄移动。普通代码块默认保持展开；在“文件 → 首选项 → 外观”的“代码块”中开启**允许折叠代码（可视化编辑）**后，可按标签页折叠，导航进入正文时展开。详见[快捷键](keyboard-shortcuts.md)。
+- 普通点击块首手柄会打开紧凑快捷菜单，可直接切换块类型、复制/剪切或在下方新增段落。表格手柄则打开整表命令：复制表格、剪切表格、制作表格副本、上移/下移表格、均分列宽、包进引用、与段落插入菜单同目录的“在下方插入”子菜单，以及删除表格。“文件 → 首选项 → 常规 → 点击块首时显示快捷菜单”可关闭自动弹出，保留点击选块、Shift 扩选、拖动及显式右键菜单；块选区停在下一标题之前时，不再误展开下一标题的井号。段落拖到文档末尾或向前移动后仍保持独立，紧凑列表兄弟项保留原有排列。详见[Windows 验证记录](verification/block-grip-menu-windows-2026-11-16.md)。
 - 可视化选区同时复制可读文本与 HTML，单元格选区复制 TSV 与 HTML 表格。Windows 使用 CF_HTML，macOS 使用 `public.html`，Linux 使用 `text/html`；既有 Windows 记录以外的原生跨应用互操作仍待验证。
 - 图片资源工作流支持剪贴板、拖入文件、显式文件／URL 插入以及已有文档图片。可按来源选择保留、复制／下载，或通过 PicGo HTTP、PicGo Core、字面参数自定义命令上传；详见[图片处理与上传指南](image-handling.md)。Markion 使用抗冲突的文档相对资源，精确保留图片元数据，并将传输恢复数据置于 Markdown 之外。
 - 可解析 YAML 前言并在预览中隐藏；其中的 `title`、`author` 和 `date` 会用于导出元数据。
@@ -365,7 +366,7 @@ Markion 提供四种视图模式，默认使用可视化编辑。
 - 十四款内置主题：Paper、Ink、Solar、Forest、Rose、Graphite、GitHub Light/Dark、Solarized Light/Dark、One Light/Dark 和 Tokyo Night/Light。
 - 自定义主题使用 Markion 本地主题目录中的 `.toml` 文件；首次使用时会安装 `typewriter.toml` 示范文件(含可选的 `[fonts]` 表——`editor`、`rendered`、`code`,在用户没有显式偏好时为源码编辑器、正文和代码平面提供字体)。旧版 `.theme` 文件会在首次加载时自动迁移。
 - 当前源码支持八种界面语言：英语、简体中文、繁體中文、日语、韩语、法语、德语和西班牙语。在偏好设置中选择 한국어；v0.6.1 包含韩语界面。
-- 应用内偏好设置面板在**通用**中可配置语言、侧边栏显示、预览自适应宽度、专注/打字机模式、Markdown 自动配对、代码行号、同步滚动、显示隐藏文件和标题菜单层级；在**外观**中可配置主题、按平面的字体（源码/阅读/代码，默认跟随主题）、字号和段落间距。
+- 应用内偏好设置面板在**通用**中可配置语言、侧边栏显示、预览自适应宽度、专注/打字机模式、Markdown 自动配对、代码行号、同步滚动、显示隐藏文件和标题菜单层级；在**外观**中可配置主题、按平面的字体（源码/阅读/代码，默认跟随主题）、字号、可视化编辑代码折叠开关和段落间距。
 - 偏好设置保存在 `config.toml`；旧版 `preferences.conf` 会自动迁移。
 
 所有配置字段均可省略。主要默认值和仅能通过文件配置的选项如下：
@@ -387,6 +388,7 @@ block_handle_menu = true
 slash_commands_enabled = true
 show_hidden_files = false
 markdown_auto_pair = true
+visual_code_folding = false        # 可视化编辑中的“折叠代码 / 展开代码”控件
 
 # 可选的按平面字体;缺省时先跟随主题,再回退到内置默认
 # (源码/正文为系统 UI 字体,代码为 JetBrains Mono)。
@@ -443,7 +445,7 @@ PDF 与 DOCX 默认使用内置导出器，无需外部转换工具。在导出�
 
 - 可视化编辑以所见即所得为默认呈现契约，同时保留标准 Markdown；暂无字节精确渲染证明的结构会以源码作为过渡编辑通道（登记在 [WYSIWYG 覆盖路线图](visual-editing-quality.md)中），而不会猜测富文本树变更；仅当可证明存在不重叠的源码边界时才提供块级重排。剩余缺口包括多行或畸形图片，以及无法证明精确归属的残余源码范围；矩阵逐项追踪这些缺口。
 - 屏幕渲染（分栏/阅读预览与可视化编辑）使用内嵌的 RaTeX 引擎排版数学公式；LaTeX 导出保留原生 `$...$`/`$$...$$` 源码交给读者自己的工具链处理，内置 DOCX 导出器会把支持的公式转换为原生 Word 数学公式，不能转换的公式保留可读源码后备。
-- 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。图片在可视化编辑中保留图片或有界错误呈现，通过“图片属性”编辑可精确定位的实例；不确定形式和原始语法请在整篇源码模式中编辑，无法解析的表格保留保守的源码路径。GFM 合并格、任意多块单元格和图片像素裁剪不受支持。
+- 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码；也可用表格手柄菜单中的**均分列宽**一步均分各列，可一次撤销。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。图片在可视化编辑中保留图片或有界错误呈现，通过“图片属性”编辑可精确定位的实例；不确定形式和原始语法请在整篇源码模式中编辑，无法解析的表格保留保守的源码路径。GFM 合并格、任意多块单元格和图片像素裁剪不受支持。
 - 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本，或原地替换运行中的 Linux AppImage 并自动重启；macOS 包替换与 Linux 系统包自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
 - 尚未实现完整的自定义主题安装界面。
 - 导出使用各格式的排版而非截取编辑器像素；超大文档尚未在所有派生子系统中使用 rope 或完全增量解析。

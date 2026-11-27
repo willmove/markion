@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>Herunterladen</strong></a> · <a href="#new-in-v061">Neuigkeiten</a> · <a href="#performance">Leistung</a> · <a href="docs/user-guide.md">Handbuch</a></p>
+<p align="center"><a href="#install"><strong>Herunterladen</strong></a> · <a href="#new-in-v064">Neuigkeiten</a> · <a href="#performance">Leistung</a> · <a href="docs/user-guide.md">Handbuch</a></p>
 
 ![Markion unter Windows: gerendertes Markdown, Aufgaben und Tabelle zwischen Dateibaum und eigenständiger rechter Gliederung](docs/images/markion-workspace-windows.png)
 
@@ -22,37 +22,38 @@
 | --- | --- | --- |
 | Visuelles Bearbeiten blendet Syntax nach Bedarf aus. Quelltext und geteilte Vorschau sind jederzeit erreichbar. | Gewöhnliche lokale Markdown-Dateien, ohne Konto. Nativer Rust + GPUI-Editor ohne Electron oder eingebettete WebView. | Word importieren, Code, Formeln und Diagramme schreiben und als PDF, Word, HTML oder Bilder exportieren. |
 
-<a id="new-in-v060"></a><a id="new-in-v061"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a><a id="new-in-v063"></a><a id="new-in-v064"></a>
 
-## Neu in v0.6.1
+## Neu in v0.6.4
 
 | Highlights | Für deinen Schreiballtag |
 | --- | --- |
-| **Koreanische Oberfläche** | Acht vollständige UI-Sprachen; **한국어** in den Einstellungen wählen. |
-| **Abstände nach Wunsch** | Zeilenabstand 75–300% und Absatzabstand 0–128px unter **Einstellungen → Erscheinungsbild**. |
-| **Updates im Hintergrund vorbereiten** | Prüfung alle fünf Stunden, automatische Downloads standardmäßig aktiv. Installation nach Bestätigung; ungespeicherte Änderungen bleiben geschützt. |
-| **Blöcke ohne Inhaltsverlust einfügen** | Kompaktes Einfügen-Menü und Tabelle/Trennlinie darunter hinzufügen erhalten vorhandene Inhalte; nach Trennlinien weiterschreiben. |
+| **Code beginnt ausgeklappt** | Einklappen ist jetzt optional. Mit **Code im visuellen Editor einklappen können** unter **Einstellungen → Darstellung** (Codeblöcke) kehrt die Steuerung Code einklappen / Code ausklappen zurück. |
+| **Tabellen, die sich gut bedienen lassen** | Das Griffmenü einer Tabelle bündelt die Befehle für die ganze Tabelle, ergänzt **Spaltenbreiten angleichen** und bietet unter Darunter einfügen denselben Katalog wie Absätze. Textauswahl in hohen Tabellen scrollt die Seite nicht mehr weg. |
+| **Angezeigt wie geschrieben** | Überschriften und Bilder in Zitaten, hervorgehobene Tabellenkopfzeilen und Spaltenausrichtung, verschachteltes Fett/Kursiv sowie schließende Satzzeichen, die bei ihrem Text bleiben, erscheinen in jedem Modus korrekt. |
+| **Treuer Import und Export** | Der Word-Import erhält Listennummerierung, manuelle Zeilenumbrüche und explizite Formatierung; der LaTeX-Export erhält verschachtelte Listen und Startnummern; der Word-Export hält formatierte Links zusammen. |
+| **Standardmäßig sicherer** | Der Lesemodus ändert das Dokument nicht mehr. Das Umbenennen einer Datei oder eines Ordners wird abgelehnt, solange ein offener Tab ungespeicherte Änderungen hat, und das Wiederherstellen einer Sitzung lässt Zuletzt geöffnet unangetastet. |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Echtes Markion-Blockmenü: Überschriften, Listen, Blockaktionen und Inline-Formatierung"></p>
 <p align="center"><sub>v0.6.0</sub></p>
 
-[Versionshinweise](docs/release-notes/release-notes-v0.6.1.md) · [Projektstand und Prüfungen](docs/project-status.md)
+[Versionshinweise](docs/release-notes/release-notes-v0.6.4.md) · [Projektstand und Prüfungen](docs/project-status.md)
 
 <a id="install"></a>
 
 ## Herunterladen und losschreiben
 
-| Plattform | Downloads für v0.6.3 |
+| Plattform | Downloads für v0.6.4 |
 | --- | --- |
-| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman (Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
+| **Windows x64** | [Installationsprogramm](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-setup.exe) · [Portables ZIP](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.rpm) · [pacman (Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.4/markion-0.6.4-1-x86_64.pkg.tar.zst) |
 
 [Alle Versionen und Prüfinformationen](https://github.com/willmove/markion/releases)
 
 - **Windows:** Installer ausführen oder ZIP entpacken. Noch keine Authenticode-Signatur; SmartScreen erfordert gegebenenfalls **Weitere Informationen → Trotzdem ausführen**.
 - **macOS.** Öffnen Sie die passende DMG für Apple Silicon oder Intel, ziehen Sie Markion in „Programme“ und starten Sie es per Doppelklick. Beide DMGs sind mit Developer ID signiert und von Apple notarisiert. [Erster Start](docs/user-guide.md#install).
-- **Linux:** AppImage ausführbar machen (`chmod +x markion*.AppImage`) und starten oder DEB/RPM/pacman installieren. Unter Arch Linux und Omarchy: `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`. Ohne FUSE: `--appimage-extract-and-run`.
+- **Linux:** AppImage ausführbar machen (`chmod +x markion*.AppImage`) und starten oder DEB/RPM/pacman installieren. Unter Arch Linux und Omarchy: `sudo pacman -U markion-0.6.4-1-x86_64.pkg.tar.zst`. Ohne FUSE: `--appimage-extract-and-run`.
 
 Eine Markdown-Datei oder einen Ordner öffnen. Vor dem Bearbeiten der Beispiele **den gesamten examples-Ordner einschließlich Bildern kopieren**. [Einstieg und Vorlagen](assets/examples/README.md).
 
@@ -73,7 +74,7 @@ Position, Auswahl und Rückgängig-Verlauf bleiben beim Wechsel erhalten. [Taste
 | **Vorhandene Inhalte übernehmen** | Lokaler DOCX-Import und formatiertes Einfügen aus Word, Google Docs oder dem Web. [Word-Import](docs/word-import.md) |
 | **Export und Veröffentlichung** | Markdown, HTML mit/ohne Stil, LaTeX, DOCX, PDF, PNG/JPEG und lokaler MarkNice-Arbeitsbereich für WeChat. [Veröffentlichung](docs/marknice-workspace.md) |
 | **Bilder und Ressourcen** | Einfügen, Ziehen, Kopieren/Herunterladen oder Hochladen über PicGo/eigene Befehle. [Bildanleitung](docs/image-handling.md) |
-| **Individuell einrichten** | Themes, Schriftarten pro Oberfläche und Typografie unter **Einstellungen → Erscheinungsbild**; Fokus-/Schreibmaschinenmodus und eigene Tastenkürzel. |
+| **Individuell einrichten** | Themes, Schriftarten pro Oberfläche und Typografie unter **Einstellungen → Darstellung**; Fokus-/Schreibmaschinenmodus und eigene Tastenkürzel. |
 | **Optionale Verbindungen** | Git-basierte Sicherung und Synchronisierung; AI Agent mit eigenem Schlüssel oder lokalen Modellen. KI ist **standardmäßig ausgeschaltet**. [Synchronisierung](docs/git-sync.md) · [KI](docs/ai-agent-guide.md) |
 
 <a id="performance"></a>
@@ -89,7 +90,7 @@ Position, Auswahl und Rückgängig-Verlauf bleiben beim Wechsel erhalten. [Taste
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-Bei einem separaten Lauf mit **1080 System-Tastenereignissen** in einem 1-MiB-Dokument betrug Eingabe-Callback → Cursor-paint **26.63 ms P50 / 33.14 ms P95**. Hardware-/OS-Übertragung und GPU-Darstellung sind ausgeschlossen. Dies sind frühere Ergebnisse, kein neuer v0.6.1-Benchmark oder Wettbewerbsranking. [Methode, Rohdaten und Reproduktion](docs/performance.md).
+Bei einem separaten Lauf mit **1080 System-Tastenereignissen** in einem 1-MiB-Dokument betrug Eingabe-Callback → Cursor-paint **26.63 ms P50 / 33.14 ms P95**. Hardware-/OS-Übertragung und GPU-Darstellung sind ausgeschlossen. Dies sind frühere Ergebnisse, kein neuer v0.6.4-Benchmark oder Wettbewerbsranking. [Methode, Rohdaten und Reproduktion](docs/performance.md).
 
 ## Vor dem Start beachten
 

@@ -2,7 +2,7 @@
 
 Markion's keyboard shortcuts are registered with platform-aware modifiers. On Windows and Linux the primary modifier is **Ctrl**; on macOS it is **Cmd** (⌘). In the tables below, `Ctrl` stands for that platform modifier. Bindings that include `Alt` use **Option** (⌥) on macOS.
 
-> Menu actions can be rebound in **Preferences → Shortcuts**, or by editing the `[shortcuts]` table in `config.toml` (action id → GPUI keystroke string). Core text and structured-selection navigation keys are fixed. The bindings shown here are the defaults.
+> Menu actions can be rebound in **Preferences → Shortcuts**, or by editing the `[shortcuts]` table in `config.toml` (action id → GPUI keystroke string). Core text and structured-selection navigation keys are fixed, and Ctrl+Left stays reserved for word navigation. The bindings shown here are the defaults.
 
 ## Notation
 
@@ -43,7 +43,14 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Inline code | Ctrl+Shift+` |
 | Insert link | Ctrl+K |
 | Insert image | Ctrl+Shift+I |
+| Paragraph | Ctrl+0 |
 | Heading 1–6 | Ctrl+1 through Ctrl+6 |
+| Bulleted list | Ctrl+Shift+] |
+| Numbered list | Ctrl+Shift+[ |
+| Task list | Ctrl+Shift+X |
+| Quote | Ctrl+Shift+Q |
+| Code block | Ctrl+Shift+K |
+| Format code block | Ctrl+Alt+L |
 | Indent | Tab |
 | Outdent | Shift+Tab |
 
@@ -71,7 +78,9 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 
 Right-click preserves the current exact text/content selection; block commands target the clicked block. Row and Column open separate hover flyouts, and Image Properties edits URL/alt/title without revealing raw Markdown. In-cell Shift+Enter inserts `<br>` as one undoable edit.
 
-Click a visual block grip to select its complete source unit; Shift+click another grip to extend. Drag any selected grip to move the whole selection. Table row and column grips select their corresponding cells and expose the structural menu. Delete clears selected cells while retaining the table structure; Ctrl+C copies TSV and HTML, and Ctrl+V pastes a matrix. Ordinary code blocks provide a Fold code / Expand code control; navigation into a folded payload expands it.
+Click a visual block grip to select its complete source unit; Shift+click another grip to extend. Drag any selected grip to move the whole selection. Table row and column grips select their corresponding cells and expose the structural menu. Delete clears selected cells while retaining the table structure; Ctrl+C copies TSV and HTML, and Ctrl+V pastes a matrix. A table's own grip opens whole-table commands such as Copy, Cut, Equalize Column Widths, Wrap in Quote and an Insert Below flyout.
+
+Ordinary code blocks stay expanded by default. With **Allow code folding in Visual Edit** on (**Preferences → Appearance**, Code blocks), they provide a Fold code / Expand code control; navigation into a folded payload expands it.
 
 ## View
 
@@ -80,7 +89,6 @@ Click a visual block grip to select its complete source unit; Shift+click anothe
 | Cycle view mode (Edit → Visual Edit → Split → Read) | Ctrl+Shift+V |
 | Toggle Source / Split Preview (enters Source from Visual Edit or Read) | Ctrl+/ |
 | Visual Edit mode (WYSIWYG-first, source-backed) | Ctrl+E |
-| Split mode (source + preview) | Ctrl+P |
 | Read mode (preview only) | Ctrl+R |
 | Toggle sidebar | Ctrl+Shift+B |
 | Toggle focus mode | F7 |
@@ -119,7 +127,7 @@ Click a visual block grip to select its complete source unit; Shift+click anothe
 | Move between available Find/Replace fields | Tab / Shift+Tab |
 | Close Find/Replace | Esc |
 
-Find searches authored Markdown in Edit, Visual Edit, and Split modes. In Read mode it searches only the rendered visible text (for example, a link label but not its hidden destination). Invoking Replace in Read mode keeps the query, replacement value, options, and requested Replace form, but presents Find-only controls because rendered content cannot be mutated; the Replace row returns when an editable mode is restored.
+Find searches authored Markdown in Edit, Visual Edit, and Split modes. In Read mode it searches only the rendered visible text (for example, a link label but not its hidden destination). Invoking Replace in Read mode keeps the query, replacement value, options, and requested Replace form, but presents Find-only controls because rendered content cannot be mutated; the Replace row returns when an editable mode is restored. Editing shortcuts such as Backspace, Delete, Cut, Paste and text formatting leave the document unchanged in Read mode.
 
 ## Tables
 

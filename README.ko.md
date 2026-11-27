@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/willmove/markion?color=168a86" alt="MIT"></a>
 </p>
 
-<p align="center"><a href="#install"><strong>다운로드</strong></a> · <a href="#new-in-v061">새로운 기능</a> · <a href="#performance">실측 성능</a> · <a href="docs/user-guide.md">사용 안내</a></p>
+<p align="center"><a href="#install"><strong>다운로드</strong></a> · <a href="#new-in-v064">새로운 기능</a> · <a href="#performance">실측 성능</a> · <a href="docs/user-guide.md">사용 안내</a></p>
 
 ![Windows의 Markion 실제 화면: 파일 트리와 독립된 오른쪽 개요 사이에 표시된 Markdown, 할 일 목록과 표](docs/images/markion-korean-workspace-windows.png)
 
@@ -29,37 +29,38 @@
 | --- | --- | --- |
 | 시각 편집은 불필요한 문법 표시를 줄여 줍니다. 필요하면 소스나 분할 미리보기로 전환하세요. | 계정 없이 일반 로컬 Markdown 파일로 저장합니다. Electron이나 내장 WebView 없이 Rust + GPUI로 동작합니다. | Word를 가져오고 코드, 수식과 다이어그램을 작성한 뒤 PDF, Word, HTML 또는 이미지로 내보내세요. |
 
-<a id="new-in-v060"></a><a id="new-in-v061"></a>
+<a id="new-in-v060"></a><a id="new-in-v061"></a><a id="new-in-v063"></a><a id="new-in-v064"></a>
 
-## v0.6.1의 새로운 기능
+## v0.6.4의 새로운 기능
 
 | 주요 기능 | 글쓰기가 더 편해지는 변화 |
 | --- | --- |
-| **완전한 한국어 UI** | 8개 UI 언어를 지원합니다. 환경설정에서 **한국어**를 선택하세요. |
-| **원하는 줄·문단 간격** | **환경설정 → 모양**에서 줄 간격 75–300%, 문단 간격 0–128px을 설정하세요. |
-| **백그라운드 업데이트 준비** | 5시간마다 확인하며 자동 다운로드가 기본으로 켜집니다. 확인 후에만 설치하고 저장하지 않은 편집을 보호합니다. |
-| **내용을 보존하는 블록 삽입** | 간결한 삽입 메뉴와 아래에 표·구분선 추가로 기존 내용을 보존합니다. 구분선 다음에 계속 입력할 수 있습니다. |
+| **코드 블록은 펼친 상태로 시작** | 코드 접기를 선택 가능하게 했습니다. **환경 설정 → 모양**의 '코드 블록'에서 **시각적 편집에서 코드 접기 허용**을 켜면 '코드 접기 / 코드 펼치기' 조작이 다시 나타납니다. |
+| **더 다루기 쉬운 표** | 표 핸들 메뉴가 표 전체 명령을 모으고 **열 너비 균등 분배**를 추가했습니다. '아래에 삽입'은 문단과 같은 항목을 제공합니다. 긴 표에서 글자를 선택해도 페이지가 튀지 않습니다. |
+| **쓴 대로 표시** | 인용 안의 제목과 이미지, 표 머리글 강조와 열 정렬, 겹친 굵게·기울임, 앞 글자에 붙는 문장 부호가 모든 모드에서 올바르게 표시됩니다. |
+| **충실한 가져오기와 내보내기** | Word 가져오기에서 목록 번호, 수동 줄 바꿈, 명시적 서식을 유지합니다. LaTeX 내보내기는 중첩 목록과 시작 번호를, Word 내보내기는 서식이 있는 링크를 하나로 유지합니다. |
+| **기본적으로 더 안전** | 읽기 모드에서는 문서를 변경하지 않습니다. 저장하지 않은 편집이 있는 탭이 열려 있는 동안 파일이나 폴더 이름 변경을 거부하며, 세션 복원 시 '최근 파일 열기' 목록을 바꾸지 않습니다. |
 
 <p align="center"><img src="docs/images/markion-block-menu-windows.png" width="760" alt="Markion의 실제 블록 메뉴: 제목 수준, 목록, 블록 작업과 인라인 서식"></p>
 <p align="center"><sub>v0.6.0</sub></p>
 
-[릴리스 노트](docs/release-notes/release-notes-v0.6.1.md) · [프로젝트 현황과 검증 기록](docs/project-status.md)
+[릴리스 노트](docs/release-notes/release-notes-v0.6.4.md) · [프로젝트 현황과 검증 기록](docs/project-status.md)
 
 <a id="install"></a>
 
 ## 다운로드하고 바로 시작하세요
 
-| 플랫폼 | v0.6.3 다운로드 |
+| 플랫폼 | v0.6.4 다운로드 |
 | --- | --- |
-| **Windows x64** | [설치 프로그램](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-setup.exe) · [포터블 ZIP](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x64-portable.zip) |
-| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.3/Markion_0.6.3_x64.dmg) |
-| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.3/markion_0.6.3_x86_64.rpm) · [pacman(Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.3/markion-0.6.3-1-x86_64.pkg.tar.zst) |
+| **Windows x64** | [설치 프로그램](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-setup.exe) · [포터블 ZIP](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x64-portable.zip) |
+| **macOS 11+** | [Apple Silicon](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_aarch64.dmg) · [Intel](https://github.com/willmove/markion/releases/download/v0.6.4/Markion_0.6.4_x64.dmg) |
+| **Linux x86_64** | [AppImage](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.AppImage) · [DEB](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_amd64.deb) · [RPM](https://github.com/willmove/markion/releases/download/v0.6.4/markion_0.6.4_x86_64.rpm) · [pacman(Arch/Omarchy)](https://github.com/willmove/markion/releases/download/v0.6.4/markion-0.6.4-1-x86_64.pkg.tar.zst) |
 
 [모든 릴리스와 검증 정보](https://github.com/willmove/markion/releases)
 
 - **Windows:** 설치 프로그램을 실행하거나 ZIP을 풀어 주세요. 아직 Authenticode 서명이 없어 SmartScreen에서 **추가 정보 → 실행**이 필요할 수 있습니다.
 - **macOS.** Mac에 맞는 Apple Silicon 또는 Intel DMG를 열고 Markion을 응용 프로그램 폴더로 옮긴 다음 두 번 클릭하세요. 두 DMG 모두 Developer ID 서명과 Apple 공증을 받았습니다. [첫 실행 안내](docs/user-guide.md#install).
-- **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x markion*.AppImage`) 실행하거나 DEB/RPM/pacman을 설치하세요. Arch Linux와 Omarchy에서는 `sudo pacman -U markion-0.6.3-1-x86_64.pkg.tar.zst`를 실행하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
+- **Linux:** AppImage에 실행 권한을 부여한 뒤(`chmod +x markion*.AppImage`) 실행하거나 DEB/RPM/pacman을 설치하세요. Arch Linux와 Omarchy에서는 `sudo pacman -U markion-0.6.4-1-x86_64.pkg.tar.zst`를 실행하세요. FUSE가 없으면 `--appimage-extract-and-run`을 사용하세요.
 
 Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 예제를 수정하기 전에는 **이미지를 포함한 examples 폴더 전체를 먼저 복사하세요**. [시작 안내와 템플릿](assets/examples/README.md).
 
@@ -80,7 +81,7 @@ Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 
 | **기존 작업 가져오기** | 로컬 DOCX 가져오기 및 Word, Google Docs, 웹의 서식 있는 텍스트 붙여넣기. [Word 가져오기](docs/word-import.md) |
 | **내보내기와 발행** | Markdown, 스타일 적용/일반 HTML, LaTeX, DOCX, PDF, PNG/JPEG 및 WeChat용 로컬 MarkNice 작업 공간. [발행 안내](docs/marknice-workspace.md) |
 | **이미지와 리소스** | 붙여넣기, 끌어놓기, 복사/다운로드 및 PicGo·사용자 명령을 통한 업로드. [이미지 안내](docs/image-handling.md) |
-| **나에게 맞게 설정** | **Preferences → Appearance**에서 테마, 영역별 글꼴과 서식을 조절하세요. 집중·타자기 모드와 단축키 사용자 설정도 지원합니다. |
+| **나에게 맞게 설정** | **환경 설정 → 모양**에서 테마, 영역별 글꼴과 서식을 조절하세요. 집중·타자기 모드와 단축키 사용자 설정도 지원합니다. |
 | **필요할 때만 연결** | Git 기반 백업·동기화와 사용자 API 키 또는 로컬 모델을 사용하는 AI Agent. AI는 **기본적으로 꺼져 있습니다**. [동기화](docs/git-sync.md) · [AI](docs/ai-agent-guide.md) |
 
 <a id="performance"></a>
@@ -96,14 +97,14 @@ Markdown 파일이나 폴더를 열면 글쓰기를 시작할 수 있습니다. 
 | 600 KiB | 55.03 ms | **5.81 ms** | 6.86 ms |
 | 1 MiB | 96.84 ms | **10.33 ms** | 11.24 ms |
 
-별도의 1 MiB 문서에서 **시스템 키 입력 1080회**를 측정했을 때, 앱 입력 콜백 → 커서 paint는 **P50 26.63 ms / P95 33.14 ms**였습니다. 하드웨어·OS 입력 전달과 GPU 화면 표시는 제외합니다. 기존 기록이며 v0.6.1의 새 벤치마크나 경쟁 제품 순위가 아닙니다. [측정 방법, 원시 데이터와 재현](docs/performance.md).
+별도의 1 MiB 문서에서 **시스템 키 입력 1080회**를 측정했을 때, 앱 입력 콜백 → 커서 paint는 **P50 26.63 ms / P95 33.14 ms**였습니다. 하드웨어·OS 입력 전달과 GPU 화면 표시는 제외합니다. 기존 기록이며 v0.6.4의 새 벤치마크나 경쟁 제품 순위가 아닙니다. [측정 방법, 원시 데이터와 재현](docs/performance.md).
 
 ## 시작 전에 알아 두세요
 
 - Markdown이 문서의 원본입니다. 지원하지 않거나 바이트 경계가 불확실한 문법은 소스 편집으로 처리합니다. GFM 병합 셀과 이미지 픽셀 자르기는 지원하지 않습니다. [지원 범위와 남은 과제](docs/visual-editing-quality.md).
 - 내장 PDF/DOCX는 외부 변환기가 필요 없습니다. 선택한 Pandoc이 실패하면 내장 내보내기로 전환하며 형식별 재현도는 다릅니다. MarkNice 브라우저 작업 공간은 고정 버전의 편집기 외관을 따릅니다. Word 가져오기는 현재 세션에만 적용되고 Markion에 저장되지 않으므로 **Copy MD** 또는 명시적인 Markdown 저장으로 가져와야 합니다. 브라우저 Word와 테마 적용 인쇄 PDF는 네이티브 내보내기와 다릅니다. 해당 작업 공간에는 Markdown/PDF/이미지 가져오기 및 예제 작업이 없습니다.
 - Windows 설치 버전과 Linux AppImage는 Minisign으로 검증한 앱 내 업데이트 설치를 지원합니다. macOS와 DEB/RPM/pacman은 다운로드를 엽니다. 업데이트 검증과 OS 코드 서명은 별개입니다.
-- **README와 UI 모두 8개 언어**: 영어, 중국어 간체/번체, 일본어, 한국어, 프랑스어, 독일어, 스페인어. 환경설정에서 **한국어**를 선택하세요.
+- **README와 UI 모두 8개 언어**: 영어, 중국어 간체/번체, 일본어, 한국어, 프랑스어, 독일어, 스페인어. 환경 설정에서 **한국어**를 선택하세요.
 
 ## 빌드와 기여
 
