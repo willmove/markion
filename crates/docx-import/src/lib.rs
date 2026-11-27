@@ -5,6 +5,7 @@
 //! and lets the application materialize resource URLs only after a save
 //! destination is selected.
 
+mod math;
 mod package;
 mod render;
 

@@ -13,6 +13,7 @@ pub(super) const MATH_DISPLAY_FONT_SIZE: f32 = 20.0;
 const MATH_SUPERSAMPLE: f32 = 2.0;
 const MAX_RASTER_EDGE: u32 = 8_192;
 const MAX_RASTER_PIXELS: u64 = 32 * 1024 * 1024;
+const UNMEASURED_MATH_LOOKAHEAD: usize = 48;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct MathCacheKey {
@@ -107,6 +108,18 @@ fn preview_inline_math<'a>(block: &'a PreviewBlock, visit: &mut impl FnMut(&'a M
         }
         _ => {}
     }
+}
+
+fn math_viewport_blocks<'a, T>(blocks: &'a [T], list: &ListState) -> &'a [T] {
+    let start = list.logical_scroll_top().item_ix.min(blocks.len());
+    let viewport = list.viewport_bounds();
+    let end = (start..blocks.len())
+        .find(|&index| match list.bounds_for_item(index) {
+            Some(bounds) if viewport.size.height > px(0.) => bounds.top() >= viewport.bottom(),
+            _ => index - start >= UNMEASURED_MATH_LOOKAHEAD,
+        })
+        .unwrap_or(blocks.len());
+    &blocks[start..end]
 }
 
 #[derive(Clone)]
@@ -314,7 +327,14 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         let typography = self.typography_metrics();
-        let mut requested = HashSet::new();
+        let mut seen = HashSet::new();
+        let mut requested = Vec::new();
+        let limit = self.math_cache.capacity;
+        let mut request = |key: MathCacheKey| {
+            if requested.len() < limit && seen.insert(key.clone()) {
+                requested.push(key);
+            }
+        };
         let inline_key = |math: &MathSource| {
             self.math_key(
                 &math.latex,
@@ -325,9 +345,12 @@ impl MarkionApp {
                 foreground,
             )
         };
-        for block in preview {
+        let Some(tab) = self.active_tab().document_tab() else {
+            return;
+        };
+        for block in math_viewport_blocks(preview, &tab.preview_list) {
             if let PreviewBlock::MathBlock { latex, .. } = block {
-                requested.insert(self.math_key(
+                request(self.math_key(
                     latex,
                     MathLayoutStyle::Display,
                     typography.display_math_font_size,
@@ -337,12 +360,12 @@ impl MarkionApp {
                 ));
             }
             preview_inline_math(block, &mut |math| {
-                requested.insert(inline_key(math));
+                request(inline_key(math));
             });
         }
-        for block in visual {
+        for block in math_viewport_blocks(visual, &tab.visual_list) {
             if let VisualBlockKind::MathBlock { latex, .. } = &block.kind {
-                requested.insert(self.math_key(
+                request(self.math_key(
                     latex,
                     MathLayoutStyle::Display,
                     typography.display_math_font_size,
@@ -356,7 +379,7 @@ impl MarkionApp {
                 .iter()
                 .filter_map(|run| run.math.as_ref())
             {
-                requested.insert(inline_key(math));
+                request(inline_key(math));
             }
         }
 

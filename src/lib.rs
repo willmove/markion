@@ -819,6 +819,54 @@ impl Default for MarkdownDocument {
     }
 }
 
+struct OutlineHeadingDraft {
+    level: u8,
+    offset: usize,
+    authored_id: Option<String>,
+    title: String,
+    anchor_text: Option<String>,
+}
+
+impl OutlineHeadingDraft {
+    fn new(level: u8, offset: usize, authored_id: Option<&str>) -> Self {
+        Self {
+            level,
+            offset,
+            authored_id: authored_id.filter(|id| !id.is_empty()).map(str::to_owned),
+            title: String::new(),
+            anchor_text: None,
+        }
+    }
+
+    fn push_text(&mut self, value: &str) {
+        self.title.push_str(value);
+        if let Some(anchor_text) = &mut self.anchor_text {
+            anchor_text.push_str(value);
+        }
+    }
+
+    fn push_math(&mut self, latex: &str) {
+        // Preserve the fragment targets that were derived before formulas
+        // appeared in outline labels.
+        if self.authored_id.is_none() && self.anchor_text.is_none() {
+            self.anchor_text = Some(self.title.clone());
+        }
+        self.title.push_str(&math::outline_math_text(latex));
+    }
+
+    fn finish(self) -> Heading {
+        Heading {
+            level: self.level,
+            offset: self.offset,
+            anchor: heading_anchor_base(
+                self.authored_id.as_deref(),
+                self.anchor_text.as_deref().unwrap_or(&self.title),
+            ),
+            title: self.title,
+        }
+    }
+}
+
 impl MarkdownDocument {
     fn next_instance_id() -> DocumentInstanceId {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -4039,7 +4087,7 @@ impl MarkdownDocument {
             .unwrap_or((text, 0));
         let mut blocks = Vec::new();
         let mut headings: Vec<Heading> = Vec::new();
-        let mut outline_current: Option<(u8, usize, String, Option<String>)> = None;
+        let mut outline_current = None::<OutlineHeadingDraft>;
         let mut heading: Option<(u8, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
         let mut paragraph: Option<(Vec<InlineSpan>, std::ops::Range<usize>)> = None;
         let mut quote_depth = 0usize;
@@ -4141,12 +4189,10 @@ impl MarkdownDocument {
                 Event::Start(Tag::Heading { level, id, .. }) => {
                     let level = heading_level_to_u8(level);
                     heading = Some((level, Vec::new(), source_range.clone()));
-                    outline_current = Some((
+                    outline_current = Some(OutlineHeadingDraft::new(
                         level,
                         source_range.start,
-                        String::new(),
-                        id.filter(|value| !value.is_empty())
-                            .map(|value| value.to_string()),
+                        id.as_deref(),
                     ));
                 }
                 Event::End(TagEnd::Heading(_)) => {
@@ -4165,13 +4211,8 @@ impl MarkdownDocument {
                             },
                         );
                     }
-                    if let Some((level, offset, title, authored_id)) = outline_current.take() {
-                        headings.push(Heading {
-                            level,
-                            anchor: heading_anchor_base(authored_id.as_deref(), &title),
-                            offset,
-                            title,
-                        });
+                    if let Some(draft) = outline_current.take() {
+                        headings.push(draft.finish());
                     }
                 }
                 Event::Start(Tag::FootnoteDefinition(label)) => {
@@ -4551,15 +4592,15 @@ impl MarkdownDocument {
                             );
                         }
                     }
-                    if let Some((_, _, title, _)) = outline_current.as_mut() {
-                        title.push_str(&content);
+                    if let Some(draft) = &mut outline_current {
+                        draft.push_text(&content);
                     }
                 }
                 Event::Code(text) => {
                     let mut style = inline.style();
                     style.code = true;
-                    if let Some((_, _, title, _)) = outline_current.as_mut() {
-                        title.push_str(&text);
+                    if let Some(draft) = &mut outline_current {
+                        draft.push_text(&text);
                     }
                     push_preview_rich(
                         &mut heading,
@@ -4712,6 +4753,9 @@ impl MarkdownDocument {
                     );
                 }
                 Event::InlineMath(latex) => {
+                    if let Some(draft) = &mut outline_current {
+                        draft.push_math(&latex);
+                    }
                     let authored = text
                         .get(source_range.clone())
                         .map_or_else(|| format!("${latex}$"), str::to_string);
@@ -4736,6 +4780,9 @@ impl MarkdownDocument {
                     );
                 }
                 Event::DisplayMath(latex) => {
+                    if let Some(draft) = &mut outline_current {
+                        draft.push_math(&latex);
+                    }
                     let standalone = heading.is_none()
                         && list_item.is_none()
                         && image.is_none()
@@ -4784,8 +4831,8 @@ impl MarkdownDocument {
                     }
                 }
                 Event::SoftBreak | Event::HardBreak => {
-                    if let Some((_, _, title, _)) = outline_current.as_mut() {
-                        title.push(' ');
+                    if let Some(draft) = &mut outline_current {
+                        draft.push_text(" ");
                     }
                     push_preview_rich(
                         &mut heading,
@@ -4921,37 +4968,35 @@ impl MarkdownDocument {
     fn compute_outline_only(&self) -> Vec<Heading> {
         let (body, body_offset) = self.body_text_and_offset();
         let mut headings = Vec::new();
-        let mut current: Option<(u8, usize, String, Option<String>)> = None;
+        let mut current = None::<OutlineHeadingDraft>;
 
         for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
             match event {
                 Event::Start(Tag::Heading { level, id, .. }) => {
-                    current = Some((
+                    current = Some(OutlineHeadingDraft::new(
                         heading_level_to_u8(level),
                         body_offset + range.start,
-                        String::new(),
-                        id.filter(|value| !value.is_empty())
-                            .map(|value| value.to_string()),
+                        id.as_deref(),
                     ));
                 }
                 Event::Text(text) | Event::Code(text) => {
-                    if let Some((_, _, title, _)) = current.as_mut() {
-                        title.push_str(&text);
+                    if let Some(draft) = &mut current {
+                        draft.push_text(&text);
+                    }
+                }
+                Event::InlineMath(latex) | Event::DisplayMath(latex) => {
+                    if let Some(draft) = &mut current {
+                        draft.push_math(&latex);
                     }
                 }
                 Event::SoftBreak | Event::HardBreak => {
-                    if let Some((_, _, title, _)) = current.as_mut() {
-                        title.push(' ');
+                    if let Some(draft) = &mut current {
+                        draft.push_text(" ");
                     }
                 }
                 Event::End(TagEnd::Heading(_)) => {
-                    if let Some((level, offset, title, authored_id)) = current.take() {
-                        headings.push(Heading {
-                            level,
-                            anchor: heading_anchor_base(authored_id.as_deref(), &title),
-                            offset,
-                            title,
-                        });
+                    if let Some(draft) = current.take() {
+                        headings.push(draft.finish());
                     }
                 }
                 _ => {}
@@ -10083,6 +10128,23 @@ Intro.
         assert_eq!(via_derive, via_standalone);
         // Sanity: the image alt text is part of the title on both paths.
         assert_eq!(via_derive[2].title, "With alt words image");
+    }
+
+    #[test]
+    fn outline_keeps_formula_labels_and_existing_anchors() {
+        let source = "# Why $\\boldsymbol{x}$ grows {#powers}\n\n\
+                      ## Rate $\\alpha$ after $x$\n\n\
+                      ## $\\frac{1}{2}$\n";
+        let document = MarkdownDocument::from_text(source);
+        let outline = document.outline();
+        let (_, combined) = MarkdownDocument::derive_preview_and_outline(source);
+        assert_eq!(outline, combined);
+        assert_eq!(outline[0].title, "Why x grows");
+        assert_eq!(outline[0].anchor, "powers");
+        assert_eq!(outline[1].title, "Rate α after x");
+        assert_eq!(outline[1].anchor, "rate-after");
+        assert_eq!(outline[2].title, "1⁄2");
+        assert_eq!(outline[2].anchor, "section");
     }
 
     #[test]

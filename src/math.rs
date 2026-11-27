@@ -44,6 +44,30 @@ pub fn validate_latex(latex: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+pub(crate) fn outline_math_text(latex: &str) -> String {
+    let latex = latex.trim();
+    if let Some((command, body)) = latex.split_once('{')
+        && matches!(
+            command,
+            "\\boldsymbol"
+                | "\\mathbf"
+                | "\\mathrm"
+                | "\\mathit"
+                | "\\mathcal"
+                | "\\mathbb"
+                | "\\mathfrak"
+                | "\\mathsf"
+                | "\\mathtt"
+                | "\\text"
+        )
+        && let Some((content, rest)) = take_braced_content(body)
+        && rest.is_empty()
+    {
+        return math_preview_text(content);
+    }
+    math_preview_text(latex)
+}
+
 fn math_preview_text(latex: &str) -> String {
     let mut text = latex.trim().to_string();
     text = replace_simple_fractions(&text);

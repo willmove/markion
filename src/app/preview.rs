@@ -2405,6 +2405,7 @@ pub(super) fn rich_text_with_math_element(
     display_scale: f32,
     font_size: f32,
     line_height: f32,
+    alignment: TableAlignment,
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
@@ -2630,20 +2631,7 @@ pub(super) fn rich_text_with_math_element(
         }
     }
 
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .children(prose.into_lines().into_iter().map(|line| {
-            div()
-                .w_full()
-                .min_h(px(line_height))
-                .flex()
-                .flex_wrap()
-                .items_end()
-                .children(line)
-        }))
-        .into_any_element()
+    prose.into_aligned_element(line_height, alignment)
 }
 
 /// Selectable plain / highlighted preview text (code, captions, table cells).
@@ -3577,6 +3565,27 @@ impl MixedProse {
     fn into_lines(mut self) -> Vec<Vec<gpui::AnyElement>> {
         self.break_line();
         self.complete_lines
+    }
+
+    fn into_aligned_element(self, line_height: f32, alignment: TableAlignment) -> gpui::AnyElement {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .children(self.into_lines().into_iter().map(|line| {
+                div()
+                    .w_full()
+                    .min_h(px(line_height))
+                    .flex()
+                    .flex_wrap()
+                    .items_end()
+                    .when(alignment == TableAlignment::Center, |row| {
+                        row.justify_center()
+                    })
+                    .when(alignment == TableAlignment::Right, |row| row.justify_end())
+                    .children(line)
+            }))
+            .into_any_element()
     }
 }
 
@@ -6594,24 +6603,7 @@ fn visual_table_cell_element(
             }
         }
     }
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .children(prose.into_lines().into_iter().map(|line| {
-            div()
-                .w_full()
-                .min_h(px(metrics.1))
-                .flex()
-                .flex_wrap()
-                .items_end()
-                .when(alignment == TableAlignment::Center, |row| {
-                    row.justify_center()
-                })
-                .when(alignment == TableAlignment::Right, |row| row.justify_end())
-                .children(line)
-        }))
-        .into_any_element()
+    prose.into_aligned_element(metrics.1, alignment)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8211,6 +8203,7 @@ pub(super) fn visual_table_view(
                                 display_scale,
                                 typography.table_font_size,
                                 typography.text_line_height(typography.table_font_size),
+                                col_alignment,
                                 None,
                                 cx,
                             )
@@ -9455,6 +9448,7 @@ fn preview_table_grid(
                             display_scale,
                             font_size,
                             line_height,
+                            col_alignment,
                             document_dir,
                             cx,
                         )
@@ -9527,6 +9521,7 @@ pub(super) fn preview_block_view(
                     display_scale,
                     heading_size,
                     typography.text_line_height(heading_size),
+                    TableAlignment::Default,
                     document_dir,
                     cx,
                 ))
@@ -9544,6 +9539,7 @@ pub(super) fn preview_block_view(
                 display_scale,
                 typography.rendered_font_size,
                 typography.paragraph_line_height,
+                TableAlignment::Default,
                 document_dir,
                 cx,
             )),
@@ -9562,6 +9558,7 @@ pub(super) fn preview_block_view(
                 display_scale,
                 typography.rendered_font_size,
                 typography.paragraph_line_height,
+                TableAlignment::Default,
                 document_dir,
                 cx,
             )),
@@ -9580,6 +9577,7 @@ pub(super) fn preview_block_view(
                 display_scale,
                 typography.rendered_font_size,
                 typography.paragraph_line_height,
+                TableAlignment::Default,
                 document_dir,
                 cx,
             )),
@@ -9630,6 +9628,7 @@ pub(super) fn preview_block_view(
                     display_scale,
                     typography.rendered_font_size,
                     typography.list_line_height,
+                    TableAlignment::Default,
                     document_dir,
                     cx,
                 )))
@@ -9672,6 +9671,7 @@ pub(super) fn preview_block_view(
                                 display_scale,
                                 typography.quote_font_size,
                                 typography.quote_line_height,
+                                TableAlignment::Default,
                                 document_dir,
                                 cx,
                             ));
@@ -9699,6 +9699,7 @@ pub(super) fn preview_block_view(
                                     display_scale,
                                     heading_size,
                                     heading_line_height,
+                                    TableAlignment::Default,
                                     document_dir,
                                     cx,
                                 )),
@@ -9722,6 +9723,7 @@ pub(super) fn preview_block_view(
                                     display_scale,
                                     typography.quote_font_size,
                                     typography.quote_line_height,
+                                    TableAlignment::Default,
                                     document_dir,
                                     cx,
                                 )),
@@ -9744,6 +9746,7 @@ pub(super) fn preview_block_view(
                                     display_scale,
                                     typography.quote_font_size,
                                     typography.quote_line_height,
+                                    TableAlignment::Default,
                                     document_dir,
                                     cx,
                                 )),
@@ -9825,6 +9828,7 @@ pub(super) fn preview_block_view(
                                         display_scale,
                                         typography.quote_font_size,
                                         typography.quote_line_height,
+                                        TableAlignment::Default,
                                         document_dir,
                                         cx,
                                     ),
@@ -10139,6 +10143,7 @@ pub(super) fn preview_block_view(
                 display_scale,
                 typography.rendered_font_size,
                 typography.paragraph_line_height,
+                TableAlignment::Default,
                 document_dir,
                 cx,
             ))),

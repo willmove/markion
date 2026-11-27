@@ -312,8 +312,30 @@ fn bold_boundaries_preserve_authored_separators_and_non_word_starts() {
             "**b**\\*literal\\*\n\n",
             "**b**©word\n\n",
             "**b**́word\n\n",
-            "**one****two**\n\n",
+            "**onetwo**\n\n",
             "**b**$x$word\n\n",
+        )
+    );
+}
+
+#[test]
+fn fragmented_and_adjacent_emphasis_keeps_the_word_styles() {
+    let xml = document(
+        r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>幂律</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t> scaling </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>的根源</w:t></w:r></w:p>
+<w:p><w:r><w:t>before</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>（重要）</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>both</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>,italic</w:t></w:r><w:r><w:t> outside</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[("word/document.xml", xml.as_bytes())])
+        .render_markdown(|_| None)
+        .unwrap();
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new(&markdown));
+    assert_eq!(
+        html,
+        concat!(
+            "<p><strong>幂律 scaling 的根源</strong></p>\n",
+            "<p>before<strong>（重要）</strong> after</p>\n",
+            "<p><strong>bold</strong><strong><em>both</em></strong><em>,italic</em> outside</p>\n",
         )
     );
 }
@@ -440,6 +462,36 @@ fn converts_headerless_table_without_consuming_first_row() {
         event,
         pulldown_cmark::Event::Start(pulldown_cmark::Tag::Table(_))
     )));
+}
+
+#[test]
+fn rectangular_table_preserves_consistent_column_alignment() {
+    let xml = document(
+        r#"<w:tbl><w:tr><w:trPr><w:tblHeader/></w:trPr>
+<w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Centered</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>Right</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Mixed</w:t></w:r></w:p></w:tc>
+</w:tr><w:tr>
+<w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:r><w:t>Three</w:t></w:r></w:p></w:tc>
+</w:tr></w:tbl>"#,
+    );
+    let markdown = convert(&[("word/document.xml", xml.as_bytes())])
+        .render_markdown(|_| None)
+        .unwrap();
+    use pulldown_cmark::{Alignment, Event, Options, Parser, Tag};
+    assert!(
+        Parser::new_ext(&markdown, Options::ENABLE_TABLES).any(|event| {
+            event
+                == Event::Start(Tag::Table(vec![
+                    Alignment::Center,
+                    Alignment::Right,
+                    Alignment::None,
+                ]))
+        }),
+        "{markdown}"
+    );
 }
 
 #[test]
@@ -618,7 +670,7 @@ fn issue_50_decimal_child_lists_keep_their_actual_hierarchy() {
 }
 
 #[test]
-fn word_bookmarks_are_block_anchors_and_decorative_drawings_are_not_images() {
+fn word_heading_bookmark_becomes_an_id_and_additional_bookmarks_keep_targets() {
     let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:style w:type="paragraph" w:styleId="Heading2"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
     </w:styles>"#;
@@ -629,24 +681,30 @@ fn word_bookmarks_are_block_anchors_and_decorative_drawings_are_not_images() {
 <w:bookmarkStart w:id="1" w:name="_Toc100670227"/>
 <w:bookmarkStart w:id="2" w:name="_Ref13"/>
 <w:r><w:drawing><wp:anchor><wp:docPr id="2" name="decorative rectangle"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"/></a:graphic></wp:anchor></w:drawing></w:r>
-<w:r><w:br/><w:t>目的</w:t></w:r></w:p>"#,
+<w:r><w:br/><w:t>目的</w:t></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:bookmarkStart w:id="3" w:name="_toc100670227"/>
+<w:r><w:t>Another heading</w:t></w:r></w:p>
+<w:p><w:hyperlink w:anchor="_Toc100670227"><w:r><w:t>first</w:t></w:r></w:hyperlink>
+<w:r><w:t> </w:t></w:r><w:hyperlink w:anchor="_toc100670227"><w:r><w:t>second</w:t></w:r></w:hyperlink></w:p>"#,
     );
     let result = convert(&[
         ("word/document.xml", xml.as_bytes()),
         ("word/styles.xml", styles),
     ]);
     let markdown = result.render_markdown(|_| None).unwrap();
-    assert!(
-        markdown.contains("<div id=\"_toc100670227\"></div>\n<div id=\"_ref13\"></div>\n\n## 目的")
-    );
-    assert!(markdown.contains("## 目的"));
+    assert!(markdown.contains("<div id=\"_ref13\"></div>\n\n## 目的 {#_toc100670227}"));
+    assert!(markdown.contains("[first](#_toc100670227) [second](#_toc100670227-1)"));
     assert!(!markdown.lines().any(|line| line.trim() == "##"));
     assert!(!markdown.contains("## <"));
     assert!(!markdown.contains("<a id="));
     assert!(!markdown.contains("[Missing image:"));
     let mut block_anchors = String::new();
     let mut inline_anchor_count = 0;
-    for event in pulldown_cmark::Parser::new(&markdown) {
+    let mut heading_ids = Vec::new();
+    for event in pulldown_cmark::Parser::new_ext(
+        &markdown,
+        pulldown_cmark::Options::ENABLE_HEADING_ATTRIBUTES,
+    ) {
         match event {
             pulldown_cmark::Event::Html(html) if html.contains("<div id=") => {
                 block_anchors.push_str(&html)
@@ -654,10 +712,14 @@ fn word_bookmarks_are_block_anchors_and_decorative_drawings_are_not_images() {
             pulldown_cmark::Event::InlineHtml(html) if html.contains("id=") => {
                 inline_anchor_count += 1
             }
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Heading { id, .. }) => {
+                heading_ids.push(id.unwrap().into_string())
+            }
             _ => {}
         }
     }
-    assert!(block_anchors.contains("id=\"_toc100670227\""));
+    assert_eq!(heading_ids, ["_toc100670227", "_toc100670227-1"]);
+    assert!(!block_anchors.contains("id=\"_toc100670227\""));
     assert!(block_anchors.contains("id=\"_ref13\""));
     assert_eq!(inline_anchor_count, 0);
     assert!(
@@ -666,6 +728,103 @@ fn word_bookmarks_are_block_anchors_and_decorative_drawings_are_not_images() {
             .iter()
             .any(|item| item.code == DiagnosticCode::MissingImage)
     );
+}
+
+#[test]
+fn word_math_preserves_complex_display_equations_and_table_equations() {
+    use pulldown_cmark::{Event, Options, Parser};
+
+    let xml = document(
+        r#"<w:p><m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr><m:oMath>
+<m:nary><m:naryPr><m:chr m:val="∑"/><m:limLoc m:val="undOvr"/><m:supHide m:val="1"/></m:naryPr>
+<m:sub><m:r><m:t>n=1</m:t></m:r></m:sub><m:sup><m:r><m:t>ignored</m:t></m:r></m:sup>
+<m:e><m:d><m:dPr><m:begChr m:val="["/><m:endChr m:val="]"/></m:dPr>
+<m:e><m:acc><m:accPr><m:chr m:val="‾"/></m:accPr><m:e><m:r><m:rPr><m:sty m:val="b"/></m:rPr><m:t>x</m:t></m:r></m:e></m:acc></m:e>
+</m:d></m:e></m:nary></m:oMath></m:oMathPara></w:p>
+<w:p><w:r><w:t>cost $5 </w:t></w:r><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath>
+<m:oMath><m:r><m:t>y</m:t></m:r></m:oMath><w:r><w:t> end</w:t></w:r></w:p>
+<w:p><w:r><w:t>before </w:t></w:r><m:oMathPara><m:oMath><m:r><m:t>z</m:t></m:r></m:oMath></m:oMathPara><w:r><w:t> after</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><m:oMathPara><m:oMath><m:limLow>
+<m:e><m:r><m:rPr><m:nor/></m:rPr><m:t>lim</m:t></m:r></m:e><m:lim><m:r><m:t>x→∞</m:t></m:r></m:lim>
+</m:limLow><m:r><m:rPr><m:scr m:val="double-struck"/><m:sty m:val="p"/></m:rPr><m:t>R</m:t></m:r>
+<m:d><m:dPr><m:begChr m:val="|"/><m:endChr m:val="|"/></m:dPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:d>
+</m:oMath></m:oMathPara></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let result = convert(&[("word/document.xml", xml.as_bytes())]);
+    assert!(!result.has_content_loss(), "{:?}", result.diagnostics);
+    let markdown = result.render_markdown(|_| None).unwrap();
+    let equations = Parser::new_ext(&markdown, Options::ENABLE_MATH | Options::ENABLE_TABLES)
+        .filter(|event| matches!(event, Event::DisplayMath(_) | Event::InlineMath(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        equations,
+        [
+            Event::DisplayMath(
+                "\n\\sum\\limits_{n=1} \\left[ \\overline{\\mathbf{x}}\\right]\n".into()
+            ),
+            Event::InlineMath("x".into()),
+            Event::InlineMath("y".into()),
+            Event::InlineMath("z".into()),
+            Event::InlineMath(
+                "\\underset{x→∞}{\\text{lim}}\\mathbb{R}\\left\\vert x\\right\\vert".into()
+            ),
+        ]
+    );
+    assert!(markdown.contains("cost \\$5 "));
+    assert!(markdown.contains("before $z$ after"));
+    let renderer = typune_markdown::MathRenderer::new();
+    for equation in equations {
+        match equation {
+            Event::DisplayMath(latex) => renderer.render_block(&latex).unwrap(),
+            Event::InlineMath(latex) => renderer.render_inline(&latex).unwrap(),
+            _ => unreachable!(),
+        };
+    }
+}
+
+#[test]
+fn word_quote_and_horizontal_rule_survive_without_spurious_endnote_loss() {
+    use pulldown_cmark::{Event, Tag};
+
+    let styles =
+        br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="a8"><w:name w:val="Block Text"/></w:style>
+<w:style w:type="paragraph" w:styleId="CustomQuote"><w:basedOn w:val="a8"/></w:style>
+</w:styles>"#;
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="notes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>
+</Relationships>"#;
+    let notes = br#"<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote></w:endnotes>"#;
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="CustomQuote"/></w:pPr><w:r><w:t>Quoted</w:t><w:br/><w:t>continuation</w:t></w:r></w:p>
+<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"/></w:pict></w:r></w:p>"#;
+    let xml = document(body);
+    let prepared = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/styles.xml", styles),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/endnotes.xml", notes),
+    ]);
+    assert!(!prepared.has_content_loss());
+    let markdown = prepared.render_markdown(|_| None).unwrap();
+    assert_eq!(markdown, "> Quoted\\\n> continuation\n\n***\n\n");
+    let events = pulldown_cmark::Parser::new(&markdown).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Start(Tag::BlockQuote(_))))
+    );
+    assert!(events.contains(&Event::Rule));
+
+    let referenced = document(&format!(
+        "{body}<w:p><w:r><w:t>Body</w:t><w:endnoteReference w:id=\"1\"/></w:r></w:p>"
+    ));
+    let prepared = convert(&[
+        ("word/document.xml", referenced.as_bytes()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/endnotes.xml", notes),
+    ]);
+    assert!(prepared.has_content_loss());
 }
 
 #[test]

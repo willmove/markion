@@ -7,14 +7,16 @@ use std::{
 use image::ImageReader;
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256};
+use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
 use crate::{
     AssetId, Diagnostic, DiagnosticCode, DiagnosticSeverity, ImportContext, ImportError,
-    ImportSummary, MarkdownChunk, PreparedAsset, PreparedImport, package::DocxPackage,
+    ImportSummary, MarkdownChunk, PreparedAsset, PreparedImport,
+    math::{is_m, omml_to_latex},
+    package::DocxPackage,
 };
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-const M_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 
 #[derive(Default)]
 struct ChunkWriter {
@@ -80,9 +82,112 @@ enum InlineBoundaryEvent {
 struct InlineBoundaryState {
     pending_bold_boundary: bool,
     first_event: Option<InlineBoundaryEvent>,
+    pending_text: String,
+    formatting: RunFormatting,
 }
 
 impl InlineBoundaryState {
+    fn push_text(&mut self, text: String, formatting: &RunFormatting, writer: &mut ChunkWriter) {
+        if text.is_empty() {
+            return;
+        }
+        if self.formatting != *formatting {
+            self.flush_text(writer, Some((&text, formatting)));
+            self.formatting = formatting.clone();
+        }
+        if self.pending_text.is_empty() {
+            self.pending_text = text;
+        } else {
+            self.pending_text.push_str(&text);
+        }
+    }
+
+    fn flush_text(&mut self, writer: &mut ChunkWriter, next: Option<(&str, &RunFormatting)>) {
+        let text = std::mem::take(&mut self.pending_text);
+        if text.is_empty() {
+            return;
+        }
+        let formatting = &self.formatting;
+        let bold = formatting.bold;
+        let mut before = String::new();
+        let mut after = String::new();
+        let trimmed = text.trim_matches(char::is_whitespace);
+        let leading = text.len() - text.trim_start_matches(char::is_whitespace).len();
+        let previous = writer.chunks.last().and_then(|chunk| match chunk {
+            MarkdownChunk::Text(text) => text.chars().next_back(),
+            MarkdownChunk::AssetUrl(_) => Some(')'),
+        });
+        if !trimmed.is_empty() && *formatting != RunFormatting::default() {
+            let trailing = leading + trimmed.len();
+            let left = if leading > 0 { None } else { previous };
+            let right = (trailing == text.len()).then_some(next).flatten();
+            let inner_is_markup = formatting.strike && (bold || formatting.italic)
+                || formatting.underline
+                || formatting.vertical.is_some();
+            let first = (inner_is_markup
+                || trimmed.chars().next().is_some_and(needs_markdown_escape))
+            .then_some('<')
+            .or_else(|| trimmed.chars().next());
+            let last = inner_is_markup
+                .then_some('>')
+                .or_else(|| trimmed.chars().next_back());
+            let html = (bold || formatting.italic || formatting.strike)
+                && ((punctuation(first) && !flanking_boundary(left))
+                    || right.is_some_and(|(text, next_formatting)| {
+                        let first = text.chars().next();
+                        let compatibility_space = bold
+                            && !next_formatting.bold
+                            && first.is_some_and(char::is_alphanumeric);
+                        !compatibility_space
+                            && !first.is_some_and(char::is_whitespace)
+                            && (next_formatting.has_delimiters()
+                                || (punctuation(last) && !flanking_boundary(first)))
+                    }));
+            for (active, open, close) in [
+                (
+                    bold,
+                    if html { "<strong>" } else { "**" },
+                    if html { "</strong>" } else { "**" },
+                ),
+                (
+                    formatting.italic,
+                    if html { "<em>" } else { "*" },
+                    if html { "</em>" } else { "*" },
+                ),
+                (
+                    formatting.strike,
+                    if html { "<del>" } else { "~~" },
+                    if html { "</del>" } else { "~~" },
+                ),
+                (formatting.underline, "<u>", "</u>"),
+                (
+                    formatting.vertical.as_deref() == Some("superscript"),
+                    "<sup>",
+                    "</sup>",
+                ),
+                (
+                    formatting.vertical.as_deref() == Some("subscript"),
+                    "<sub>",
+                    "</sub>",
+                ),
+            ] {
+                if active {
+                    before.push_str(open);
+                    after.insert_str(0, close);
+                }
+            }
+            self.prepare_text(&text, bold, writer);
+            writer.recovered_text(escape_markdown_text(&text[..leading]));
+            writer.text(before);
+            writer.recovered_text(escape_markdown_text(trimmed));
+            writer.text(after);
+            writer.recovered_text(escape_markdown_text(&text[trailing..]));
+        } else {
+            self.prepare_text(&text, bold, writer);
+            writer.recovered_text(escape_markdown_text(&text));
+        }
+    }
+
     fn prepare_text(&mut self, text: &str, bold: bool, writer: &mut ChunkWriter) {
         let Some(first) = text.chars().next() else {
             return;
@@ -97,7 +202,8 @@ impl InlineBoundaryState {
                 .is_some_and(|last| !last.is_whitespace());
     }
 
-    fn separate(&mut self) {
+    fn separate(&mut self, writer: &mut ChunkWriter) {
+        self.flush_text(writer, None);
         self.record_first(InlineBoundaryEvent::Structural);
         self.pending_bold_boundary = false;
     }
@@ -147,16 +253,43 @@ struct Style {
     heading: Option<usize>,
     num_id: Option<String>,
     level: usize,
+    quote: bool,
     run: RunFormatting,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
+struct ParagraphFormatting {
+    heading: Option<usize>,
+    numbering: Option<(String, usize)>,
+    quote: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RunFormatting {
     bold: bool,
     italic: bool,
     strike: bool,
     underline: bool,
     vertical: Option<String>,
+}
+
+impl RunFormatting {
+    fn has_delimiters(&self) -> bool {
+        self.bold || self.italic || self.strike
+    }
+}
+
+fn punctuation(character: Option<char>) -> bool {
+    character.is_some_and(|ch| {
+        matches!(
+            ch.general_category_group(),
+            GeneralCategoryGroup::Punctuation | GeneralCategoryGroup::Symbol
+        )
+    })
+}
+
+fn flanking_boundary(character: Option<char>) -> bool {
+    character.is_none_or(char::is_whitespace) || punctuation(character)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -212,14 +345,32 @@ pub(crate) fn convert(
         });
     }
 
-    let bookmarks = root
+    let mut bookmarks = HashMap::new();
+    let mut bookmark_ids = HashMap::<String, usize>::new();
+    let mut used_ids = HashSet::new();
+    for node in root
         .descendants()
         .filter(|node| is_w(*node, "bookmarkStart"))
-        .filter_map(|node| {
-            let name = attr_local(node, "name")?;
-            Some((name.to_owned(), slug(name)))
-        })
-        .collect();
+    {
+        context.checkpoint()?;
+        let Some(name) = attr_local(node, "name") else {
+            continue;
+        };
+        if bookmarks.contains_key(name) || node.ancestors().any(excluded_revision) {
+            continue;
+        }
+        let mut base = slug(name);
+        if base.is_empty() {
+            base = "bookmark".into();
+        }
+        let count = bookmark_ids.entry(base.clone()).or_default();
+        let mut id = base.clone();
+        while !used_ids.insert(id.clone()) {
+            *count += 1;
+            id = format!("{base}-{count}");
+        }
+        bookmarks.insert(name.to_owned(), id);
+    }
     let mut converter = Converter {
         package,
         context,
@@ -403,7 +554,6 @@ impl Converter<'_> {
             .filter(|relationship| {
                 relationship.kind.ends_with("/header")
                     || relationship.kind.ends_with("/footer")
-                    || relationship.kind.ends_with("/endnotes")
                     || relationship.kind.ends_with("/comments")
             })
             .map(|relationship| relationship.kind.clone())
@@ -471,32 +621,30 @@ impl Converter<'_> {
     ) -> Result<(), ImportError> {
         self.summary.paragraphs += 1;
         let location = Some(format!("paragraph {}", self.summary.paragraphs));
-        self.render_bookmark_blocks(paragraph, writer);
-        if let Some(math_para) = paragraph
+        let bookmarks = paragraph
             .descendants()
-            .find(|node| is_m(*node, "oMathPara"))
-        {
-            let tex = omml_children(math_para);
-            if tex.is_empty() || !omml_supported(math_para) {
-                let fallback = visible_text(paragraph);
-                self.diagnostic(
-                    DiagnosticCode::UnsupportedEquation,
-                    DiagnosticSeverity::ContentLoss,
-                    part,
-                    location,
-                    Some(fallback.clone()),
-                );
-                if fallback.trim().is_empty() {
-                    writer.text("[Unsupported equation]\n\n");
-                } else {
-                    writer.recovered_text(escape_markdown_text(fallback.trim()));
-                    writer.text("\n\n");
-                }
-            } else {
-                writer.text("$$\n");
-                writer.recovered_text(&tex);
-                writer.text("\n$$\n\n");
-            }
+            .filter(|node| is_w(*node, "bookmarkStart"))
+            .filter(|node| !node.ancestors().any(excluded_revision))
+            .filter_map(|node| self.bookmarks.get(attr_local(node, "name")?).cloned())
+            .collect::<Vec<_>>();
+        let mut content = paragraph.children().filter(|node| {
+            node.is_element()
+                && !excluded_revision(*node)
+                && !["pPr", "bookmarkStart", "bookmarkEnd"]
+                    .iter()
+                    .any(|tag| is_w(*node, tag))
+        });
+        let standalone = content.next().filter(|_| content.next().is_none());
+        if standalone.is_some_and(is_horizontal_rule_run) {
+            render_bookmark_blocks(bookmarks.iter().map(String::as_str), writer);
+            self.last_ordered_list = None;
+            writer.recovered_text("***\n\n");
+            return Ok(());
+        }
+        if let Some(math_para) = standalone.filter(|node| is_m(*node, "oMathPara")) {
+            render_bookmark_blocks(bookmarks.iter().map(String::as_str), writer);
+            self.render_equation(math_para, part, writer, location, true);
+            writer.text("\n\n");
             return Ok(());
         }
 
@@ -505,8 +653,7 @@ impl Converter<'_> {
             .find(|node| is_w(*node, "pPr"))
             .and_then(|properties| properties.children().find(|node| is_w(*node, "pStyle")))
             .and_then(|node| attr_local(node, "val"));
-        let (heading, style_num, style_level) =
-            self.resolve_style(style_id, part, location.clone())?;
+        let style = self.resolve_paragraph_style(style_id, part)?;
         let properties = paragraph.children().find(|node| is_w(*node, "pPr"));
         let direct_num = properties
             .and_then(|node| node.children().find(|child| is_w(*child, "numPr")))
@@ -526,21 +673,29 @@ impl Converter<'_> {
 
         let mut inline = ChunkWriter::default();
         self.render_inline_children(paragraph, part, &mut inline, location.clone())?;
-        if heading.is_some() {
+        if style.heading.is_some() {
             trim_leading_inline_whitespace(&mut inline.chunks);
         }
         if let Some(MarkdownChunk::Text(text)) = inline.chunks.first_mut() {
             *text = escape_ordered_prose_lines(text);
         }
         if !chunks_have_visible_content(&inline.chunks) {
+            render_bookmark_blocks(bookmarks.iter().map(String::as_str), writer);
             writer.text("\n\n");
             return Ok(());
         }
 
+        let mut bookmarks = bookmarks.iter().map(String::as_str);
+        let heading_id = if style.heading.is_some() && prefix_override.is_none() {
+            bookmarks.next()
+        } else {
+            None
+        };
+        render_bookmark_blocks(bookmarks, writer);
         if let Some(prefix) = prefix_override {
             self.last_ordered_list = None;
             writer.text(prefix);
-        } else if let Some(level) = heading {
+        } else if let Some(level) = style.heading {
             self.last_ordered_list = None;
             let emitted = level.min(6);
             if level > 6 {
@@ -554,9 +709,7 @@ impl Converter<'_> {
             }
             writer.text("#".repeat(emitted));
             writer.text(" ");
-        } else if let Some((num_id, level)) =
-            direct_num.or_else(|| style_num.map(|id| (id, style_level)))
-        {
+        } else if let Some((num_id, level)) = direct_num.or(style.numbering) {
             let parenthesized = self
                 .last_ordered_list
                 .as_ref()
@@ -591,48 +744,34 @@ impl Converter<'_> {
             }
         } else {
             self.last_ordered_list = None;
+            if style.quote {
+                writer.recovered_content |= inline.recovered_content;
+                append_quoted_chunks(writer, inline.chunks);
+                writer.text("\n\n");
+                return Ok(());
+            }
         }
 
         writer.recovered_content |= inline.recovered_content;
         append_chunks(writer, inline.chunks);
+        if let Some(id) = heading_id {
+            writer.text(format!(" {{#{id}}}"));
+        }
         writer.text("\n\n");
         Ok(())
     }
 
-    fn render_bookmark_blocks(&self, paragraph: Node<'_, '_>, writer: &mut ChunkWriter) {
-        let mut rendered = false;
-        for bookmark in paragraph
-            .descendants()
-            .filter(|node| is_w(*node, "bookmarkStart"))
-        {
-            let Some(name) = attr_local(bookmark, "name") else {
-                continue;
-            };
-            let Some(anchor) = self.bookmarks.get(name) else {
-                continue;
-            };
-            writer.text(format!("<div id=\"{}\"></div>\n", escape_html_attr(anchor)));
-            rendered = true;
-        }
-        if rendered {
-            writer.text("\n");
-        }
-    }
-
-    fn resolve_style(
+    fn resolve_paragraph_style(
         &mut self,
         style_id: Option<&str>,
         part: &str,
-        _location: Option<String>,
-    ) -> Result<(Option<usize>, Option<String>, usize), ImportError> {
+    ) -> Result<ParagraphFormatting, ImportError> {
         let mut current = style_id.map(ToOwned::to_owned);
-        let mut heading = None;
-        let mut num_id = None;
-        let mut level = 0;
+        let mut formatting = ParagraphFormatting::default();
         let mut seen = HashMap::<String, ()>::new();
         for _ in 0..=self.context.limits.max_style_depth {
             let Some(id) = current.take() else {
-                return Ok((heading, num_id, level));
+                return Ok(formatting);
             };
             if seen.insert(id.clone(), ()).is_some() {
                 return Err(ImportError::InvalidXml {
@@ -641,12 +780,12 @@ impl Converter<'_> {
                 });
             }
             let Some(style) = self.styles.get(&id) else {
-                return Ok((heading, num_id, level));
+                return Ok(formatting);
             };
-            heading = heading.or(style.heading);
-            if num_id.is_none() {
-                num_id = style.num_id.clone();
-                level = style.level;
+            formatting.heading = formatting.heading.or(style.heading);
+            formatting.quote |= style.quote;
+            if formatting.numbering.is_none() {
+                formatting.numbering = style.num_id.as_ref().map(|id| (id.clone(), style.level));
             }
             current = style.based_on.clone();
         }
@@ -661,7 +800,9 @@ impl Converter<'_> {
         location: Option<String>,
     ) -> Result<(), ImportError> {
         let mut boundary = InlineBoundaryState::default();
-        self.render_inline_children_with_boundary(parent, part, writer, location, &mut boundary)
+        self.render_inline_children_with_boundary(parent, part, writer, location, &mut boundary)?;
+        boundary.flush_text(writer, None);
+        Ok(())
     }
 
     fn render_inline_children_with_boundary(
@@ -684,28 +825,9 @@ impl Converter<'_> {
                 self.render_run(node, part, writer, location.clone(), boundary)?;
             } else if is_w(node, "hyperlink") {
                 self.render_hyperlink(node, part, writer, location.clone(), boundary)?;
-            } else if is_m(node, "oMath") {
-                boundary.separate();
-                let tex = omml_children(node);
-                if tex.is_empty() || !omml_supported(node) {
-                    let fallback = visible_text(node);
-                    self.diagnostic(
-                        DiagnosticCode::UnsupportedEquation,
-                        DiagnosticSeverity::ContentLoss,
-                        part,
-                        location.clone(),
-                        Some(fallback.clone()),
-                    );
-                    if fallback.trim().is_empty() {
-                        writer.text("[Unsupported equation]");
-                    } else {
-                        writer.recovered_text(escape_markdown_text(fallback.trim()));
-                    }
-                } else {
-                    writer.text("$");
-                    writer.recovered_text(tex);
-                    writer.text("$");
-                }
+            } else if is_m(node, "oMath") || is_m(node, "oMathPara") {
+                boundary.separate(writer);
+                self.render_equation(node, part, writer, location.clone(), false);
             } else if matches!(
                 node.tag_name().name(),
                 "ins" | "moveTo" | "smartTag" | "sdt" | "sdtContent" | "customXml"
@@ -728,12 +850,47 @@ impl Converter<'_> {
             } else {
                 let text = visible_text(node);
                 if !text.is_empty() {
-                    boundary.prepare_text(&text, false, writer);
-                    writer.recovered_text(escape_markdown_text(&text));
+                    boundary.push_text(text, &RunFormatting::default(), writer);
                 }
             }
         }
         Ok(())
+    }
+
+    fn render_equation(
+        &mut self,
+        node: Node<'_, '_>,
+        part: &str,
+        writer: &mut ChunkWriter,
+        location: Option<String>,
+        display: bool,
+    ) {
+        if let Some(tex) = omml_to_latex(node) {
+            // Adjacent single-dollar equations would form a double-dollar
+            // delimiter. Keep both ranges without adding a visible space.
+            if !display
+                && matches!(writer.chunks.last(), Some(MarkdownChunk::Text(text)) if text.ends_with('$') && !text.ends_with("\\$"))
+            {
+                writer.text("&#8203;");
+            }
+            writer.text(if display { "$$\n" } else { "$" });
+            writer.recovered_text(tex);
+            writer.text(if display { "\n$$" } else { "$" });
+        } else {
+            let fallback = visible_text(node);
+            self.diagnostic(
+                DiagnosticCode::UnsupportedEquation,
+                DiagnosticSeverity::ContentLoss,
+                part,
+                location,
+                Some(fallback.clone()),
+            );
+            if fallback.trim().is_empty() {
+                writer.text("[Unsupported equation]");
+            } else {
+                writer.recovered_text(escape_markdown_text(fallback.trim()));
+            }
+        }
     }
 
     fn render_run(
@@ -763,40 +920,12 @@ impl Converter<'_> {
             .and_then(|node| attr_local(node, "val"))
             .map(ToOwned::to_owned)
             .or(inherited.vertical);
-        let mut before = String::new();
-        let mut after = String::new();
-        for (active, open, close) in [
-            (bold, "**", "**"),
-            (italic, "*", "*"),
-            (strike, "~~", "~~"),
-            (underline, "<u>", "</u>"),
-            (vert.as_deref() == Some("superscript"), "<sup>", "</sup>"),
-            (vert.as_deref() == Some("subscript"), "<sub>", "</sub>"),
-        ] {
-            if active {
-                before.push_str(open);
-                after.insert_str(0, close);
-            }
-        }
-        let flush_text = |text: &mut String,
-                          writer: &mut ChunkWriter,
-                          boundary: &mut InlineBoundaryState| {
-            if !text.is_empty() {
-                boundary.prepare_text(text, bold, writer);
-                if text.trim_matches(char::is_whitespace).is_empty() {
-                    writer.recovered_text(escape_markdown_text(text));
-                } else {
-                    let leading_len =
-                        text.len() - text.trim_start_matches(char::is_whitespace).len();
-                    let trailing_start = text.trim_end_matches(char::is_whitespace).len();
-                    writer.recovered_text(escape_markdown_text(&text[..leading_len]));
-                    writer.text(&before);
-                    writer.recovered_text(escape_markdown_text(&text[leading_len..trailing_start]));
-                    writer.text(&after);
-                    writer.recovered_text(escape_markdown_text(&text[trailing_start..]));
-                }
-                text.clear();
-            }
+        let formatting = RunFormatting {
+            bold,
+            italic,
+            strike,
+            underline,
+            vertical: vert,
         };
         let mut text = String::new();
         for child in run.children().filter(Node::is_element) {
@@ -806,26 +935,26 @@ impl Converter<'_> {
             match child.tag_name().name() {
                 "t" => text.push_str(child.text().unwrap_or_default()),
                 "tab" => {
-                    flush_text(&mut text, writer, boundary);
+                    boundary.push_text(std::mem::take(&mut text), &formatting, writer);
+                    boundary.separate(writer);
                     writer.text("&#9;");
-                    boundary.separate();
                 }
                 "br" | "cr" => {
-                    flush_text(&mut text, writer, boundary);
+                    boundary.push_text(std::mem::take(&mut text), &formatting, writer);
+                    boundary.separate(writer);
                     writer.text("\\\n");
-                    boundary.separate();
                 }
                 "noBreakHyphen" => text.push('\u{2011}'),
                 "softHyphen" => text.push('\u{00ad}'),
                 "drawing" if drawing_has_image_reference(child) => {
-                    flush_text(&mut text, writer, boundary);
-                    boundary.separate();
+                    boundary.push_text(std::mem::take(&mut text), &formatting, writer);
+                    boundary.separate(writer);
                     self.render_image(child, part, writer, location.clone())?;
                 }
                 "footnoteReference" => {
                     if let Some(reference) = attr_local(child, "id") {
-                        flush_text(&mut text, writer, boundary);
-                        boundary.separate();
+                        boundary.push_text(std::mem::take(&mut text), &formatting, writer);
+                        boundary.separate(writer);
                         self.footnote_references.insert(reference.to_owned());
                         writer.text(format!("[^fn{reference}]"));
                     }
@@ -833,7 +962,7 @@ impl Converter<'_> {
                 _ => {}
             }
         }
-        flush_text(&mut text, writer, boundary);
+        boundary.push_text(text, &formatting, writer);
         Ok(())
     }
 
@@ -887,6 +1016,8 @@ impl Converter<'_> {
             location.clone(),
             &mut label_boundary,
         )?;
+        label_boundary.flush_text(&mut label_writer, None);
+        boundary.flush_text(writer, None);
         writer.recovered_content |= label_writer.recovered_content;
         let label = flatten_text(&label_writer.chunks);
         let anchor = attr_local(node, "anchor");
@@ -1202,9 +1333,32 @@ impl Converter<'_> {
         let header = rows
             .first()
             .is_some_and(|row| row.descendants().any(|node| is_w(node, "tblHeader")));
+        let mut column_markers = vec![None; width];
+        for (cell, column, _, _) in layouts.iter().flatten() {
+            for paragraph in cell
+                .descendants()
+                .filter(|node| is_w(*node, "p") && !excluded_revision(*node))
+            {
+                let alignment = paragraph
+                    .children()
+                    .find(|node| is_w(*node, "pPr"))
+                    .and_then(|properties| child_val(properties, "jc"));
+                let marker = match alignment {
+                    Some("center") => ":---:",
+                    Some("right" | "end") => "---:",
+                    _ => "---",
+                };
+                let previous = &mut column_markers[*column];
+                *previous = Some(if previous.is_none_or(|value| value == marker) {
+                    marker
+                } else {
+                    "---"
+                });
+            }
+        }
         if !header {
             write_gfm_row(writer, &[], width);
-            write_gfm_separator(writer, width);
+            write_gfm_separator(writer, &column_markers);
         }
         for (row_index, row) in layouts.iter().enumerate() {
             let mut cells = Vec::with_capacity(row.len());
@@ -1230,7 +1384,7 @@ impl Converter<'_> {
             }
             write_gfm_row(writer, &cells, width);
             if header && row_index == 0 {
-                write_gfm_separator(writer, width);
+                write_gfm_separator(writer, &column_markers);
             }
         }
         writer.text("\n");
@@ -1296,6 +1450,16 @@ impl Converter<'_> {
             self.summary.footnotes += 1;
         }
         Ok(())
+    }
+}
+
+fn render_bookmark_blocks<'a>(bookmarks: impl Iterator<Item = &'a str>, writer: &mut ChunkWriter) {
+    let mut bookmarks = bookmarks.peekable();
+    if bookmarks.peek().is_some() {
+        for anchor in bookmarks {
+            writer.text(format!("<div id=\"{}\"></div>\n", escape_html_attr(anchor)));
+        }
+        writer.text("\n");
     }
 }
 
@@ -1500,6 +1664,16 @@ fn parse_styles(
             .and_then(|node| attr_local(node, "val"))
             .map(ToOwned::to_owned);
         let ppr = node.children().find(|child| is_w(*child, "pPr"));
+        let name = child_val(node, "name").unwrap_or(id);
+        let quote = [
+            "Block Text",
+            "BlockText",
+            "Quote",
+            "Intense Quote",
+            "IntenseQuote",
+        ]
+        .iter()
+        .any(|style| name.eq_ignore_ascii_case(style));
         let heading = ppr
             .and_then(|node| node.children().find(|child| is_w(*child, "outlineLvl")))
             .and_then(|node| attr_local(node, "val"))
@@ -1537,6 +1711,7 @@ fn parse_styles(
                 heading,
                 num_id,
                 level,
+                quote,
                 run: RunFormatting {
                     bold: has_on(run_properties, "b"),
                     italic: has_on(run_properties, "i"),
@@ -1621,6 +1796,30 @@ fn append_chunks(writer: &mut ChunkWriter, chunks: Vec<MarkdownChunk>) {
     }
 }
 
+fn append_quoted_chunks(writer: &mut ChunkWriter, chunks: Vec<MarkdownChunk>) {
+    let mut at_line_start = true;
+    for chunk in chunks {
+        match chunk {
+            MarkdownChunk::Text(text) => {
+                for line in text.split_inclusive('\n') {
+                    if at_line_start {
+                        writer.text("> ");
+                    }
+                    writer.text(line);
+                    at_line_start = line.ends_with('\n');
+                }
+            }
+            MarkdownChunk::AssetUrl(id) => {
+                if at_line_start {
+                    writer.text("> ");
+                    at_line_start = false;
+                }
+                writer.asset(id);
+            }
+        }
+    }
+}
+
 fn flatten_text(chunks: &[MarkdownChunk]) -> String {
     chunks
         .iter()
@@ -1666,8 +1865,23 @@ fn is_w(node: Node<'_, '_>, name: &str) -> bool {
     node.is_element() && node.tag_name().namespace() == Some(W_NS) && node.tag_name().name() == name
 }
 
-fn is_m(node: Node<'_, '_>, name: &str) -> bool {
-    node.is_element() && node.tag_name().namespace() == Some(M_NS) && node.tag_name().name() == name
+fn is_horizontal_rule_run(run: Node<'_, '_>) -> bool {
+    const VML: &str = "urn:schemas-microsoft-com:vml";
+    const OFFICE: &str = "urn:schemas-microsoft-com:office:office";
+    if !is_w(run, "r") {
+        return false;
+    }
+    let mut content = run
+        .children()
+        .filter(|node| node.is_element() && !is_w(*node, "rPr"));
+    let Some(picture) = content.next().filter(|node| is_w(*node, "pict")) else {
+        return false;
+    };
+    content.next().is_none()
+        && picture.children().any(|shape| {
+            shape.has_tag_name((VML, "rect"))
+                && matches!(shape.attribute((OFFICE, "hr")), Some("t" | "true" | "1"))
+        })
 }
 
 fn drawing_has_image_reference(drawing: Node<'_, '_>) -> bool {
@@ -1721,44 +1935,6 @@ fn paragraph_mark_deleted(paragraph: Node<'_, '_>) -> bool {
         })
 }
 
-fn omml_supported(math: Node<'_, '_>) -> bool {
-    math.descendants()
-        .filter(|node| node.is_element() && node.tag_name().namespace() == Some(M_NS))
-        .all(|node| {
-            matches!(
-                node.tag_name().name(),
-                "oMathPara"
-                    | "oMath"
-                    | "r"
-                    | "rPr"
-                    | "t"
-                    | "f"
-                    | "fPr"
-                    | "num"
-                    | "den"
-                    | "rad"
-                    | "radPr"
-                    | "deg"
-                    | "degHide"
-                    | "e"
-                    | "sSup"
-                    | "sSub"
-                    | "sSubSup"
-                    | "sup"
-                    | "sub"
-                    | "d"
-                    | "dPr"
-                    | "begChr"
-                    | "endChr"
-                    | "nary"
-                    | "naryPr"
-                    | "chr"
-                    | "limLoc"
-                    | "ctrlPr"
-            )
-        })
-}
-
 fn visible_text(node: Node<'_, '_>) -> String {
     let mut output = String::new();
     collect_visible_text(node, &mut output);
@@ -1782,97 +1958,6 @@ fn collect_visible_text(node: Node<'_, '_>, output: &mut String) {
             collect_visible_text(child, output);
         }
     }
-}
-
-fn omml_children(node: Node<'_, '_>) -> String {
-    let mut output = String::new();
-    for child in node.children().filter(Node::is_element) {
-        let value = match child.tag_name().name() {
-            "r" => visible_text(child),
-            "f" => format!(
-                "\\frac{{{}}}{{{}}}",
-                child
-                    .children()
-                    .find(|node| is_m(*node, "num"))
-                    .map(omml_children)
-                    .unwrap_or_default(),
-                child
-                    .children()
-                    .find(|node| is_m(*node, "den"))
-                    .map(omml_children)
-                    .unwrap_or_default()
-            ),
-            "rad" => {
-                let degree = child
-                    .children()
-                    .find(|node| is_m(*node, "deg"))
-                    .map(omml_children)
-                    .unwrap_or_default();
-                let expression = child
-                    .children()
-                    .find(|node| is_m(*node, "e"))
-                    .map(omml_children)
-                    .unwrap_or_default();
-                if degree.trim().is_empty() {
-                    format!("\\sqrt{{{expression}}}")
-                } else {
-                    format!("\\sqrt[{degree}]{{{expression}}}")
-                }
-            }
-            "sSup" => script(child, "sup", true),
-            "sSub" => script(child, "sub", false),
-            "sSubSup" => format!(
-                "{}_{{{}}}^{{{}}}",
-                named_math_child(child, "e"),
-                named_math_child(child, "sub"),
-                named_math_child(child, "sup")
-            ),
-            "d" => format!("\\left({}\\right)", named_math_child(child, "e")),
-            "nary" => {
-                let symbol = child
-                    .descendants()
-                    .find(|node| is_m(*node, "chr"))
-                    .and_then(|node| attr_local(node, "val"))
-                    .unwrap_or("∫");
-                let command = match symbol {
-                    "∑" => "\\sum",
-                    "∏" => "\\prod",
-                    "∮" => "\\oint",
-                    _ => "\\int",
-                };
-                format!(
-                    "{command}_{{{}}}^{{{}}} {}",
-                    named_math_child(child, "sub"),
-                    named_math_child(child, "sup"),
-                    named_math_child(child, "e")
-                )
-            }
-            "oMath" | "oMathPara" | "num" | "den" | "e" | "deg" | "sub" | "sup" => {
-                omml_children(child)
-            }
-            _ if child.tag_name().namespace() == Some(M_NS) => omml_children(child),
-            _ => String::new(),
-        };
-        output.push_str(&value);
-    }
-    output
-}
-
-fn script(node: Node<'_, '_>, script_name: &str, superscript: bool) -> String {
-    let expression = named_math_child(node, "e");
-    let script = named_math_child(node, script_name);
-    if superscript {
-        format!("{expression}^{{{script}}}")
-    } else {
-        format!("{expression}_{{{script}}}")
-    }
-}
-
-fn named_math_child(node: Node<'_, '_>, name: &str) -> String {
-    node.children()
-        .find(|child| is_m(*child, name))
-        .map(omml_children)
-        .unwrap_or_default()
 }
 
 fn heading_from_style(id: &str) -> Option<usize> {
@@ -1917,27 +2002,32 @@ fn slug(value: &str) -> String {
 fn escape_markdown_text(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for character in value.chars() {
-        if matches!(
-            character,
-            '\\' | '\u{0060}'
-                | '*'
-                | '_'
-                | '{'
-                | '}'
-                | '['
-                | ']'
-                | '<'
-                | '>'
-                | '#'
-                | '&'
-                | '^'
-                | '~'
-        ) {
+        if needs_markdown_escape(character) {
             output.push('\\');
         }
         output.push(character);
     }
     output
+}
+
+fn needs_markdown_escape(character: char) -> bool {
+    matches!(
+        character,
+        '\\' | '\u{0060}'
+            | '*'
+            | '_'
+            | '{'
+            | '}'
+            | '['
+            | ']'
+            | '<'
+            | '>'
+            | '#'
+            | '&'
+            | '^'
+            | '~'
+            | '$'
+    )
 }
 
 fn escape_markdown_label(value: &str) -> String {
@@ -2005,10 +2095,12 @@ fn write_gfm_row(writer: &mut ChunkWriter, cells: &[ChunkWriter], width: usize) 
     writer.text("\n");
 }
 
-fn write_gfm_separator(writer: &mut ChunkWriter, width: usize) {
+fn write_gfm_separator(writer: &mut ChunkWriter, markers: &[Option<&str>]) {
     writer.text("|");
-    for _ in 0..width {
-        writer.text(" --- |");
+    for marker in markers {
+        writer.text(" ");
+        writer.text(marker.unwrap_or("---"));
+        writer.text(" |");
     }
     writer.text("\n");
 }

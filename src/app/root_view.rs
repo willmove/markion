@@ -154,14 +154,6 @@ impl Render for MarkionApp {
             // Diagram cache warming needs both the preview blocks (Split/Read)
             // and the visual blocks (Visual Edit).
             self.ensure_diagram_renders(&preview_blocks, &visual_blocks, cx);
-            self.ensure_math_renders(
-                &preview_blocks,
-                &visual_blocks,
-                1.0,
-                window.scale_factor(),
-                palette.text,
-                cx,
-            );
         }
         // Source-mapped Split Preview coupling runs after the list reflects the
         // current debounced blocks and before scrollbar thumbs read offsets.
@@ -175,6 +167,14 @@ impl Render for MarkionApp {
                     });
                 });
             self.reconcile_sync_scroll(cx);
+            self.ensure_math_renders(
+                &preview_blocks,
+                &visual_blocks,
+                1.0,
+                window.scale_factor(),
+                palette.text,
+                cx,
+            );
         }
         self.sync_window_title(window);
         // Client-side decorations (GNOME Wayland, as on Ubuntu 26.04): the

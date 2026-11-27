@@ -11,6 +11,7 @@ quick-xml.workspace = true
 roxmltree.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 zip.workspace = true
 
 [dev-dependencies]

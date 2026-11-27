@@ -2853,6 +2853,54 @@ fn table_cell_math_is_requested_and_shares_the_prose_cache_entry(cx: &mut TestAp
     });
 }
 
+#[gpui::test]
+fn formula_heavy_document_requests_viewport_math_and_follows_scroll(cx: &mut TestAppContext) {
+    let last = MATH_CACHE_CAPACITY + 30;
+    let source: String = (0..=last)
+        .map(|index| format!("Equation {index}: $x_{{{index}}}$.\n\n"))
+        .collect();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let cache_has_formula = |app: &MarkionApp, index| {
+        let latex = format!("x_{{{index}}}");
+        app.math_cache
+            .entries
+            .iter()
+            .any(|(key, entry)| key.latex == latex && matches!(entry, MathCacheEntry::Ready(_)))
+    };
+    app.update(cx, |app, cx| {
+        assert!(cache_has_formula(app, 0));
+        assert!(!cache_has_formula(app, last));
+        assert!(app.math_cache.entries.len() < MATH_CACHE_CAPACITY);
+        let jump = last - 5;
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let offset = source.find(&format!("Equation {jump}:")).unwrap();
+        let index = blocks
+            .iter()
+            .position(|block| block.source_range.contains(&offset))
+            .unwrap();
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: index,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(cache_has_formula(app, last - 5));
+        assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
 #[test]
 fn table_cell_math_copy_keeps_authored_syntax() {
     let document =
@@ -8220,6 +8268,28 @@ fn table_cell_math_renders_in_read_and_split_preview(cx: &mut TestAppContext) {
         assert!(
             cx.debug_bounds("preview-math-0-6").is_some(),
             "{mode:?} renders the Jumps formula"
+        );
+    }
+}
+
+#[gpui::test]
+fn table_header_formula_honors_center_alignment_in_read_and_split(cx: &mut TestAppContext) {
+    let source = "| $x$ | Caption |\n| :---: | --- |\n| Value | Description |\n";
+    for mode in [ViewMode::Read, ViewMode::Split] {
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.view_mode = mode;
+            app
+        });
+        cx.run_until_parked();
+        let cell = cx.debug_bounds("preview-table-cell-bounds-0-0-0").unwrap();
+        let formula = cx.debug_bounds("preview-math-0-0").unwrap();
+        let cell_center = cell.left() + cell.size.width / 2.0;
+        let formula_center = formula.left() + formula.size.width / 2.0;
+        assert!(
+            (cell_center - formula_center).abs() <= px(2.0),
+            "{mode:?} formula {formula:?} should be centered in {cell:?}"
         );
     }
 }
