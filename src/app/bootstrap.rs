@@ -529,6 +529,8 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
     // Failures before the main window is up become an actionable report or a
     // software-Vulkan restart; later panics propagate unchanged.
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(target_os = "linux")]
+        renderer_fallback::record_pacman_renderer_phase("initializing");
         if std::env::var_os(startup_alert::SIMULATE_RENDERER_FAILURE_ENV).is_some() {
             panic!("{}", startup_alert::SIMULATED_RENDERER_FAILURE);
         }
@@ -551,6 +553,10 @@ fn report_startup_failure(payload: &(dyn Any + Send), log_dir: Option<&std::path
 
     let mut software_fallback_failed = false;
     if kind == StartupFailureKind::Renderer {
+        #[cfg(target_os = "linux")]
+        if renderer_fallback::request_pacman_renderer_retry() {
+            std::process::exit(1);
+        }
         match renderer_fallback::restart_on_software_stack() {
             FallbackUnavailable::AlreadyActive => software_fallback_failed = true,
             FallbackUnavailable::ExecFailed(error) => {
@@ -603,6 +609,8 @@ fn run_application(startup_intent: StartupOpenIntent) {
                 |_, cx| cx.new(MarkionApp::new),
             )
             .expect("failed to open the Markion main window");
+        #[cfg(target_os = "linux")]
+        renderer_fallback::record_pacman_renderer_phase("ready");
 
         let startup_intent = startup_intent.clone();
         window

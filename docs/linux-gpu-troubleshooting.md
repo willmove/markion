@@ -8,6 +8,28 @@ If no usable driver is found, Markion prints a message on stderr, shows a
 native dialog when `zenity`, `kdialog` or `xmessage` is available, and exits
 with status 1. This guide explains what the message means and how to fix it.
 
+## Arch and Omarchy pacman packages
+
+The pacman package installs `vulkan-swrast` as a dependency. Its desktop
+entry and terminal command both try the normal Vulkan configuration first.
+If Vulkan fails to initialize or the process segfaults during renderer
+startup, the launcher retries once using the installed Lavapipe driver with
+implicit Vulkan layers disabled for Markion.
+
+Use `env MARKION_SOFTWARE_VULKAN=1 markion` to start directly on software
+Vulkan, or `env MARKION_SOFTWARE_VULKAN=0 markion` to use the system
+configuration for the whole launch.
+
+For an older pacman installation that crashes during startup, run the
+following from your desktop session after installing `vulkan-swrast`.
+If the manifest has a different name, use the path printed by
+`pacman -Ql vulkan-swrast | grep '/icd.d/'`.
+
+```sh
+env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
+    VK_LOADER_LAYERS_DISABLE='~implicit~' NODEVICE_SELECT=1 markion
+```
+
 ## The AppImage includes a software Vulkan driver
 
 The Linux AppImage ships Mesa's lavapipe driver, a Vulkan loader and the few
@@ -24,6 +46,9 @@ libraries they need in `usr/lib/markion-vulkan/` inside the image (about
 
 The `.deb`, `.rpm` and source builds do not bundle a driver; install one from
 your distribution as described below.
+
+If the system driver causes a segmentation fault during AppImage startup,
+force software Vulkan before startup to bypass the system driver.
 
 Two environment variables control the fallback:
 
@@ -68,9 +93,9 @@ To use one specific driver regardless of what else is installed, point the
 Vulkan loader at its manifest:
 
 ```sh
-VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json markion
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json markion
 # Older Vulkan loaders only understand the previous name:
-VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json markion
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json markion
 ```
 
 `VK_LOADER_DRIVERS_DISABLE` and `VK_LOADER_LAYERS_DISABLE`, used below, need

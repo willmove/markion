@@ -32,7 +32,7 @@ if [[ ! -f "${deb}" ]]; then
   exit 1
 fi
 
-pacman -Syu --noconfirm --needed dpkg
+pacman -Syu --noconfirm --needed dpkg xorg-server-xvfb xdotool ttf-dejavu
 for tool in dpkg-deb makepkg pacman bsdtar runuser; do
   command -v "${tool}" >/dev/null || {
     echo "Required Arch packaging tool is unavailable: ${tool}" >&2
@@ -46,6 +46,9 @@ trap cleanup EXIT
 mkdir -p "${workdir}/payload" "${workdir}/out"
 dpkg-deb -x "${deb}" "${workdir}/payload"
 test -x "${workdir}/payload/usr/bin/markion"
+install -d "${workdir}/payload/usr/lib/markion"
+mv "${workdir}/payload/usr/bin/markion" "${workdir}/payload/usr/lib/markion/markion"
+install -m 0755 scripts/markion-pacman-launcher.sh "${workdir}/payload/usr/bin/markion"
 
 cat >"${workdir}/PKGBUILD" <<EOF
 pkgname=markion
@@ -56,16 +59,18 @@ arch=('x86_64')
 url='https://github.com/willmove/markion'
 license=('MIT')
 depends=(
+  'bash'
+  'coreutils'
   'wayland'
   'libxkbcommon'
   'libxkbcommon-x11'
   'libxcb'
   'vulkan-icd-loader'
+  'vulkan-swrast'
   'fontconfig'
   'alsa-lib'
   'glib2'
 )
-optdepends=('vulkan-swrast: software Vulkan rendering when no hardware driver is available')
 options=('!strip' '!debug')
 
 package() {
@@ -104,11 +109,14 @@ do
   }
 done
 for dependency in \
+  bash \
+  coreutils \
   wayland \
   libxkbcommon \
   libxkbcommon-x11 \
   libxcb \
   vulkan-icd-loader \
+  vulkan-swrast \
   fontconfig \
   alsa-lib \
   glib2
@@ -121,6 +129,7 @@ done
 
 pacman -U --noconfirm "${package}"
 pacman -Q markion
+pacman -Q vulkan-swrast
 pacman -Qk markion
 installed_paths="$(pacman -Ql markion | awk '{print $2}')"
 grep -Fqx /usr/bin/markion <<<"${installed_paths}" || {
@@ -139,6 +148,7 @@ grep -Eq '^Exec=.*markion([[:space:]]|$)' "${desktop_file}" || {
 }
 echo "Verified installed desktop launcher: ${desktop_file}"
 for pattern in \
+  '^/usr/lib/markion/markion$' \
   '/usr/share/icons/.*\.png$' \
   '/assets/examples/README\.md$' \
   '/assets/marknice-workspace/bundle-manifest\.json$'
@@ -151,8 +161,12 @@ done
 
 manifest="/$(pacman -Ql markion | awk '{print $2}' | sed -n 's#^/\(.*assets/marknice-workspace/bundle-manifest\.json\)$#\1#p' | head -n 1)"
 test -f "${manifest}"
-cmp "${workdir}/payload/usr/bin/markion" /usr/bin/markion
+cmp scripts/markion-pacman-launcher.sh /usr/bin/markion
+cmp "${workdir}/payload/usr/lib/markion/markion" /usr/lib/markion/markion
 cmp "${workdir}/payload${manifest}" "${manifest}"
+
+bash scripts/test-pacman-launcher.sh /usr/bin/markion
+runuser -u "${builder}" -- xvfb-run -a -s '-screen 0 1024x768x24' bash scripts/smoke-test-pacman.sh
 
 mkdir -p dist
 cp -f "${package}" "dist/$(basename "${package}")"

@@ -24,6 +24,34 @@ const ACTIVE_ENV: &str = "MARKION_SOFTWARE_VULKAN_ACTIVE";
 const STACK_DIR: &str = "markion-vulkan";
 const ICD_MANIFEST: &str = "lvp_icd.x86_64.json";
 
+#[cfg(target_os = "linux")]
+const PACMAN_RENDERER_STATE_ENV: &str = "MARKION_PACMAN_RENDERER_STATE";
+
+#[cfg(target_os = "linux")]
+pub(super) fn record_pacman_renderer_phase(phase: &str) {
+    if let Some(path) = env::var_os(PACMAN_RENDERER_STATE_ENV)
+        && let Err(error) = std::fs::write(path, phase)
+    {
+        tracing::warn!(%error, "could not report renderer progress to the pacman launcher");
+    }
+}
+
+/// Return the initial renderer failure to the launcher before showing an alert.
+/// A process that already opened its window keeps the normal error handling.
+#[cfg(target_os = "linux")]
+pub(super) fn request_pacman_renderer_retry() -> bool {
+    let Some(path) = env::var_os(PACMAN_RENDERER_STATE_ENV) else {
+        return false;
+    };
+    mark_pacman_renderer_failed(Path::new(&path))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn mark_pacman_renderer_failed(path: &Path) -> bool {
+    matches!(std::fs::read_to_string(path).as_deref(), Ok("initializing"))
+        && std::fs::write(path, "failed").is_ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FallbackMode {
     Auto,
@@ -157,6 +185,22 @@ pub(super) fn prepare_startup() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pacman_renderer_failure_requests_retry_only_during_initialization() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("renderer-state");
+        assert!(!mark_pacman_renderer_failed(&state));
+
+        std::fs::write(&state, "initializing").unwrap();
+        assert!(mark_pacman_renderer_failed(&state));
+        assert_eq!(std::fs::read_to_string(&state).unwrap(), "failed");
+        assert!(!mark_pacman_renderer_failed(&state));
+
+        std::fs::write(&state, "ready").unwrap();
+        assert!(!mark_pacman_renderer_failed(&state));
+        assert_eq!(std::fs::read_to_string(&state).unwrap(), "ready");
+    }
 
     #[test]
     fn mode_parsing_accepts_documented_values_and_defaults_to_auto() {
