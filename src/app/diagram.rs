@@ -84,6 +84,16 @@ pub(super) struct DiagramCacheKey {
     pub(super) theme: DiagramTheme,
 }
 
+impl DiagramCacheKey {
+    fn new(language: Option<&str>, source: &str, theme: DiagramTheme) -> Option<Self> {
+        Some(Self {
+            backend_id: diagram_backend_id(language)?,
+            source: source.to_owned(),
+            theme,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum DiagramCacheEntry {
     Pending,
@@ -254,20 +264,12 @@ impl MarkionApp {
         }
     }
 
-    fn diagram_key(&self, language: Option<&str>, source: &str) -> Option<DiagramCacheKey> {
-        Some(DiagramCacheKey {
-            backend_id: diagram_backend_id(language)?,
-            source: source.to_string(),
-            theme: self.diagram_theme(),
-        })
-    }
-
     pub(super) fn diagram_entry(
         &self,
         language: Option<&str>,
         source: &str,
     ) -> Option<DiagramCacheEntry> {
-        let key = self.diagram_key(language, source)?;
+        let key = DiagramCacheKey::new(language, source, self.diagram_theme())?;
         Some(
             self.diagram_cache
                 .get(&key)
@@ -287,60 +289,28 @@ impl MarkionApp {
         // Theme is folded into every key, so resolve it once up front to
         // avoid re-borrowing `self` while we also borrow `self.diagram_cache`.
         let theme = self.diagram_theme();
-        let mut requested: Vec<DiagramCacheKey> = Vec::new();
+        let mut missing = Vec::new();
         for block in blocks {
             let PreviewBlock::CodeBlock { language, code, .. } = block else {
                 continue;
             };
-            let Some(backend_id) = diagram_backend_id(language.as_deref()) else {
-                continue;
-            };
-            requested.push(DiagramCacheKey {
-                backend_id: backend_id.to_string(),
-                source: code.to_string(),
-                theme,
-            });
-        }
-        // Visual Edit's CodeBlock kind carries only the language; the authored
-        // source is the document slice over the payload editor's source range.
-        // Reading the slice here (once per render pass, not per frame-paint)
-        // keeps the key identical to Split Preview / Read mode so the cache is
-        // shared across modes — matching `ensure_math_renders` for math blocks.
-        if !visual.is_empty() {
-            let text = self.active_tab().document.text();
-            for block in visual {
-                let VisualBlockKind::CodeBlock { language, .. } = &block.kind else {
-                    continue;
-                };
-                let Some(VisualBlockEditor::Code {
-                    payload,
-                    closing_fence,
-                    ..
-                }) = &block.editor
-                else {
-                    continue;
-                };
-                let Some(source) = text.get(payload.source_range.clone()) else {
-                    continue;
-                };
-                let Some(backend_id) = diagram_backend_id(language.as_deref()) else {
-                    continue;
-                };
-                let mut source = source.to_string();
-                if !closing_fence.is_empty() && !source.ends_with(['\r', '\n']) {
-                    source.push('\n');
-                }
-                requested.push(DiagramCacheKey {
-                    backend_id: backend_id.to_string(),
-                    source,
-                    theme,
-                });
+            if let Some(key) = DiagramCacheKey::new(language.as_deref(), code, theme)
+                && self.diagram_cache.reserve_pending(key.clone())
+            {
+                missing.push(key);
             }
         }
-        // Reserve now that the immutable document borrow has ended.
-        let mut missing = Vec::new();
-        for key in requested {
-            if self.diagram_cache.reserve_pending(key.clone()) {
+        for block in visual {
+            let VisualBlockKind::CodeBlock {
+                language,
+                diagram_source: Some(source),
+            } = &block.kind
+            else {
+                continue;
+            };
+            if let Some(key) = DiagramCacheKey::new(language.as_deref(), source, theme)
+                && self.diagram_cache.reserve_pending(key.clone())
+            {
                 missing.push(key);
             }
         }

@@ -170,8 +170,12 @@ pub(crate) fn visual_block_bytes(block: &VisualBlock) -> usize {
             .saturating_mul(std::mem::size_of::<std::ops::Range<usize>>());
     }
     match &block.kind {
-        VisualBlockKind::CodeBlock { language } => {
-            total += option_string_bytes(language.as_deref());
+        VisualBlockKind::CodeBlock {
+            language,
+            diagram_source,
+        } => {
+            total += option_string_bytes(language.as_deref())
+                + option_string_bytes(diagram_source.as_deref());
         }
         VisualBlockKind::MathBlock {
             latex, authored, ..

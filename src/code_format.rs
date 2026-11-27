@@ -885,6 +885,7 @@ pub fn fenced_code_block_for_range(
         }
         let VisualBlockKind::CodeBlock {
             language: parsed_lang,
+            ..
         } = &block.kind
         else {
             continue;

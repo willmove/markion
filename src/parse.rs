@@ -51,6 +51,8 @@ pub enum HtmlPreviewPart {
         width: Option<HtmlImgLength>,
         height: Option<HtmlImgLength>,
         align: HtmlAlign,
+        /// The preceding image shares this image's HTML line and alignment.
+        continues_image_line: bool,
     },
     /// A raw HTML `<table>` block resolved into a row/column grid, honoring
     /// `rowspan`/`colspan`. Produced instead of flattening the table to text.
@@ -2281,6 +2283,7 @@ struct HtmlPreviewBuilder<'a> {
     text_list_marker: Option<HtmlListMarker>,
     text_pre: bool,
     text_align: HtmlAlign,
+    image_line_open: bool,
     inline: HtmlInlineState,
 }
 
@@ -2319,6 +2322,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
             text_list_marker: None,
             text_pre: false,
             text_align: HtmlAlign::Start,
+            image_line_open: false,
         }
     }
 
@@ -2363,11 +2367,14 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
         match parsed.name.as_str() {
             "br" if !parsed.closing => {
+                self.image_line_open = false;
                 self.pending_space = None;
                 self.capture_text_meta();
                 append_leaf_span(&mut self.spans, "\n", self.style, self.inline.link());
             }
+            "hr" => self.image_line_open = false,
             "pre" => {
+                self.image_line_open = false;
                 self.pending_space = None;
                 if parsed.closing {
                     self.flush_text();
@@ -2514,6 +2521,8 @@ impl<'a> HtmlPreviewBuilder<'a> {
                     self.pending_space = None;
                     self.flush_text();
                     let align = self.current_align().combine(parsed.html_align());
+                    let continues_image_line = self.image_line_open
+                        && matches!(self.parts.last(), Some(HtmlPreviewPart::Image { align: previous, .. }) if *previous == align);
                     self.parts.push(HtmlPreviewPart::Image {
                         link: self
                             .inline
@@ -2533,7 +2542,9 @@ impl<'a> HtmlPreviewBuilder<'a> {
                             .as_deref()
                             .and_then(parse_html_img_length),
                         align,
+                        continues_image_line,
                     });
+                    self.image_line_open = true;
                 }
             }
             _ => {}
@@ -2552,12 +2563,14 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn apply_open_align(&mut self, parsed: &ParsedHtmlTag) {
+        self.image_line_open = false;
         self.align_stack.push(self.align);
         self.align = self.align.combine(parsed.html_align());
         self.centered_depth = usize::from(self.align == HtmlAlign::Center);
     }
 
     fn pop_align(&mut self) {
+        self.image_line_open = false;
         self.align = self.align_stack.pop().unwrap_or(HtmlAlign::Start);
         self.centered_depth = usize::from(self.align == HtmlAlign::Center);
     }
@@ -2619,6 +2632,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn push_line_break(&mut self) {
+        self.image_line_open = false;
         self.pending_space = None;
         if self.has_text() && !self.ends_with_line_break() {
             self.text_centered |= self.centered_depth > 0;
@@ -4291,6 +4305,45 @@ mod html_table_tests {
             }
             other => panic!("expected sized image, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn html_badge_image_lines_respect_links_and_authored_boundaries() {
+        let parts = html_preview_parts(concat!(
+            "<p align=\"center\"><a href=\"release\"><img src=\"a\"></a>\r\n",
+            "  <img src=\"b\">\r\n  <a href=\"license\"><img src=\"c\"></a>",
+            "<br><img src=\"d\"> label <img src=\"e\"></p>\r\n",
+            "<p align=\"center\"><img src=\"f\"><img src=\"g\" align=\"right\">",
+            "<img src=\"h\" align=\"right\"></p>",
+            "<pre><img src=\"i\">\n<img src=\"j\"></pre>",
+        ));
+        let images: Vec<_> = parts
+            .iter()
+            .filter_map(|part| match part {
+                HtmlPreviewPart::Image {
+                    url,
+                    link,
+                    continues_image_line,
+                    ..
+                } => Some((url.as_str(), link.as_deref(), *continues_image_line)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            images,
+            [
+                ("a", Some("release"), false),
+                ("b", None, true),
+                ("c", Some("license"), true),
+                ("d", None, false),
+                ("e", None, false),
+                ("f", None, false),
+                ("g", None, false),
+                ("h", None, true),
+                ("i", None, false),
+                ("j", None, false),
+            ]
+        );
     }
 
     #[test]

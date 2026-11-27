@@ -9892,62 +9892,81 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
 }
 
 #[gpui::test]
-fn visual_edit_warms_diagram_cache_for_mermaid_fence(cx: &mut TestAppContext) {
-    // Visual Edit no longer parses preview blocks, so diagram cache warming
-    // must walk the visual blocks. A `mermaid` fence should produce one
-    // pending cache entry keyed identically to Split Preview's entry, and
-    // re-rendering the same document must not spawn a second render (dedupe
-    // via `reserve_pending`).
-    let source = "```mermaid\nflowchart LR\nA --> B\n```";
-    let document = MarkdownDocument::from_text(source);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
+fn visual_edit_displays_mermaid_and_shares_the_raster_across_modes(cx: &mut TestAppContext) {
+    let example =
+        include_str!("../../assets/examples/04-code-math-diagrams.md").replace("\r\n", "\n");
+    let (_, body) = example.split_once("```mermaid\n").unwrap();
+    let (body, _) = body.split_once("```").unwrap();
+    let indented_body = body
+        .lines()
+        .map(|line| format!("  {line}\n"))
+        .collect::<String>();
+    for source in [
+        format!("```mermaid\n{body}```"),
+        format!("  ```Mermaid\n{indented_body}\n  ```").replace('\n', "\r\n"),
+    ] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+            app.view_mode = ViewMode::VisualEdit;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
 
-    // The render thread is detached; park until it lands in the cache.
-    app.update(cx, |app, _| {
-        let theme = app.diagram_theme();
-        let expected_key = DiagramCacheKey {
-            backend_id: "mermaid".into(),
-            source: "flowchart LR\nA --> B\n".into(),
-            theme,
-        };
-        // Visual Edit warms via the visual blocks path on the first render.
-        let entry = app
-            .diagram_cache
-            .get(&expected_key)
-            .expect("visual edit should have warmed the mermaid cache entry");
+        let (version, raster, block_index) = app.update(cx, |app, _| {
+            let document = &app.active_tab().document;
+            let blocks = document.visual_blocks_shared();
+            let block_index = blocks
+                .iter()
+                .position(|block| {
+                    matches!(
+                        block.kind,
+                        VisualBlockKind::CodeBlock {
+                            diagram_source: Some(_),
+                            ..
+                        }
+                    )
+                })
+                .expect("the parsed Mermaid fence should be a visual diagram block");
+            assert_eq!(app.diagram_cache.len(), 1);
+            let raster = match app.diagram_entry(Some("mermaid"), body.trim_end_matches('\n')) {
+                Some(DiagramCacheEntry::Ready(raster, _)) => raster,
+                entry => panic!("the parsed preview body should have a ready result: {entry:?}"),
+            };
+            (document.version(), raster, block_index)
+        });
+        cx.update(|window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        });
         assert!(
-            matches!(
-                entry,
-                DiagramCacheEntry::Pending
-                    | DiagramCacheEntry::Ready(_, _)
-                    | DiagramCacheEntry::Error(_)
-            ),
-            "cache entry should exist after Visual Edit render"
+            cx.debug_bounds(test_debug_selector(format!(
+                "visual-diagram-ready-{block_index}"
+            )))
+            .is_some(),
+            "Visual Edit should display the Mermaid raster"
         );
-    });
 
-    // A second render pass must not re-reserve the same key.
-    app.update(cx, |app, cx| {
-        let visual = app.active_tab().document.visual_blocks_shared();
-        let preview: Vec<PreviewBlock> = Vec::new();
-        let before = app.diagram_cache.len();
-        app.ensure_diagram_renders(&preview, &visual, cx);
-        let after = app.diagram_cache.len();
-        assert_eq!(
-            before, after,
-            "re-rendering the same Visual Edit diagram must not spawn a second render"
-        );
-    });
+        for mode in [ViewMode::Split, ViewMode::Read, ViewMode::VisualEdit] {
+            app.update(cx, |app, cx| app.set_view_mode(mode, cx));
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(app.diagram_cache.len(), 1);
+                let Some(DiagramCacheEntry::Ready(image, _)) =
+                    app.diagram_entry(Some("mermaid"), body.trim_end_matches('\n'))
+                else {
+                    panic!("the diagram should stay ready after switching modes");
+                };
+                assert!(Arc::ptr_eq(&raster, &image));
+                assert_eq!(app.active_tab().document.text(), source);
+                assert_eq!(app.active_tab().document.version(), version);
+            });
+        }
+    }
 }
 
 #[gpui::test]
@@ -10327,7 +10346,7 @@ fn visual_diagram_source_expands_and_collapses_without_editing(cx: &mut TestAppC
         .visual_blocks()
         .into_iter()
         .find_map(|block| match (&block.kind, block.editor.as_ref()) {
-            (VisualBlockKind::CodeBlock { language }, Some(VisualBlockEditor::Code { .. }))
+            (VisualBlockKind::CodeBlock { language, .. }, Some(VisualBlockEditor::Code { .. }))
                 if language.as_deref() == Some("mermaid") =>
             {
                 Some(block.id)
@@ -12275,7 +12294,7 @@ fn visual_edit_click_away_hides_heading_prefix_without_version_bump(cx: &mut Tes
 
 #[gpui::test]
 fn visual_edit_task_checkbox_click_toggles_and_undoes(cx: &mut TestAppContext) {
-    let source = "- [ ] task\n\nnext";
+    let source = "- [ ] task\n- [x] done\n\nnext";
     let away = source.find("next").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -12289,16 +12308,36 @@ fn visual_edit_task_checkbox_click_toggles_and_undoes(cx: &mut TestAppContext) {
         window.activate_window();
     });
     cx.run_until_parked();
-    app.update(cx, |app, cx| {
-        app.toggle_visual_task_checkbox(0, cx);
-        assert_eq!(app.active_tab().document.text(), "- [x] task\n\nnext");
+    let unchecked = cx.debug_bounds("visual-task-checkbox-0").unwrap();
+    let checked = cx.debug_bounds("visual-task-checkbox-1").unwrap();
+    let side = app.update(cx, |app, _| px(app.typography_metrics().rendered_font_size));
+    assert_eq!(unchecked.size, size(side, side));
+    assert_eq!(checked.size, unchecked.size);
+    assert_eq!(checked.left(), unchecked.left());
+
+    cx.simulate_click(unchecked.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "- [x] task\n- [x] done\n\nnext"
+        );
         assert_eq!(app.active_tab().undo_stack.len(), 1);
-        app.toggle_visual_task_checkbox(0, cx);
-        assert_eq!(app.active_tab().document.text(), "- [ ] task\n\nnext");
+    });
+    assert_eq!(
+        cx.debug_bounds("visual-task-checkbox-0").unwrap(),
+        unchecked
+    );
+    cx.simulate_click(unchecked.center(), Modifiers::none());
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
     });
     cx.dispatch_action(Undo);
     app.update(cx, |app, _| {
-        assert_eq!(app.active_tab().document.text(), "- [x] task\n\nnext");
+        assert_eq!(
+            app.active_tab().document.text(),
+            "- [x] task\n- [x] done\n\nnext"
+        );
     });
 
     app.update(cx, |app, cx| {
@@ -22790,7 +22829,7 @@ fn visual_fence_language_retyped_token_redispatches(cx: &mut TestAppContext) {
             .into_iter()
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("re-parsed code block");
-        let VisualBlockKind::CodeBlock { language } = &block.kind else {
+        let VisualBlockKind::CodeBlock { language, .. } = &block.kind else {
             unreachable!()
         };
         assert_eq!(language.as_deref(), Some("rust"));
@@ -28715,6 +28754,196 @@ fn centered_html_image_uses_the_full_preview_row_in_all_rendered_modes(cx: &mut 
             "centered HTML image row must expose free horizontal space in {mode:?}: {row:?}"
         );
     }
+}
+
+#[gpui::test]
+fn centered_html_badges_share_a_line_and_wrap_in_all_rendered_modes(cx: &mut TestAppContext) {
+    let fixture = tempfile::tempdir().unwrap();
+    let [release, platform, license] = [("release", 80, 20), ("platform", 245, 28), ("license", 195, 28)]
+        .map(|(name, width, height)| {
+            let path = fixture.path().join(format!("{name}.svg"));
+            fs::write(&path, format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><rect width="100%" height="100%" fill="teal"/></svg>"#)).unwrap();
+            path.to_string_lossy().replace('\\', "/")
+        });
+    let source = format!(
+        "<p align=\"center\">\n\
+         <a href=\"#release\"><img src=\"{release}\" width=\"190\" height=\"28\" alt=\"Release\"></a>\n\
+         <img src=\"{platform}\" alt=\"Platform\">\n\
+         <a href=\"#license\"><img src=\"{license}\" alt=\"MIT\"></a>\n\
+         </p>\n\n## Release\n\n## License"
+    );
+    for mode in [ViewMode::Read, ViewMode::Split, ViewMode::VisualEdit] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+            app.active_tab_mut().selected_range = source.len()..source.len();
+            app.view_mode = mode;
+            app.preview_adaptive_width = true;
+            app.editor_split_ratio = DEFAULT_EDITOR_SPLIT_RATIO;
+            app.sidebar_visible = false;
+            app
+        });
+        for (viewport_width, should_wrap) in [(1760., false), (610., true), (1760., false)] {
+            cx.simulate_resize(size(px(viewport_width), px(800.)));
+            cx.run_until_parked();
+            wait_for_image_operations(&app, cx);
+            cx.run_until_parked();
+            let row = cx
+                .debug_bounds("preview-html-image-line-0-0")
+                .expect("badge group");
+            let badges = [0, 1, 2].map(|index| {
+                cx.debug_bounds(test_debug_selector(format!("preview-html-image-0-{index}")))
+                    .unwrap_or_else(|| panic!("badge {index} is missing in {mode:?}"))
+            });
+            for (badge, width) in badges.iter().zip([190., 245., 195.]) {
+                assert_eq!(badge.size, size(px(width), px(28.)), "{mode:?}: {badge:?}");
+                assert!(
+                    badge.left() >= row.left() && badge.right() <= row.right(),
+                    "{mode:?}: {badge:?} overflows {row:?}"
+                );
+            }
+            assert_eq!(
+                badges[0].top() != badges[2].top(),
+                should_wrap,
+                "{mode:?} at {viewport_width}px: {badges:?}"
+            );
+            let mut line = badges[0];
+            for pair in badges.windows(2) {
+                let [previous, next] = [pair[0], pair[1]];
+                if previous.top() == next.top() {
+                    assert!(
+                        previous.right() < next.left(),
+                        "badge source order in {mode:?}"
+                    );
+                    line = line.union(&next);
+                } else {
+                    assert!(
+                        previous.bottom() < next.top(),
+                        "badge wrap order in {mode:?}"
+                    );
+                    assert!(
+                        (line.center().x - row.center().x).abs() <= px(1.),
+                        "wrapped line in {mode:?}: {line:?} vs. {row:?}"
+                    );
+                    line = next;
+                }
+            }
+            assert!(
+                (line.center().x - row.center().x).abs() <= px(1.),
+                "last line in {mode:?}: {line:?} vs. {row:?}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn aligned_html_text_positions_each_rendered_line_in_all_modes(cx: &mut TestAppContext) {
+    let description = "A native editor for notes, technical docs and your next published piece. Built with Rust + GPUI. ".repeat(3);
+    let source = format!(
+        "<h1 align=\"center\">Markion</h1>\n\
+         <p align=\"center\"><strong>Write naturally.</strong><br>{description}</p>\n\
+         <p align=\"center\"><sub>Actual Windows capture · <a href=\"#after\">Screenshots</a></sub></p>\n\
+         <p style=\"text-align:right\"><u>Note</u><br>Details</p>\n\n## After"
+    );
+    for mode in [ViewMode::Read, ViewMode::Split, ViewMode::VisualEdit] {
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+            app.active_tab_mut().selected_range = source.len()..source.len();
+            app.view_mode = mode;
+            app.sidebar_visible = false;
+            app
+        });
+        preview::PREVIEW_TEXT_LAYOUTS.with_borrow_mut(|layouts| *layouts = Some(Vec::new()));
+        cx.simulate_resize(size(px(1100.), px(900.)));
+        cx.run_until_parked();
+        let layouts = preview::PREVIEW_TEXT_LAYOUTS
+            .with_borrow_mut(Option::take)
+            .unwrap();
+        for (part, min_lines, right_aligned) in
+            [(0, 1, false), (1, 3, false), (2, 1, false), (3, 2, true)]
+        {
+            let row = cx
+                .debug_bounds(test_debug_selector(format!("preview-html-text-0-{part}")))
+                .unwrap_or_else(|| panic!("missing HTML text part {part} in {mode:?}"));
+            let mut lines: Vec<Bounds<Pixels>> = Vec::new();
+            for (_, layout) in &layouts {
+                let fragment = layout.bounds();
+                if fragment.center().y < row.top() || fragment.center().y >= row.bottom() {
+                    continue;
+                }
+                if let Some(line) = lines.iter_mut().find(|line| line.top() == fragment.top()) {
+                    *line = line.union(&fragment);
+                } else {
+                    lines.push(fragment);
+                }
+            }
+            assert!(
+                lines.len() >= min_lines,
+                "HTML text part {part} should span at least {min_lines} lines in {mode:?}: {lines:?}"
+            );
+            for line in lines {
+                let offset = if right_aligned {
+                    line.right() - row.right()
+                } else {
+                    line.center().x - row.center().x
+                };
+                assert!(
+                    offset.abs() <= px(1.),
+                    "misaligned HTML text part {part} in {mode:?}: row={row:?}, line={line:?}"
+                );
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn rendered_html_flows_without_outer_border_and_keeps_its_source_editor(cx: &mut TestAppContext) {
+    let source = "<h1 align=\"center\">Markion</h1>\n\n<p align=\"center\"><a href=\"#guide\">User guide</a></p>\n\n## Guide";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app
+    });
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.run_until_parked();
+    let (block_index, block_id) = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let mut html_blocks = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| matches!(block.kind, VisualBlockKind::Html { .. }));
+        let (first_index, first) = html_blocks.next().expect("HTML heading");
+        let (second_index, _) = html_blocks.next().expect("HTML links");
+        ((first_index, second_index), first.id)
+    });
+    for index in [block_index.0, block_index.1] {
+        let row = cx
+            .debug_bounds(test_debug_selector(format!("visual-block-content-{index}")))
+            .unwrap();
+        let text = cx
+            .debug_bounds(test_debug_selector(format!("preview-html-text-{index}-0")))
+            .unwrap();
+        assert_eq!(text.origin, row.origin);
+        assert_eq!(text.size.width, row.size.width);
+    }
+    let content_selector = test_debug_selector(format!("visual-block-content-{}", block_index.0));
+    let text_selector = test_debug_selector(format!("preview-html-text-{}-0", block_index.0));
+    let collapsed = cx.debug_bounds(content_selector).unwrap();
+    let heading = cx.debug_bounds(text_selector).unwrap();
+    let initial_state = visual_table_document_state(&app, cx);
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().toggle_visual_source_expanded(block_id);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let expanded = cx.debug_bounds(content_selector).unwrap();
+    assert!(expanded.size.height > collapsed.size.height);
+    assert_eq!(cx.debug_bounds(text_selector), Some(heading));
+    assert_eq!(visual_table_document_state(&app, cx), initial_state);
 }
 
 #[gpui::test]

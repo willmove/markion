@@ -2359,7 +2359,7 @@ Standalone HTML blocks and Visual Edit inline HTML image atoms SHALL honor autho
 - **THEN** the rendered image is 200 CSS pixels wide and the height follows the decoded aspect ratio
 
 ### Requirement: Visual Edit HTML blocks keep rendered view when focused
-Focusing a `VisualBlockKind::Html` row SHALL keep the shared HTML-parts rendering visible. The block SHALL expose a collapsible exact source payload editor over the complete authored HTML range (the same render-plus-payload pattern used for diagrams and display math). Expanding, collapsing, or hovering the source control SHALL NOT change document version or invalidate per-version derived caches. The block SHALL NOT be replaced by a bordered whole-block source island solely because it owns the caret.
+Focusing a `VisualBlockKind::Html` row SHALL keep the shared HTML-parts rendering visible. Rendered HTML SHALL flow without an enclosing editor border. An HTML table SHALL keep its own grid borders. The block SHALL expose a collapsible exact source payload editor over the complete authored HTML range (the same render-plus-payload pattern used for diagrams and display math). Expanding, collapsing, or hovering the source control SHALL NOT change document version or invalidate per-version derived caches. The block SHALL NOT be replaced by a bordered whole-block source island solely because it owns the caret.
 
 #### Scenario: Focused HTML table stays rendered
 - **WHEN** the caret enters a Visual Edit HTML block that renders as a table or image
@@ -2370,6 +2370,11 @@ Focusing a `VisualBlockKind::Html` row SHALL keep the shared HTML-parts renderin
 - **WHEN** the user edits the HTML block's source payload
 - **THEN** the mutation applies to `MarkdownDocument.text` through the existing dirty-state and undo path
 - **AND** the next derived version re-renders the HTML parts from the updated source
+
+#### Scenario: README HTML renders without outer frames
+- **WHEN** Visual Edit renders raw HTML containing a README title, language links, badges, navigation links, or a caption
+- **THEN** the rendered content appears without an enclosing editor border
+- **AND** the source toggle and expanded source field remain available
 
 ### Requirement: HTML tables inside wrappers still render as grids
 `html_preview_parts` SHALL resolve a `<table>` that appears anywhere inside a raw HTML block, not only when the block's trimmed text starts with `<table`. Prefix and suffix HTML SHALL remain as text/image parts. Nested tables that cannot be gridded SHALL flatten rather than panic.
@@ -2396,7 +2401,7 @@ HTML-only regions inside blockquotes and list items SHALL be emitted as `Preview
 - **THEN** the quote renders the image through the shared HTML-parts pipeline rather than flattened alt/URL text
 
 ### Requirement: Shared HTML preview preserves common document structure
-HTML preview parts SHALL present `<h1>`–`<h6>` with heading typography derived from the rendered body size, `<ul>`/`<ol>`/`<li>` with bullet or decimal markers, and `<pre>` with preserved whitespace and code-slot font. Alignment SHALL honor `left`/`right`/`center` (attribute or `text-align`). Inline `color` from allowlisted hex/`rgb()` values and underline from `<u>` SHALL paint on text spans. These presentations apply in Read, Split Preview, and Visual Edit HTML blocks.
+HTML preview parts SHALL present `<h1>`–`<h6>` with heading typography derived from the rendered body size, `<ul>`/`<ol>`/`<li>` with bullet or decimal markers, and `<pre>` with preserved whitespace and code-slot font. Alignment SHALL honor `left`/`right`/`center` (attribute or `text-align`). Every line of an aligned HTML heading or paragraph SHALL follow its block alignment, including lines separated by `<br>` and lines that wrap within the pane. Inline `color` from allowlisted hex/`rgb()` values and underline from `<u>` SHALL paint on text spans. These presentations apply in Read, Split Preview, and Visual Edit HTML blocks.
 
 #### Scenario: HTML heading uses heading size
 - **WHEN** a raw HTML block contains `<h1>Title</h1>`
@@ -2413,6 +2418,11 @@ HTML preview parts SHALL present `<h1>`–`<h6>` with heading typography derived
 #### Scenario: Right alignment and underline
 - **WHEN** a raw HTML block contains `<p align="right"><u>note</u></p>`
 - **THEN** the text is right-aligned and underlined
+
+#### Scenario: README heading, description, and caption are centered
+- **WHEN** a raw HTML block contains a centered heading, a centered paragraph with `<strong>`, `<br>`, and a longer second line, or a centered `<sub>` caption with a link
+- **THEN** Read, Split Preview, and Visual Edit center each displayed line within the row, including when the description wraps
+- **AND** inline styles and links retain their rendering and interaction
 
 ### Requirement: HTML table cells render images and links
 HTML `<td>`/`<th>` cells SHALL render complete `<img>` tags through the shared image pipeline and SHALL apply `<a href>` as link spans. Empty cells SHALL not result solely because the cell contained only an image tag.
@@ -3208,3 +3218,25 @@ When the keyboard move command resolves a selection to a single complete list su
 - **WHEN** the user moves a list parent below its sibling with the keyboard and moves it back up
 - **THEN** both parents retain their respective descendants and the original order is restored
 - **AND** following independent prose remains outside the list after each move
+
+### Requirement: Adjacent HTML images wrap as an aligned group
+In Read, Split Preview, and Visual Edit, adjacent images of the same alignment within the same flow of a standalone HTML block SHALL share a line when their display widths and spacing fit. Source whitespace and inline links SHALL preserve adjacency. When the pane narrows, whole images SHALL wrap in source order, and each line SHALL follow the resolved alignment. Each image SHALL retain its authored size hints, link, and pane-width limit.
+
+#### Scenario: Centered README badges wrap with the pane
+- **WHEN** a centered HTML paragraph contains linked Release, unlinked platform, and linked MIT image badges separated by source newlines
+- **THEN** the three badges share a centered line at sufficient width
+- **AND** they wrap in order into independently centered lines as the pane narrows
+
+#### Scenario: Explicit HTML boundaries separate image lines
+- **WHEN** consecutive images occur in different HTML paragraphs, or a `<br>` separates them
+- **THEN** the authored boundary starts a new image line
+
+### Requirement: Visual Edit task markers use consistent square dimensions
+
+When task markers are rendered in Visual Edit, the checked and unchecked boxes SHALL use the same width and height at the configured rendered font size and align with the first line of their item. Only the checked state SHALL display a check mark.
+
+#### Scenario: Mixed task states align in one list
+
+- **WHEN** Visual Edit displays adjacent checked and unchecked tasks with their source prefixes hidden
+- **THEN** both squares occupy the same dimensions and align with the first line of their respective items
+- **AND** toggling either square keeps the marker and item text in place

@@ -1672,7 +1672,10 @@ impl Element for SelectablePreviewText {
         #[cfg(test)]
         PREVIEW_TEXT_LAYOUTS.with_borrow_mut(|observed| {
             if self.block_index == 0
-                && self.run_id == PreviewTextRunId::Body
+                && matches!(
+                    self.run_id,
+                    PreviewTextRunId::Body | PreviewTextRunId::HtmlText
+                )
                 && let Some(layouts) = observed
             {
                 layouts.push((self.run_offset, text_layout.clone()));
@@ -1895,7 +1898,22 @@ pub(super) fn rich_text_element(
             .iter()
             .any(|span| span.style.superscript || span.style.subscript)
     {
-        return rich_inline_fragments(app, id, rich, block_index, run_id, metrics, cx);
+        let prose = rich_inline_fragments(app, id, rich, block_index, run_id, metrics, cx);
+        return div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .children(
+                prose
+                    .into_aligned_rows(metrics.1, TableAlignment::Default)
+                    .enumerate()
+                    .map(|(line_index, row)| {
+                        row.debug_selector(move || {
+                            format!("read-inline-line-{block_index}-{line_index}")
+                        })
+                    }),
+            )
+            .into_any_element();
     }
     let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
     let mut link_ranges: Vec<Range<usize>> = Vec::new();
@@ -2067,7 +2085,7 @@ fn rich_inline_fragments(
     run_id: PreviewTextRunId,
     metrics: (f32, f32),
     cx: &mut Context<MarkionApp>,
-) -> gpui::AnyElement {
+) -> MixedProse {
     let selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
     let searches = active_preview_search_ranges(app, block_index, run_id, &rich.text);
     let run_text = SharedString::from(rich.text.clone());
@@ -2115,29 +2133,7 @@ fn rich_inline_fragments(
             }
         }
     }
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .children(
-            prose
-                .into_lines()
-                .into_iter()
-                .enumerate()
-                .map(|(line_index, line)| {
-                    div()
-                        .debug_selector(move || {
-                            format!("read-inline-line-{block_index}-{line_index}")
-                        })
-                        .w_full()
-                        .min_h(px(metrics.1))
-                        .flex()
-                        .flex_wrap()
-                        .items_end()
-                        .children(line)
-                }),
-        )
-        .into_any_element()
+    prose
 }
 
 fn linked_preview_image(child: Div, href: Option<&str>, cx: &mut Context<MarkionApp>) -> Div {
@@ -3576,20 +3572,28 @@ impl MixedProse {
             .w_full()
             .flex()
             .flex_col()
-            .children(self.into_lines().into_iter().map(|line| {
-                div()
-                    .w_full()
-                    .min_h(px(line_height))
-                    .flex()
-                    .flex_wrap()
-                    .items_end()
-                    .when(alignment == TableAlignment::Center, |row| {
-                        row.justify_center()
-                    })
-                    .when(alignment == TableAlignment::Right, |row| row.justify_end())
-                    .children(line)
-            }))
+            .children(self.into_aligned_rows(line_height, alignment))
             .into_any_element()
+    }
+
+    fn into_aligned_rows(
+        self,
+        line_height: f32,
+        alignment: TableAlignment,
+    ) -> impl Iterator<Item = Div> {
+        self.into_lines().into_iter().map(move |line| {
+            div()
+                .w_full()
+                .min_h(px(line_height))
+                .flex()
+                .flex_wrap()
+                .items_end()
+                .when(alignment == TableAlignment::Center, |row| {
+                    row.justify_center()
+                })
+                .when(alignment == TableAlignment::Right, |row| row.justify_end())
+                .children(line)
+        })
     }
 }
 
@@ -4905,25 +4909,7 @@ fn visual_block_content_view(
                     || cursor == prefix.source_range.end
                     || (owns_caret && block.editable_runs.is_empty())
             });
-            let marker = if prefix_revealed {
-                String::new()
-            } else {
-                match checked {
-                    Some(true) => "☑".to_string(),
-                    Some(false) => "☐".to_string(),
-                    None if *ordered => format!("{}.", index.unwrap_or(1)),
-                    None => match level {
-                        1 => "•".to_string(),
-                        2 => "◦".to_string(),
-                        _ => "▪".to_string(),
-                    },
-                }
-            };
             let visual_level = if prefix_revealed { 1 } else { *level };
-            let clickable_checkbox = matches!(app.view_mode, ViewMode::VisualEdit)
-                && checked.is_some()
-                && !prefix_revealed;
-            let checkbox_index = block_index;
             div()
                 .mb_1()
                 .ml(px((visual_level as f32 - 1.).max(0.) * 18.))
@@ -4931,33 +4917,72 @@ fn visual_block_content_view(
                 .line_height(px(typography.list_line_height))
                 .flex()
                 .items_start()
-                // While the structural prefix is revealed the marker glyph is
+                // While the structural prefix is revealed the marker is
                 // hidden; reserving its column would shift the raw `- ` right
                 // of where the bullet sits unfocused, so the column unmounts.
                 .when(!prefix_revealed, |row| {
-                    row.child(
-                        div()
+                    let column = div().flex_none().min_w(px(22.)).pr_1();
+                    if let Some(checked) = *checked {
+                        let checkbox_size = typography.rendered_font_size;
+                        let checked_bg = rgb(0x7659c6);
+                        let checkbox = div()
                             .id(("visual-task-checkbox", block_index))
-                            .debug_selector(move || {
-                                format!("visual-task-checkbox-{checkbox_index}")
+                            .debug_selector(move || format!("visual-task-checkbox-{block_index}"))
+                            .size(px(checkbox_size))
+                            .rounded(px(2.))
+                            .border_1()
+                            .border_color(if checked {
+                                checked_bg
+                            } else {
+                                app.palette().muted
                             })
-                            .flex_none()
-                            .min_w(px(22.))
-                            .pr_1()
-                            .text_color(rgb(0x64748b))
-                            .when(clickable_checkbox, |marker| {
-                                marker.cursor_pointer().on_mouse_up(
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(checked, |checkbox| {
+                                checkbox.bg(checked_bg).child(crate::ui::icon::icon(
+                                    crate::ui::icon::Icon::Check,
+                                    checkbox_size * 0.9,
+                                    rgb(0xffffff),
+                                ))
+                            })
+                            .when(matches!(app.view_mode, ViewMode::VisualEdit), |checkbox| {
+                                checkbox.cursor_pointer().on_mouse_up(
                                     MouseButton::Left,
                                     cx.listener(move |app, _: &MouseUpEvent, _, cx| {
                                         if app.pending_block_grip.is_some() {
                                             return;
                                         }
-                                        app.toggle_visual_task_checkbox(checkbox_index, cx);
+                                        app.toggle_visual_task_checkbox(block_index, cx);
                                     }),
                                 )
-                            })
-                            .child(marker),
-                    )
+                            });
+                        row.child(
+                            column
+                                .h(px(typography.list_line_height))
+                                .flex()
+                                .items_center()
+                                .child(checkbox),
+                        )
+                    } else {
+                        let marker = if *ordered {
+                            format!("{}.", index.unwrap_or(1))
+                        } else {
+                            match level {
+                                1 => "•".into(),
+                                2 => "◦".into(),
+                                _ => "▪".into(),
+                            }
+                        };
+                        row.child(
+                            column
+                                .debug_selector(move || {
+                                    format!("visual-task-checkbox-{block_index}")
+                                })
+                                .text_color(rgb(0x64748b))
+                                .child(marker),
+                        )
+                    }
                 })
                 .child(
                     div()
@@ -5223,18 +5248,22 @@ fn visual_block_content_view(
                 visual_source_island_view(app, block, block_index, cx)
             }
         }
-        VisualBlockKind::CodeBlock { language } => {
+        VisualBlockKind::CodeBlock {
+            language,
+            diagram_source,
+        } => {
             if let Some(VisualBlockEditor::Code { payload, info, .. }) = block.editor.as_ref() {
                 // Diagram fences (e.g. `mermaid`) layer a rendered image on
                 // top of the same source-backed payload editor used by ordinary
                 // code blocks. Non-diagram CodeBlocks keep the highlighted
                 // code editor.
-                if diagram_backend_id(language.as_deref()).is_some() {
+                if let Some(source) = diagram_source {
                     visual_diagram_editor(
                         app,
                         block,
                         block_index,
                         language.as_deref(),
+                        source,
                         payload,
                         info,
                         cx,
@@ -7410,9 +7439,6 @@ fn visual_html_editor(
     let presentation =
         html_preview_block_view_with_parts(app, &parts, images, block_index, document_dir, cx);
     let palette = app.palette();
-    let bordered = !parts
-        .iter()
-        .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
         visual_source_payload_container(palette)
             .font(code_slot_font(&app.resolved_font_families.code))
@@ -7434,7 +7460,7 @@ fn visual_html_editor(
         block.id,
         payload,
         false,
-        bordered,
+        false,
         false,
         presentation.into_any_element(),
         payload_editor,
@@ -7518,22 +7544,20 @@ fn visual_front_matter_editor(
 /// is presentation-only; its completion or theme switch cannot rewrite the
 /// fence (enforced by the diagram cache key scoping).
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn visual_diagram_editor(
     app: &MarkionApp,
     block: &VisualBlock,
     block_index: usize,
     language: Option<&str>,
+    source: &str,
     payload: &VisualEditorField,
     info: &VisualEditorField,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let palette = app.palette();
     let typography = app.typography_metrics();
-    // Read the authored source through the same document slice the cache key
-    // uses, so the visual-blocks render and the Split Preview render share one
-    // cache entry for the same fence.
-    let code = app.active_tab().document.text()[payload.source_range.clone()].to_string();
-    let entry = app.diagram_entry(language, &code);
+    let entry = app.diagram_entry(language, source);
     let forced = !matches!(entry, Some(DiagramCacheEntry::Ready(_, _)));
     let presentation = match entry {
         Some(DiagramCacheEntry::Ready(image, size)) => {
@@ -7548,6 +7572,7 @@ fn visual_diagram_editor(
                         "visual-diagram-scroll",
                         block.id.as_u64(),
                     )))
+                    .debug_selector(move || format!("visual-diagram-ready-{block_index}"))
                     .w_full()
                     .overflow_x_scroll()
                     .child(
@@ -7559,7 +7584,7 @@ fn visual_diagram_editor(
                     ),
             )
         }
-        Some(DiagramCacheEntry::Pending) => div()
+        Some(DiagramCacheEntry::Pending) | None => div()
             .w_full()
             .py_2()
             .text_color(app.palette().muted)
@@ -7569,13 +7594,9 @@ fn visual_diagram_editor(
             .py_2()
             .text_color(rgb(0xb91c1c))
             .child(app.diagram_error_message(&error)),
-        None => div()
-            .w_full()
-            .py_2()
-            .text_color(app.palette().muted)
-            .child(t(app.language, Msg::DiagramLoading)),
     };
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
+        let text = app.active_tab().document.text();
         visual_source_payload_container(palette)
             .font(code_slot_font(&app.resolved_font_families.code))
             .text_size(px(typography.code_font_size))
@@ -7583,11 +7604,8 @@ fn visual_diagram_editor(
             .child(code_block_header_with_language(
                 app,
                 language,
-                markion::fenced_code_copy_text(
-                    app.active_tab().document.text(),
-                    block.source_range.clone(),
-                )
-                .unwrap_or(code),
+                markion::fenced_code_copy_text(text, block.source_range.clone())
+                    .unwrap_or_else(|| text[payload.source_range.clone()].to_owned()),
                 code_palette(app.code_theme),
                 // The header only exists inside the payload editor, which is
                 // mounted when the user expanded the source — so the language
@@ -8589,19 +8607,32 @@ fn html_preview_block_view_with_parts(
         return div();
     }
     let image_index = std::cell::Cell::new(0usize);
+    let mut next_part_index = 0;
 
     div().mb_3().children(
         parts
-            .iter()
-            .enumerate()
-            .map(|(part_index, part)| match part {
+            .chunk_by(|_, next| {
+                matches!(
+                    next,
+                    HtmlPreviewPart::Image {
+                        continues_image_line: true,
+                        ..
+                    }
+                )
+            })
+            .map(|group| {
+                let part_index = next_part_index;
+                next_part_index += group.len();
+                (part_index, group)
+            })
+            .map(|(part_index, group)| match &group[0] {
                 HtmlPreviewPart::Text {
                     text,
-                    centered,
                     heading_level,
                     list_marker,
                     pre,
                     align,
+                    ..
                 } => {
                     let font_size = heading_level
                         .map(|level| typography.heading_font_size(u32::from(level)))
@@ -8622,39 +8653,38 @@ fn html_preview_block_view_with_parts(
                         Some(HtmlListMarker::Decimal(index)) => Some(format!("{index}.")),
                         None => None,
                     };
-                    let has_marker = marker_label.is_some();
-                    let body = rich_text_element(
-                        app,
-                        ElementId::from((
-                            "preview-html-text",
-                            ((block_index as u64) << 32) | part_index as u64,
-                        )),
-                        text,
-                        block_index,
-                        PreviewTextRunId::HtmlText,
-                        (font_size, line_height),
-                        cx,
-                    );
-                    let aligned = match align {
-                        HtmlAlign::Center if !has_marker => {
-                            div().w_full().flex().justify_center().child(body)
-                        }
-                        HtmlAlign::End if !has_marker => {
-                            div().w_full().flex().justify_end().child(body)
-                        }
-                        _ => div().child(body),
+                    let alignment = match (align, list_marker) {
+                        (HtmlAlign::Center, None) => TableAlignment::Center,
+                        (HtmlAlign::End, None) => TableAlignment::Right,
+                        _ => TableAlignment::Default,
                     };
+                    let id = ElementId::from((
+                        "preview-html-text",
+                        ((block_index as u64) << 32) | part_index as u64,
+                    ));
+                    let run_id = PreviewTextRunId::HtmlText;
+                    let metrics = (font_size, line_height);
+                    let body = if alignment == TableAlignment::Default {
+                        rich_text_element(app, id, text, block_index, run_id, metrics, cx)
+                    } else {
+                        rich_inline_fragments(app, id, text, block_index, run_id, metrics, cx)
+                            .into_aligned_element(line_height, alignment)
+                    };
+                    let body = div().child(body);
                     let content = if let Some(marker) = marker_label {
                         div()
                             .flex()
                             .gap_2()
                             .items_start()
                             .child(div().flex_none().child(marker))
-                            .child(aligned)
+                            .child(body)
                     } else {
-                        aligned
+                        body
                     };
                     div()
+                        .debug_selector(move || {
+                            format!("preview-html-text-{block_index}-{part_index}")
+                        })
                         .mb_2()
                         .line_height(px(line_height))
                         .text_size(px(font_size))
@@ -8664,42 +8694,73 @@ fn html_preview_block_view_with_parts(
                         .when(*pre, |style| {
                             style.font(code_slot_font(&app.resolved_font_families.code))
                         })
-                        .when(*centered && !has_marker, |style| style.text_center())
                         .child(content)
                 }
-                HtmlPreviewPart::Image {
-                    url,
-                    link,
-                    width,
-                    height,
-                    align,
-                    ..
-                } => {
-                    let i = image_index.get();
-                    image_index.set(i + 1);
-                    let (src, identity) = images
-                        .get(i)
-                        .map(|image| (image.url.as_ref(), &image.identity))
-                        .unwrap_or((url.as_str(), &ImageSourceIdentity::FromUrl));
+                HtmlPreviewPart::Image { align, .. } => {
+                    let inline = group.len() > 1;
                     div()
                         .debug_selector(move || {
-                            format!("preview-html-image-{block_index}-{part_index}")
+                            format!("preview-html-image-line-{block_index}-{part_index}")
                         })
                         .w_full()
                         .mb_2()
-                        .child(linked_preview_image(
-                            preview_image_view_with_alignment(
-                                app,
-                                src,
-                                identity,
-                                document_dir,
-                                *width,
-                                *height,
-                                Some(*align),
-                            ),
-                            link.as_deref(),
-                            cx,
-                        ))
+                        .when(inline, |row| {
+                            let row = row.flex().flex_wrap().items_center().gap_1();
+                            match align {
+                                HtmlAlign::Center => row.justify_center(),
+                                HtmlAlign::End => row.justify_end(),
+                                HtmlAlign::Start => row,
+                            }
+                        })
+                        .children(group.iter().enumerate().filter_map(|(offset, part)| {
+                            let HtmlPreviewPart::Image {
+                                url,
+                                alt,
+                                link,
+                                width,
+                                height,
+                                ..
+                            } = part
+                            else {
+                                return None;
+                            };
+                            let i = image_index.get();
+                            image_index.set(i + 1);
+                            let (src, identity) = images
+                                .get(i)
+                                .map(|image| (image.url.as_ref(), &image.identity))
+                                .unwrap_or((url.as_str(), &ImageSourceIdentity::FromUrl));
+                            let image = if inline {
+                                preview_inline_image_view(
+                                    app,
+                                    src,
+                                    identity,
+                                    alt,
+                                    document_dir,
+                                    *width,
+                                    *height,
+                                )
+                                .max_w_full()
+                            } else {
+                                preview_image_view_with_alignment(
+                                    app,
+                                    src,
+                                    identity,
+                                    document_dir,
+                                    *width,
+                                    *height,
+                                    Some(*align),
+                                )
+                            };
+                            let badge_index = part_index + offset;
+                            Some(
+                                linked_preview_image(image, link.as_deref(), cx).debug_selector(
+                                    move || {
+                                        format!("preview-html-image-{block_index}-{badge_index}")
+                                    },
+                                ),
+                            )
+                        }))
                 }
                 HtmlPreviewPart::Table { grid } => div().mb_2().child(html_table_grid_view(
                     app,

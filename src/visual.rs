@@ -1491,9 +1491,17 @@ fn visual_block_from_preview(
             None,
         ),
         PreviewBlock::BlockQuote { .. } => (VisualBlockKind::BlockQuote, None),
-        PreviewBlock::CodeBlock { language, .. } => (
+        PreviewBlock::CodeBlock {
+            language,
+            code,
+            fenced,
+            ..
+        } => (
             VisualBlockKind::CodeBlock {
                 language: language.clone(),
+                diagram_source: (*fenced
+                    && crate::diagram_backend_id(language.as_deref()).is_some())
+                .then(|| code.clone()),
             },
             Some(VisualSourceIslandKind::Code),
         ),

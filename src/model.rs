@@ -1740,6 +1740,8 @@ pub enum VisualBlockKind {
     },
     CodeBlock {
         language: Option<String>,
+        /// Parsed fence body shared with the diagram cache in Read and Split Preview.
+        diagram_source: Option<String>,
     },
     MathBlock {
         latex: String,

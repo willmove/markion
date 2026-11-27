@@ -1154,14 +1154,16 @@ pub(super) fn preview_inline_image_view(
                 ready.display_height as f32,
             );
             let image = img(ImageSource::Render(ready.image)).max_w_full();
-            let image = if let Some((width, height)) = sized {
-                image.w(px(width)).h(px(height))
+            let view = div().flex_none().max_w_full();
+            if let Some((width, height)) = sized {
+                // Let the authored box participate in flex layout. GPUI's
+                // image element also supplies an intrinsic aspect ratio.
+                view.w(px(width)).h(px(height)).child(image.size_full())
             } else if supersampled {
-                image.w(px(ready.display_width as f32))
+                view.child(image.w(px(ready.display_width as f32)))
             } else {
-                image
-            };
-            div().flex_none().max_w_full().child(image)
+                view.child(image)
+            }
         }
         PreviewImageEntry::Pending | PreviewImageEntry::Error(_) => {
             let label = if alt.is_empty() { url } else { alt };
