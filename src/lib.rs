@@ -325,8 +325,8 @@ use table::{
     table_position_at, table_preview_source_range, table_source_range,
 };
 pub use table::{
-    authored_table_column_percents, parse_table_column_width_comment, percents_from_flex_weights,
-    redistribute_adjacent_column_percents, table_column_flex_weights,
+    authored_table_column_percents, equal_column_percents, parse_table_column_width_comment,
+    percents_from_flex_weights, redistribute_adjacent_column_percents, table_column_flex_weights,
     table_column_flex_weights_with_authored, table_column_width_prefix_len,
 };
 
@@ -2358,6 +2358,25 @@ impl MarkdownDocument {
             row: selected_row,
             column: selected_column,
         })
+    }
+
+    pub fn can_set_table_column_widths_at(&self, byte_index: usize, columns: usize) -> bool {
+        if !(2..=100).contains(&columns) {
+            return false;
+        }
+        let byte_index = clamp_to_char_boundary(&self.text, byte_index);
+        let Some(table_range) = self.table_range_at(byte_index) else {
+            return false;
+        };
+        let header_indent = &self.text[self.line_start_at(table_range.start)..table_range.start];
+        if !header_indent
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            return false;
+        }
+        parse_markdown_table(&self.text[table_range])
+            .is_some_and(|table| table.column_count() == columns)
     }
 
     pub fn set_table_column_widths_at(

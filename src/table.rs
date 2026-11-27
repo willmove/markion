@@ -734,6 +734,20 @@ pub fn percents_from_flex_weights(weights: &[f32]) -> Option<Vec<u8>> {
     normalize_column_percents(&scaled)
 }
 
+/// Equal integer column width percentages summing to 100 for a multi-column table.
+pub fn equal_column_percents(columns: usize) -> Option<Vec<u8>> {
+    if !(2..=100).contains(&columns) {
+        return None;
+    }
+    let base = (100 / columns) as u8;
+    let remain = 100 % columns;
+    Some(
+        (0..columns)
+            .map(|index| base + u8::from(index < remain))
+            .collect(),
+    )
+}
+
 pub fn redistribute_adjacent_column_percents(
     percents: &[u8],
     left: usize,
@@ -1143,6 +1157,24 @@ mod tests {
         assert_eq!(deleted.len(), 2);
         assert_eq!(deleted.iter().map(|value| *value as u16).sum::<u16>(), 100);
         assert!(adjust_column_percents_for_delete(&[40, 60], 0).is_none());
+    }
+
+    #[test]
+    fn equal_column_percents_splits_evenly_and_sums_to_100() {
+        assert_eq!(equal_column_percents(0), None);
+        assert_eq!(equal_column_percents(1), None);
+        assert_eq!(equal_column_percents(101), None);
+        assert_eq!(equal_column_percents(2), Some(vec![50, 50]));
+        assert_eq!(equal_column_percents(3), Some(vec![34, 33, 33]));
+        assert_eq!(equal_column_percents(4), Some(vec![25, 25, 25, 25]));
+        for columns in [2, 3, 4, 5, 6, 7, 20, 21, 100] {
+            let percents = equal_column_percents(columns).unwrap();
+            assert_eq!(percents.len(), columns);
+            assert_eq!(percents.iter().map(|v| *v as u16).sum::<u16>(), 100);
+            let floor = column_percent_floor(columns);
+            assert!(percents.iter().all(|&v| v >= floor));
+            assert_eq!(normalize_column_percents(&percents), Some(percents));
+        }
     }
 
     #[test]

@@ -43,10 +43,11 @@ pub enum ContextMenuMsg {
     InsertBelow,
     WrapTableInQuote,
     DuplicateTable,
+    EqualizeColumnWidths,
 }
 
 pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static str {
-    let labels: &[&str; 27] = match language {
+    let labels: &[&str; 28] = match language {
         Language::Ko => &[
             "문단",
             "제목",
@@ -75,6 +76,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "아래에 삽입",
             "표를 인용문으로 감싸기",
             "표 사본 만들기",
+            "열 너비 균등 분배",
         ],
         Language::En => &[
             "Paragraph",
@@ -104,6 +106,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Insert Below",
             "Wrap in Quote",
             "Make a Table Copy",
+            "Equalize Column Widths",
         ],
         Language::ZhHans => &[
             "段落",
@@ -133,6 +136,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "在下方插入",
             "包进引用",
             "制作表格副本",
+            "均分列宽",
         ],
         Language::ZhHant => &[
             "段落",
@@ -162,6 +166,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "在下方插入",
             "包進引用",
             "建立表格副本",
+            "均分欄寬",
         ],
         Language::Ja => &[
             "段落",
@@ -191,6 +196,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "下に挿入",
             "表を引用で囲む",
             "表の複製を作成",
+            "列幅を均等にする",
         ],
         Language::Fr => &[
             "Paragraphe",
@@ -220,6 +226,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Insérer en dessous",
             "Encadrer dans une citation",
             "Créer une copie du tableau",
+            "Égaliser la largeur des colonnes",
         ],
         Language::De => &[
             "Absatz",
@@ -249,6 +256,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Darunter einfügen",
             "Tabelle als Zitat einrücken",
             "Tabellenkopie erstellen",
+            "Spaltenbreiten angleichen",
         ],
         Language::Es => &[
             "Párrafo",
@@ -278,6 +286,7 @@ pub fn context_menu_t(language: Language, message: ContextMenuMsg) -> &'static s
             "Insertar debajo",
             "Incluir tabla en una cita",
             "Crear una copia de la tabla",
+            "Igualar ancho de columnas",
         ],
     };
     labels[message as usize]
@@ -9583,6 +9592,7 @@ mod tests {
             ContextMenuMsg::InsertBelow,
             ContextMenuMsg::WrapTableInQuote,
             ContextMenuMsg::DuplicateTable,
+            ContextMenuMsg::EqualizeColumnWidths,
         ] {
             let korean = context_menu_t(Language::Ko, message);
             assert!(!korean.is_empty());

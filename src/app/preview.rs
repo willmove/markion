@@ -5997,6 +5997,7 @@ pub(super) fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
             visual_block_transform_element_id(block_transform_index(transform))
         }
         BlockMenuItem::TableRow(item) => context_table_item_id(true, item),
+        BlockMenuItem::EqualizeTableColumns => "visual-table-equalize-columns",
         BlockMenuItem::CodeBlockFormat => "visual-code-format-block",
         BlockMenuItem::TableColumn(item) => context_table_item_id(false, item),
         BlockMenuItem::Submenu(BlockContextSubmenu::TableRows) => "visual-context-table-rows",
@@ -6061,6 +6062,9 @@ fn block_menu_item_label(
         BlockMenuItem::InsertCallout(kind) => callout_menu_label(language, kind).into(),
         BlockMenuItem::CodeBlockFormat => {
             markion::code_format_t(language, markion::CodeFormatMsg::FormatCodeBlock).to_string()
+        }
+        BlockMenuItem::EqualizeTableColumns => {
+            context_menu_t(language, ContextMenuMsg::EqualizeColumnWidths).into()
         }
         BlockMenuItem::Transform(BlockTransform::Quote) if state.is_table_block_menu() => {
             context_menu_t(language, ContextMenuMsg::WrapTableInQuote).into()
@@ -6150,6 +6154,7 @@ fn block_menu_item_icon(item: BlockMenuItem) -> crate::ui::icon::Icon {
         BlockMenuItem::ImageSaveLocal => Icon::Download,
         BlockMenuItem::ImageUpload => Icon::Upload,
         BlockMenuItem::CodeBlockFormat => Icon::Braces,
+        BlockMenuItem::EqualizeTableColumns => Icon::Columns,
         BlockMenuItem::ImageProperties => Icon::Settings,
         BlockMenuItem::ImageAlignment(ImageAlignment::Left) => Icon::AlignLeft,
         BlockMenuItem::ImageAlignment(ImageAlignment::Center) => Icon::AlignCenter,

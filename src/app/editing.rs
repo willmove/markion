@@ -262,6 +262,24 @@ pub(super) fn visual_block_transform(block: &VisualBlock) -> Option<BlockTransfo
     }
 }
 
+fn table_equalize_target(tab: &EditorTab, block: &VisualBlock) -> Option<(usize, Vec<u8>)> {
+    if block.quote_context.is_some()
+        || !matches!(block.editor, Some(VisualBlockEditor::Table { .. }))
+    {
+        return None;
+    }
+    let VisualBlockKind::Table { rows, .. } = &block.kind else {
+        return None;
+    };
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let percents = equal_column_percents(column_count)?;
+    let block_source = tab.document.text().get(block.source_range.clone())?;
+    let table_offset = block.source_range.start + table_column_width_prefix_len(block_source);
+    tab.document
+        .can_set_table_column_widths_at(table_offset, column_count)
+        .then_some((table_offset, percents))
+}
+
 fn block_menu_insertion_range(
     tab: &EditorTab,
     blocks: &[VisualBlock],
@@ -678,6 +696,17 @@ impl MarkionApp {
         selected_text: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        self.open_palette_insertion_editor_with_target(source_range, command, selected_text, None, cx);
+    }
+
+    fn open_palette_insertion_editor_with_target(
+        &mut self,
+        source_range: Range<usize>,
+        command: SlashPaletteCommand,
+        selected_text: Option<String>,
+        block_below: Option<BlockTarget>,
+        cx: &mut Context<Self>,
+    ) {
         let document_version = self.active_tab().document.version();
         self.slash_commands = None;
         self.emoji_completer = None;
@@ -701,6 +730,7 @@ impl MarkionApp {
                     html_anchor: false,
                     cursor: 0,
                     anchor: 0,
+                    block_below,
                 });
             }
             SlashPaletteCommand::Formula => {
@@ -714,6 +744,7 @@ impl MarkionApp {
                     draft,
                     cursor,
                     anchor: 0,
+                    block_below,
                 });
             }
             SlashPaletteCommand::Block(_) => unreachable!(),
@@ -958,6 +989,7 @@ impl MarkionApp {
             selection_format,
             is_image: presentation.is_image,
             is_table,
+            can_equalize_table_columns: presentation.can_equalize_table_columns,
             can_wrap_table,
             is_fenced_code,
             image_object_selected: false,
@@ -1293,6 +1325,9 @@ impl MarkionApp {
             return None;
         }
         let mut presentation = self.block_menu_presentation_for_target(&menu.target)?;
+        if menu.is_table_block_menu() {
+            presentation.can_insert_inline = presentation.can_insert_block;
+        }
         if menu.editing_context.is_some() {
             presentation.editing_context = true;
             presentation.can_insert_inline = menu.insertion_range.is_some();
@@ -1343,6 +1378,8 @@ impl MarkionApp {
                 Some(VisualBlockEditor::Code { payload, .. })
                     if payload.kind == VisualEditorFieldKind::CodePayload
             );
+        let can_equalize_table_columns = !matches!(self.rendered_view_mode(), ViewMode::Read)
+            && table_equalize_target(tab, block).is_some();
         let can_duplicate_or_delete = block_can_reorder_at(&blocks, index);
         let is_empty_paragraph = matches!(block.kind, VisualBlockKind::Whitespace)
             && block.quote_context.is_none()
@@ -1359,6 +1396,7 @@ impl MarkionApp {
             is_empty_paragraph,
             can_paste: block_menu_insertion_range(tab, &blocks, target).is_some(),
             can_format_code,
+            can_equalize_table_columns,
             table_context: None,
             editing_context: false,
             // The block catalog only includes Copy Selection after capture;
@@ -1910,6 +1948,33 @@ impl MarkionApp {
                     SelectionFormatAction::Link => self.open_link_editor(cx),
                 }
             }
+            BlockMenuItem::Insert(command)
+                if self
+                    .block_menu
+                    .as_ref()
+                    .is_some_and(BlockMenuState::is_table_block_menu) =>
+            {
+                let tab = self.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                match markion::block_edit::add_paragraph_below(
+                    tab.document.text(),
+                    tab.document.version(),
+                    &blocks,
+                    &target,
+                ) {
+                    Ok(edit) => {
+                        self.dismiss_visual_block_menu();
+                        self.open_palette_insertion_editor_with_target(
+                            edit.range,
+                            command,
+                            None,
+                            Some(target),
+                            cx,
+                        );
+                    }
+                    Err(error) => self.report_block_edit_error(error, cx),
+                }
+            }
             BlockMenuItem::Insert(_) | BlockMenuItem::Paste => {
                 let tab = self.active_tab();
                 let blocks = tab.document.visual_blocks_shared();
@@ -1957,6 +2022,9 @@ impl MarkionApp {
                 } else if let BlockMenuItem::Insert(command) = item {
                     self.open_palette_insertion_editor(range, command, label, cx);
                 }
+            }
+            BlockMenuItem::EqualizeTableColumns => {
+                self.equalize_visual_table_columns(target, cx);
             }
             BlockMenuItem::CodeBlockFormat => {
                 self.dismiss_visual_block_menu();
@@ -2437,6 +2505,7 @@ impl MarkionApp {
             document: self.active_tab().document.instance_id(),
             selection: self.active_tab().selected_range.clone(),
             inputs,
+            block_below: None,
         };
         self.request_image_batch(batch, window, cx);
     }
@@ -2513,6 +2582,40 @@ impl MarkionApp {
             }),
         );
         self.replace_exact_inline_target(target.source_range, replacement, cx);
+    }
+
+    fn equalize_visual_table_columns(&mut self, target: BlockTarget, cx: &mut Context<Self>) {
+        let resolved = {
+            let tab = self.active_tab();
+            let blocks = tab.document.visual_blocks_shared();
+            validate_block_target(tab.document.version(), &blocks, &target)
+                .ok()
+                .and_then(|(_, block)| table_equalize_target(tab, block))
+        };
+        self.dismiss_visual_block_menu();
+        let Some((table_offset, percents)) = resolved else {
+            cx.notify();
+            return;
+        };
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let Some(comment_range) = self
+            .active_tab_mut()
+            .document
+            .set_table_column_widths_at(table_offset, &percents)
+        else {
+            cx.notify();
+            return;
+        };
+        if self.active_tab().document.text() != snapshot.document.text() {
+            self.commit_undo_snapshot(snapshot);
+            let tab = self.active_tab_mut();
+            tab.selected_range = comment_range.end..comment_range.end;
+            tab.selection_reversed = false;
+            tab.marked_range = None;
+            self.after_document_changed(cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn set_table_column_widths_at(
@@ -3034,6 +3137,7 @@ impl MarkionApp {
                 html_anchor: true,
                 cursor: anchor.url.len(),
                 anchor: anchor.url.len(),
+                block_below: None,
             });
             self.input_marked_len = 0;
             self.status = p0_t(self.language, P0Msg::EditingLink).into();
@@ -3076,6 +3180,7 @@ impl MarkionApp {
             html_anchor: false,
             cursor: url.len(),
             anchor: url.len(),
+            block_below: None,
         });
         self.input_marked_len = 0;
         self.status = p0_t(self.language, P0Msg::EditingLink).into();
@@ -3117,6 +3222,7 @@ impl MarkionApp {
             draft,
             cursor: caret,
             anchor: caret,
+            block_below: None,
         });
         self.input_marked_len = 0;
         self.status = t(self.language, Msg::VisualInlineEditFormula).into();
@@ -3143,6 +3249,7 @@ impl MarkionApp {
             draft,
             cursor: caret,
             anchor: caret,
+            block_below: None,
         });
         self.input_marked_len = 0;
         self.status = t(
@@ -3195,6 +3302,28 @@ impl MarkionApp {
         if replacement == current {
             self.status = t(self.language, Msg::StatusCanceled).into();
             cx.notify();
+            return;
+        }
+        if let Some(block_target) = editor.block_below {
+            let tab = self.active_tab();
+            let blocks = tab.document.visual_blocks_shared();
+            match markion::block_edit::insert_content_below(
+                tab.document.text(),
+                tab.document.version(),
+                &blocks,
+                &block_target,
+                &replacement,
+            ) {
+                Ok(edit) => self.apply_exact_block_edit(
+                    edit,
+                    t(self.language, Msg::StatusEditing).into(),
+                    cx,
+                ),
+                Err(_) => {
+                    self.status = p0_t(self.language, P0Msg::LinkStale).into();
+                    cx.notify();
+                }
+            }
             return;
         }
         self.active_tab_mut().finish_undo_capture();
@@ -3626,6 +3755,7 @@ impl MarkionApp {
                         input: markion::ImageInput::Remote(editor.url.trim().to_owned()),
                         source_kind: PendingImageSourceKind::Remote,
                     }],
+                    block_below: editor.block_below,
                 },
                 window,
                 cx,
@@ -3672,6 +3802,28 @@ impl MarkionApp {
         if replacement == current {
             self.status = t(self.language, Msg::StatusFmtLink).into();
             cx.notify();
+            return;
+        }
+        if let Some(block_target) = editor.block_below {
+            let tab = self.active_tab();
+            let blocks = tab.document.visual_blocks_shared();
+            match markion::block_edit::insert_content_below(
+                tab.document.text(),
+                tab.document.version(),
+                &blocks,
+                &block_target,
+                &replacement,
+            ) {
+                Ok(edit) => self.apply_exact_block_edit(
+                    edit,
+                    t(self.language, Msg::StatusFmtLink).into(),
+                    cx,
+                ),
+                Err(_) => {
+                    self.status = p0_t(self.language, P0Msg::LinkStale).into();
+                    cx.notify();
+                }
+            }
             return;
         }
         self.active_tab_mut().finish_undo_capture();
@@ -3727,7 +3879,7 @@ impl MarkionApp {
     ) {
         let document = self.active_tab().document.instance_id();
         let selection = self.active_tab().selected_range.clone();
-        self.choose_image_files_at(document, selection, None, window, cx);
+        self.choose_image_files_at(document, selection, None, None, window, cx);
     }
 
     pub(super) fn choose_image_from_settings(
@@ -3753,10 +3905,11 @@ impl MarkionApp {
             editor.label.clone(),
             (!editor.title.trim().is_empty()).then(|| editor.title.trim().to_owned()),
         ));
+        let block_below = editor.block_below.clone();
         let document = self.active_tab().document.instance_id();
         self.link_editor = None;
         self.input_marked_len = 0;
-        self.choose_image_files_at(document, selection, metadata, window, cx);
+        self.choose_image_files_at(document, selection, metadata, block_below, window, cx);
         cx.notify();
     }
 
@@ -3765,6 +3918,7 @@ impl MarkionApp {
         document: DocumentInstanceId,
         selection: Range<usize>,
         metadata: Option<(String, Option<String>)>,
+        block_below: Option<BlockTarget>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -3816,6 +3970,7 @@ impl MarkionApp {
                         document,
                         selection,
                         inputs,
+                        block_below,
                     },
                     window,
                     cx,
@@ -3890,6 +4045,7 @@ impl MarkionApp {
             html_anchor: false,
             cursor,
             anchor: cursor,
+            block_below: None,
         });
         cx.notify();
     }
@@ -3917,6 +4073,7 @@ impl MarkionApp {
             html_anchor: false,
             cursor: 0,
             anchor: 0,
+            block_below: None,
         });
         self.input_marked_len = 0;
         cx.notify();
@@ -3949,6 +4106,7 @@ impl MarkionApp {
             html_anchor: false,
             cursor: value.len(),
             anchor: value.len(),
+            block_below: None,
         });
         self.input_marked_len = 0;
         cx.notify();

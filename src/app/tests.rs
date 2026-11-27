@@ -7360,6 +7360,14 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
         context_menu_t(Language::ZhHans, ContextMenuMsg::WrapTableInQuote),
         "包进引用"
     );
+    assert_eq!(
+        context_menu_t(Language::ZhHans, ContextMenuMsg::EqualizeColumnWidths),
+        "均分列宽"
+    );
+    assert_eq!(
+        context_menu_t(Language::En, ContextMenuMsg::EqualizeColumnWidths),
+        "Equalize Column Widths"
+    );
 
     for keyboard in [false, true] {
         let (app, cx) = visual_table_handle_app(SOURCE, cx);
@@ -7375,8 +7383,13 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
             let menu = app.block_menu.as_ref().unwrap();
             assert!(menu.from_grip);
             assert!(menu.submenu.is_none());
-            assert!(!menu.offers(BlockMenuItem::AddDividerBelow));
-            assert!(!menu.offers(BlockMenuItem::AddTableBelow));
+            assert!(!menu.offers(BlockMenuItem::AddBelow));
+            assert!(!menu.offers(BlockMenuItem::Insert(SlashPaletteCommand::Block(
+                SlashCommand::Divider
+            ))));
+            assert!(!menu.offers(BlockMenuItem::Insert(SlashPaletteCommand::Block(
+                SlashCommand::Table
+            ))));
             assert_eq!(
                 menu.root_items(),
                 [
@@ -7385,7 +7398,7 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
                     BlockMenuItem::Duplicate,
                     BlockMenuItem::MoveUp,
                     BlockMenuItem::MoveDown,
-                    BlockMenuItem::AddBelow,
+                    BlockMenuItem::EqualizeTableColumns,
                     BlockMenuItem::Transform(BlockTransform::Quote),
                     BlockMenuItem::Submenu(BlockContextSubmenu::Insertion),
                     BlockMenuItem::Delete,
@@ -7400,6 +7413,14 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
         });
         assert!(cx.debug_bounds("visual-block-move-up-disabled").is_some());
         assert!(cx.debug_bounds("visual-block-move-down").is_some());
+        assert!(cx.debug_bounds("visual-block-add-below").is_none());
+        assert!(
+            cx.debug_bounds("visual-table-equalize-columns")
+                .unwrap()
+                .size
+                .width
+                > px(200.)
+        );
         assert!(
             cx.debug_bounds("visual-block-transform-10")
                 .unwrap()
@@ -7407,15 +7428,8 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
                 .width
                 > px(200.)
         );
-        assert!(
-            cx.debug_bounds("visual-block-add-below")
-                .unwrap()
-                .size
-                .width
-                > px(200.)
-        );
-        assert!(cx.debug_bounds("visual-block-add-divider-below").is_none());
-        assert!(cx.debug_bounds("visual-block-add-table-below").is_none());
+        assert!(cx.debug_bounds("visual-block-insert-paragraph").is_none());
+        assert!(cx.debug_bounds("visual-block-insert-table").is_none());
 
         let insert = cx.debug_bounds("visual-context-insert").unwrap();
         assert!(cx.debug_bounds("visual-block-delete").unwrap().top() > insert.bottom());
@@ -7429,18 +7443,42 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
         }
         cx.run_until_parked();
         assert!(cx.debug_bounds("visual-context-flyout").is_some());
-        let divider = cx.debug_bounds("visual-block-add-divider-below").unwrap();
-        let table = cx.debug_bounds("visual-block-add-table-below").unwrap();
-        assert!(divider.size.width > px(200.));
-        assert!(table.top() >= divider.bottom());
+        let paragraph = cx.debug_bounds("visual-block-insert-paragraph").unwrap();
+        let h1 = cx.debug_bounds("visual-block-insert-h1").unwrap();
+        let divider = cx.debug_bounds("visual-block-insert-divider").unwrap();
+        let table = cx.debug_bounds("visual-block-insert-table").unwrap();
+        let note = cx.debug_bounds("visual-block-insert-note").unwrap();
+        let link = cx.debug_bounds("visual-block-insert-link").unwrap();
+        let formula = cx.debug_bounds("visual-block-insert-formula").unwrap();
+        let image = cx.debug_bounds("visual-block-insert-image").unwrap();
+        assert_eq!(paragraph.top(), h1.top());
+        assert!(divider.top() > paragraph.bottom());
+        assert!(table.size.width > px(200.));
+        assert!(table.top() > divider.bottom());
+        assert!(note.top() > table.bottom());
+        assert!(link.size.width > px(200.));
+        assert!(formula.top() >= link.bottom());
+        assert!(image.top() >= formula.bottom());
         app.update(cx, |app, _| {
             let menu = app.block_menu.as_ref().unwrap();
             assert_eq!(menu.submenu, Some(BlockContextSubmenu::Insertion));
             assert!(menu.submenu_focused);
+            let items = menu.submenu_items(BlockContextSubmenu::Insertion);
+            assert_eq!(items.len(), 21);
             assert_eq!(
-                menu.submenu_items(BlockContextSubmenu::Insertion),
-                [BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]
+                items[0],
+                BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Text))
             );
+            assert_eq!(
+                items[12],
+                BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Table))
+            );
+            assert_eq!(items[18], BlockMenuItem::Insert(SlashPaletteCommand::Link));
+            assert_eq!(
+                items[19],
+                BlockMenuItem::Insert(SlashPaletteCommand::Formula)
+            );
+            assert_eq!(items[20], BlockMenuItem::Insert(SlashPaletteCommand::Image));
             let tab = app.active_tab();
             assert_eq!(tab.selected_range, selection);
             assert_eq!(tab.document.version(), version);
@@ -7449,7 +7487,9 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
         });
 
         if keyboard {
-            cx.dispatch_action(Down);
+            for _ in 0..12 {
+                cx.dispatch_action(Down);
+            }
             cx.dispatch_action(InsertNewline);
         } else {
             cx.simulate_click(divider.center(), Modifiers::none());
@@ -7477,6 +7517,231 @@ fn visual_table_grip_menu_filters_commands_and_inserts_below(cx: &mut TestAppCon
             assert_eq!(app.active_tab().selected_range, selection);
         });
     }
+}
+
+#[gpui::test]
+fn visual_table_grip_equalize_column_widths_persists_undoes_and_gates_targets(
+    cx: &mut TestAppContext,
+) {
+    // 1. Top-level 3-column table without prior markion-cols comment.
+    const THREE_COL: &str = "| A | B | C |\n| --- | --- | --- |\n| 1 | long description | 3 |\n\nAfter";
+    let (app, cx) = visual_table_handle_app(THREE_COL, cx);
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (version, selection) = app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        (tab.document.version(), tab.selected_range.clone())
+    });
+    let equalize = cx.debug_bounds("visual-table-equalize-columns").unwrap();
+    cx.simulate_click(equalize.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(app.block_menu.is_none());
+        assert_eq!(
+            tab.document.text(),
+            format!("<!-- markion-cols:34,33,33 -->\n{THREE_COL}")
+        );
+        assert_eq!(tab.document.version(), version + 1);
+        assert_eq!(tab.undo_stack.len(), 1);
+    });
+    // Clicking Equalize again on an already-equalized table is a clean no-op.
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (eq_version, eq_cache) = app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        (tab.document.version(), tab.document.visual_blocks_shared())
+    });
+    let equalize = cx.debug_bounds("visual-table-equalize-columns").unwrap();
+    cx.simulate_click(equalize.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(app.block_menu.is_none());
+        assert_eq!(tab.document.version(), eq_version);
+        assert_eq!(tab.undo_stack.len(), 1);
+        assert!(Arc::ptr_eq(&eq_cache, &tab.document.visual_blocks_shared()));
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), THREE_COL);
+        assert_eq!(tab.selected_range, selection);
+    });
+
+    // 2. Existing unequal comment with CRLF is replaced atomically and stale targets are rejected.
+    const UNEQUAL_CRLF: &str = "<!-- markion-cols:20,80 -->\r\n| A | B |\r\n| --- | --- |\r\n| 1 | 2 |";
+    let (app, cx) = visual_table_handle_app(UNEQUAL_CRLF, cx);
+    app.update_in(cx, |app, window, cx| {
+        let doc = &app.active_tab().document;
+        let target = BlockTarget::from_block(doc.version(), &doc.visual_blocks_shared()[0]);
+        app.open_visual_block_grip_menu(target, point(px(20.), px(20.)), cx);
+        app.block_menu.as_mut().unwrap().target.document_version += 1;
+        let cache = app.active_tab().document.visual_blocks_shared();
+        app.activate_visual_block_menu_item(BlockMenuItem::EqualizeTableColumns, Some(window), cx);
+        assert!(app.block_menu.is_none());
+        assert_eq!(app.active_tab().document.text(), UNEQUAL_CRLF);
+        assert!(app.active_tab().undo_stack.is_empty());
+        assert!(Arc::ptr_eq(&cache, &app.active_tab().document.visual_blocks_shared()));
+    });
+    let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let equalize = cx.debug_bounds("visual-table-equalize-columns").unwrap();
+    cx.simulate_click(equalize.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "<!-- markion-cols:50,50 -->\r\n| A | B |\r\n| --- | --- |\r\n| 1 | 2 |"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), UNEQUAL_CRLF);
+    });
+
+    // 3. Single-column and quoted tables omit Equalize Column Widths.
+    for unsupported in [
+        "| Only |\n| --- |\n| value |",
+        "> | A | B |\n> | --- | --- |\n> | 1 | 2 |",
+    ] {
+        let (app, cx) = visual_table_handle_app(unsupported, cx);
+        let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+        cx.simulate_click(grip.center(), Modifiers::none());
+        cx.run_until_parked();
+        app.read_with(cx, |app, _| {
+            let menu = app.block_menu.as_ref().unwrap();
+            assert!(!menu.root_items().contains(&BlockMenuItem::EqualizeTableColumns));
+        });
+        assert!(cx.debug_bounds("visual-table-equalize-columns").is_none());
+    }
+}
+
+#[gpui::test]
+fn visual_table_grip_insert_below_link_formula_and_image_defer_until_confirm(
+    cx: &mut TestAppContext,
+) {
+    const SOURCE: &str = "| A | B |\n| --- | --- |\n| x | y |\n\nAfter";
+    let (app, cx) = visual_table_handle_app(SOURCE, cx);
+    app.update(cx, |app, _| {
+        app.image_preferences.remote_policy = markion::RemoteImagePolicy::Keep;
+    });
+
+    // Link: cancel leaves document untouched; confirm inserts a separate paragraph below the table.
+    let open_table_insert_item = |cx: &mut gpui::VisualTestContext, item: BlockMenuItem| {
+        let grip = cx.debug_bounds("visual-block-drag-grip-0").unwrap();
+        cx.simulate_click(grip.center(), Modifiers::none());
+        cx.run_until_parked();
+        let trigger = cx.debug_bounds("visual-context-insert").unwrap();
+        cx.simulate_click(trigger.center(), Modifiers::none());
+        cx.run_until_parked();
+        let button = cx
+            .debug_bounds(super::preview::block_menu_item_element_id(item))
+            .unwrap();
+        cx.simulate_click(button.center(), Modifiers::none());
+        cx.run_until_parked();
+    };
+
+    // --- Link ---
+    open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Link));
+    let (version, cache, selection) = app.read_with(cx, |app, _| {
+        assert!(app.link_editor.as_ref().is_some_and(|e| e.kind == LinkEditorKind::Link && e.block_below.is_some()));
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), SOURCE);
+        assert!(tab.undo_stack.is_empty());
+        (tab.document.version(), tab.document.visual_blocks_shared(), tab.selected_range.clone())
+    });
+    app.update(cx, |app, cx| app.cancel_link_editor(cx));
+    app.read_with(cx, |app, _| {
+        assert!(app.link_editor.is_none());
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(Arc::ptr_eq(&cache, &app.active_tab().document.visual_blocks_shared()));
+    });
+    open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Link));
+    app.update_in(cx, |app, window, cx| {
+        app.link_editor.as_mut().unwrap().label = "Docs".into();
+        app.link_editor.as_mut().unwrap().url = "https://example.com".into();
+        app.confirm_link_editor(window, cx);
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.document.text(),
+            "| A | B |\n| --- | --- |\n| x | y |\n\n[Docs](https://example.com)\n\nAfter"
+        );
+        assert_eq!(tab.undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+        assert_eq!(app.active_tab().selected_range, selection);
+    });
+
+    // --- Formula ---
+    open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Formula));
+    app.read_with(cx, |app, _| {
+        assert!(app.token_editor.as_ref().is_some_and(|e| e.kind == TokenEditorKind::MathPayload && e.block_below.is_some()));
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+    app.update(cx, |app, cx| app.cancel_token_editor(cx));
+    assert_eq!(app.read_with(cx, |app, _| app.active_tab().document.text().to_string()), SOURCE);
+    open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Formula));
+    app.update(cx, |app, cx| {
+        app.token_editor.as_mut().unwrap().draft = "E = mc^2".into();
+        app.confirm_token_editor(cx);
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.document.text(),
+            "| A | B |\n| --- | --- |\n| x | y |\n\n$E = mc^2$\n\nAfter"
+        );
+        assert_eq!(tab.undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+
+    // --- Image ---
+    open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Image));
+    app.read_with(cx, |app, _| {
+        assert!(app.link_editor.as_ref().is_some_and(|e| e.kind == LinkEditorKind::Image && e.block_below.is_some()));
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+    app.update(cx, |app, cx| app.cancel_link_editor(cx));
+    assert_eq!(app.read_with(cx, |app, _| app.active_tab().document.text().to_string()), SOURCE);
+    open_table_insert_item(cx, BlockMenuItem::Insert(SlashPaletteCommand::Image));
+    app.update_in(cx, |app, window, cx| {
+        app.link_editor.as_mut().unwrap().label = "Chart".into();
+        app.link_editor.as_mut().unwrap().url = "https://example.com/chart.png".into();
+        app.confirm_link_editor(window, cx);
+    });
+    wait_for_image_operations(&app, cx);
+    app.read_with(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.document.text(),
+            "| A | B |\n| --- | --- |\n| x | y |\n\n![Chart](https://example.com/chart.png)\n\nAfter"
+        );
+        assert_eq!(tab.undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
 }
 
 #[gpui::test]

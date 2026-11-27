@@ -941,7 +941,40 @@ impl MarkionApp {
             cx.notify();
             return;
         }
-        let replacement = markdown.join("\n");
+        let (target_range, replacement, selection_after) =
+            if let Some(block_target) = batch.block_below.as_ref() {
+                let tab = &self.tabs[tab_index];
+                let ending = if tab.document.text().contains("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                let content = markdown.join(ending);
+                let blocks = tab.document.visual_blocks_shared();
+                let Ok(edit) = markion::block_edit::insert_content_below(
+                    tab.document.text(),
+                    tab.document.version(),
+                    &blocks,
+                    block_target,
+                    &content,
+                ) else {
+                    self.persist_unapplied_insertion(
+                        operation_id,
+                        document_path.as_deref(),
+                        &result,
+                        "insertion target changed",
+                    );
+                    self.status =
+                        image_status_tf(self.language, ImageStatusMsg::TargetChanged, &[]).into();
+                    cx.notify();
+                    return;
+                };
+                (edit.range, edit.replacement, edit.selection_after)
+            } else {
+                let replacement = markdown.join("\n");
+                let end = target_range.start + replacement.len();
+                (target_range, replacement, end..end)
+            };
         let tab = &mut self.tabs[tab_index];
         tab.finish_undo_capture();
         let snapshot = tab.snapshot();
@@ -960,8 +993,7 @@ impl MarkionApp {
             return;
         }
         tab.commit_undo_snapshot(snapshot);
-        tab.selected_range =
-            target_range.start + replacement.len()..target_range.start + replacement.len();
+        tab.selected_range = selection_after;
         tab.selection_reversed = false;
         tab.marked_range = None;
         if let Some(operation) = self.image_operations.operation(operation_id) {

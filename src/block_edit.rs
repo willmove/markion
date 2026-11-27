@@ -889,6 +889,26 @@ pub fn insert_callout_below(
     )
 }
 
+/// Insert confirmed Markdown content as a standalone block after the complete
+/// target source unit, isolating it from both the target and any following block.
+pub fn insert_content_below(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    content: &str,
+) -> Result<BlockEdit, BlockEditError> {
+    insert_template_below(
+        source,
+        current_version,
+        blocks,
+        target,
+        content,
+        content.len(),
+        false,
+    )
+}
+
 fn callout_template(source: &str, kind: crate::AlertKind) -> String {
     format!(
         "> [!{}]{}> ",
@@ -2504,5 +2524,42 @@ mod tests {
             Err(BlockEditError::Stale)
         );
         assert!(block_can_transform(first));
+    }
+
+    #[test]
+    fn insert_content_below_isolates_inline_markdown_with_matching_line_endings() {
+        for (ending, terminal) in [("\n", false), ("\r\n", false), ("\n", true), ("\r\n", true)] {
+            let table = "| A | B |\n| --- | --- |\n| 1 | 2 |".replace('\n', ending);
+            let source = if terminal {
+                table.clone()
+            } else {
+                format!("{table}{ending}{ending}After")
+            };
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let table_block = blocks
+                .iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+                .unwrap();
+            let target = BlockTarget::from_block(doc.version(), table_block);
+            let edit = insert_content_below(
+                doc.text(),
+                doc.version(),
+                &blocks,
+                &target,
+                "[Docs](https://example.com)",
+            )
+            .unwrap();
+            let mut next = source.clone();
+            next.replace_range(edit.range, &edit.replacement);
+            let expected = if terminal {
+                format!("{table}{ending}{ending}[Docs](https://example.com){ending}")
+            } else {
+                format!("{table}{ending}{ending}[Docs](https://example.com){ending}{ending}After")
+            };
+            assert_eq!(next, expected);
+            assert!(edit.selection_after.is_empty());
+            assert!(next[..edit.selection_after.start].ends_with("[Docs](https://example.com)"));
+        }
     }
 }

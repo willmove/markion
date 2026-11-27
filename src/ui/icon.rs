@@ -86,6 +86,7 @@ icon_set! {
     ListTodo => "list-todo",
     Quote => "quote",
     Table => "table",
+    Columns => "columns",
     Link => "link",
     Sigma => "sigma",
     Cut => "cut",

@@ -64,7 +64,8 @@ use markion::{
     default_recovery_dir, default_session_path, default_themes_dir, delete_block,
     delete_recovery_file, diagram_backend_id, document_kind_for_path, duplicate_block,
     elided_payload_token, emoji_confirm_replacement, emoji_query_at, emoji_shortcodes_matching,
-    highlight_code, highlight_data_document, html_preview_parts, html_preview_plain_text,
+    equal_column_percents, highlight_code, highlight_data_document, html_preview_parts,
+    html_preview_plain_text,
     html_table_column_weights, html_table_grid_line_end, html_table_row_has_visible_header,
     image_extension_supported, inline_image_at, inline_link_at, inspect_recovery_files,
     is_auto_pair_restricted_field, is_openable_text_path, layout_rect_is_visible,
@@ -1022,6 +1023,7 @@ struct PendingImageBatch {
     document: DocumentInstanceId,
     selection: Range<usize>,
     inputs: Vec<PendingImageInput>,
+    block_below: Option<BlockTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1513,6 +1515,8 @@ struct LinkEditorState {
     cursor: usize,
     /// Selection anchor. Equal to `cursor` when the selection is collapsed.
     anchor: usize,
+    /// When set, confirming inserts the link/image as a new block below this target.
+    block_below: Option<BlockTarget>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1533,6 +1537,8 @@ struct TokenEditorState {
     cursor: usize,
     /// Selection anchor. Equal to `cursor` when the selection is collapsed.
     anchor: usize,
+    /// When set, confirming inserts the formula as a new block below this target.
+    block_below: Option<BlockTarget>,
 }
 
 #[derive(Clone, Debug)]
@@ -1606,6 +1612,7 @@ struct BlockMenuState {
     selection_format: Option<VisualSelectionFormatTarget>,
     is_image: bool,
     is_table: bool,
+    can_equalize_table_columns: bool,
     can_wrap_table: bool,
     is_fenced_code: bool,
     image_object_selected: bool,
@@ -1718,6 +1725,7 @@ enum BlockMenuItem {
     Submenu(BlockContextSubmenu),
     TableRow(VisualTableMenuItem),
     TableColumn(VisualTableMenuItem),
+    EqualizeTableColumns,
     CodeBlockFormat,
     ImageWidth(u8),
     ImageAlignment(ImageAlignment),
@@ -1864,8 +1872,11 @@ impl BlockMenuState {
                 BlockMenuItem::Duplicate,
                 BlockMenuItem::MoveUp,
                 BlockMenuItem::MoveDown,
-                BlockMenuItem::AddBelow,
             ]);
+            items.extend(
+                self.can_equalize_table_columns
+                    .then_some(BlockMenuItem::EqualizeTableColumns),
+            );
             items.extend(
                 self.can_wrap_table
                     .then_some(BlockMenuItem::Transform(BlockTransform::Quote)),
@@ -1935,9 +1946,6 @@ impl BlockMenuState {
                     }));
                 }
             }
-            BlockContextSubmenu::Insertion if self.is_table_block_menu() => {
-                items.extend([BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow]);
-            }
             BlockContextSubmenu::Insertion => {
                 items.extend(
                     SlashCommand::ALL
@@ -2000,12 +2008,7 @@ impl BlockMenuState {
             {
                 BlockMenuGroup::Operations
             }
-            BlockMenuItem::AddBelow
-            | BlockMenuItem::AddDividerBelow
-            | BlockMenuItem::AddTableBelow
-            | BlockMenuItem::Transform(BlockTransform::Quote)
-                if self.is_table_block_menu() =>
-            {
+            BlockMenuItem::Transform(BlockTransform::Quote) if self.is_table_block_menu() => {
                 BlockMenuGroup::Insertion
             }
             _ => item.group(),
@@ -2084,6 +2087,7 @@ impl BlockMenuItem {
             Self::InsertCallout(_) => BlockMenuGroup::InsertCallouts,
             Self::Transform(BlockTransform::Table)
             | Self::Insert(_)
+            | Self::EqualizeTableColumns
             | Self::ImageProperties
             | Self::ImageReplace
             | Self::ImageSaveLocal
@@ -2131,6 +2135,7 @@ struct BlockMenuPresentation {
     can_edit_selection: bool,
     can_paste: bool,
     can_format_code: bool,
+    can_equalize_table_columns: bool,
     table_context: Option<VisualTableContext>,
 }
 
@@ -2172,6 +2177,7 @@ impl BlockMenuPresentation {
                 visual_table_menu_item_edit(table.row, item, table.alignment).is_some()
             }),
             BlockMenuItem::CodeBlockFormat => self.can_format_code,
+            BlockMenuItem::EqualizeTableColumns => self.can_equalize_table_columns,
             BlockMenuItem::TableColumn(item) => self.table_context.is_some_and(|table| {
                 visual_table_menu_item_edit(table.column, item, table.alignment).is_some()
             }),

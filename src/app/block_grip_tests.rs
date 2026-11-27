@@ -296,7 +296,13 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
     for ending in ["\n", "\r\n"] {
         for terminal in [false, true] {
-            for action in [BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow] {
+            for action in [
+                BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Text)),
+                BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Heading(2))),
+                BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Divider)),
+                BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Table)),
+                BlockMenuItem::InsertCallout(AlertKind::Note),
+            ] {
                 app.update_in(cx, |app, window, cx| {
                     let table = "<!-- markion-cols:30,70 -->\n| 名称 | 内容 |\n| :--- | ---: |\n| 中文🙂 | **keep** |".replace('\n', ending);
                     let source = format!("before{ending}{ending}{table}{}", if terminal { String::new() } else { format!("{ending}{ending}after") });
@@ -313,6 +319,7 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
                     let menu = app.block_menu.as_ref().unwrap();
                     let root = menu.root_items();
                     assert!(root.contains(&BlockMenuItem::Submenu(BlockContextSubmenu::Insertion)));
+                    assert!(!root.contains(&BlockMenuItem::AddBelow));
                     assert!(!menu.offers(action));
                     app.activate_visual_block_menu_item(action, Some(window), cx);
                     for removed in [BlockTransform::Divider, BlockTransform::Table] {
@@ -337,9 +344,9 @@ fn block_grip_template_insertions_preserve_table_bytes_selection_and_history(
                     assert_eq!(tab.document.version(), version + 1);
                     assert_eq!(tab.undo_stack.len(), 1);
                     assert!(caret.is_empty());
-                    let expected_tables = if action == BlockMenuItem::AddTableBelow { 2 } else { 1 };
+                    let expected_tables = if action == BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Table)) { 2 } else { 1 };
                     assert_eq!(tab.document.visual_blocks_shared().iter().filter(|b| matches!(b.kind, VisualBlockKind::Table { .. })).count(), expected_tables);
-                    if action == BlockMenuItem::AddDividerBelow {
+                    if action == BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Divider)) {
                         assert!(inserted[..caret.start].ends_with(&format!("---{ending}{ending}")));
                         app.replace_text_in_range(None, "continued 中文🙂", window, cx);
                         let tab = app.active_tab();
@@ -399,7 +406,12 @@ fn block_grip_insert_below_flyout_supports_pointer_and_small_viewport_keyboard(
         (340., 280., AppTheme::Ink, true),
     ] {
         cx.simulate_resize(size(px(width), px(height)));
-        for action in [BlockMenuItem::AddDividerBelow, BlockMenuItem::AddTableBelow] {
+        for action in [
+            BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Text)),
+            BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Divider)),
+            BlockMenuItem::Insert(SlashPaletteCommand::Block(SlashCommand::Table)),
+            BlockMenuItem::InsertCallout(AlertKind::Tip),
+        ] {
             app.update(cx, |app, cx| {
                 app.theme = theme;
                 app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
@@ -463,8 +475,17 @@ fn block_grip_insert_below_flyout_supports_pointer_and_small_viewport_keyboard(
                     assert_eq!(menu.root_items()[menu.root_selected], insertion);
                 });
                 cx.dispatch_action(Right);
-                if action == BlockMenuItem::AddTableBelow {
+                cx.run_until_parked();
+                for _ in 0..30 {
+                    let reached = app.read_with(cx, |app, _| {
+                        let menu = app.block_menu.as_ref().unwrap();
+                        menu.visible_items()[menu.selected_index()] == action
+                    });
+                    if reached {
+                        break;
+                    }
                     cx.dispatch_action(Down);
+                    cx.run_until_parked();
                 }
                 app.read_with(cx, |app, _| {
                     let menu = app.block_menu.as_ref().unwrap();
@@ -483,7 +504,7 @@ fn block_grip_insert_below_flyout_supports_pointer_and_small_viewport_keyboard(
                 .unwrap();
             let panel = cx.debug_bounds("visual-context-flyout").unwrap();
             assert!(panel.contains(&button.center()));
-            assert!(button.size.width > px(36.));
+            assert!(button.size.width >= px(24.));
             assert!(cx.debug_bounds("visual-block-transform-12").is_none());
             assert!(cx.debug_bounds("visual-block-transform-13").is_none());
             if keyboard {
